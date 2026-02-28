@@ -17,3 +17,4 @@ auth.json
 yarn-error.log
 /.fleet
 /.vscode
+.DS_Store
