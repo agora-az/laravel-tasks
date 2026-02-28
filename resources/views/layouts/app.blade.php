@@ -1,49 +1,44 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-
-    <title>Laravel Quickstart - Basic</title>
-
-    <!-- Fonts -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.4.0/css/font-awesome.min.css" rel='stylesheet' type='text/css'>
-    <link href="https://fonts.googleapis.com/css?family=Lato:100,300,400,700" rel='stylesheet' type='text/css'>
-
-    <!-- Styles -->
-    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" rel="stylesheet">
-    {{-- <link href="{{ elixir('css/app.css') }}" rel="stylesheet"> --}}
-
-    <style>
-        body {
-            font-family: 'Lato';
-        }
-
-        .fa-btn {
-            margin-right: 6px;
-        }
-    </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@yield('title', config('app.name'))</title>
+    <link rel="stylesheet" href="{{ asset('css/app.css') }}">
 </head>
-<body id="app-layout">
-    <nav class="navbar navbar-default">
-        <div class="container">
-            <div class="navbar-header">
-
-                <!-- Branding Image -->
-                <a class="navbar-brand" href="{{ url('/') }}">
-                    Task List
-                </a>
+<body>
+    <header>
+        <div class="header-top">
+            <div class="container">
+                <div>
+                    <span>☎ +1.855.462.4672</span>
+                    <a href="mailto:info@agoracorp.ca">✉ info@agoracorp.ca</a>
+                </div>
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <a href="/dashboard">Dashboard</a>
+                    <a href="/imports">Import</a>
+                    <a href="/imports/history">Import History</a>
+                    <a href="/imports/transactions">Transaction Data</a>
+                    <a href="/reconciliations/matches">Reconciliation</a>
+                    <a href="/reconciliations">Reports</a>
+                    <form method="POST" action="{{ route('logout') }}" style="margin: 0;">
+                        @csrf
+                        <button type="submit" style="background: none; border: none; color: #3182ce; cursor: pointer; font-size: 14px; text-decoration: none;">Logout</button>
+                    </form>
+                </div>
             </div>
-
         </div>
-    </nav>
-
-    @yield('content')
-
-    <!-- JavaScripts -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
-    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/js/bootstrap.min.js"></script>
-    {{-- <script src="{{ elixir('js/app.js') }}"></script> --}}
+        <div class="container">
+            <div class="logo-container">
+                <img src="{{ asset('images/agora-logo.png') }}" alt="Agora Logo" class="logo">
+                <div class="brand-info">
+                    <div class="tagline">Your business. Your way.</div>
+                </div>
+            </div>
+        </div>
+    </header>
+    <div class="container">
+        @yield('content')
+    </div>
 </body>
 </html>

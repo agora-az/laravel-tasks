@@ -1,25 +1,80 @@
----
-languages:
-- php
-page_type: sample
-description: "This is a sample application that you can use to follow along with the Build a PHP and MySQL web app in Azure tutorial."
-products:
-- azure
-- azure-app-service
----
+# Opus Reconciliation
 
-# Laravel sample for Azure App Service
+A Laravel web application for generating and managing reconciliation reports.
 
-This is a sample application that you can use to follow along with the tutorial at 
-[Build a PHP and MySQL web app in Azure](https://docs.microsoft.com/azure/app-service/tutorial-php-mysql-app?pivots=platform-linux).
+## Features
 
-This sample application is taken from the official [Laravel sample task list application](https://github.com/laravel/quickstart-basic) and modified minimally to make it work with Azure App Service. For instructions on how to use Laravel, see the official repository.
+- **Create Reconciliation Reports**: Generate reports for any time period
+- **View Reports**: Browse and view all reconciliation reports
+- **Export Reports**: Download reports in various formats
+- **Period Management**: Track reconciliation data by date ranges
+
+## Requirements
+
+- PHP 8.2 or higher
+- Composer
+- MySQL database
+- Node.js (optional, for frontend assets)
+
+## Installation
+
+1. **Install Dependencies**
+
+   ```bash
+   composer install
+   ```
+
+2. **Configure Environment**
+
+   Copy the `.env.example` file to `.env` and update the database settings:
+
+   ```
+   DB_CONNECTION=mysql
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_DATABASE=opus_reconciliation
+   DB_USERNAME=root
+   DB_PASSWORD=your_password
+   ```
+
+3. **Generate Application Key**
+
+   ```bash
+   php artisan key:generate
+   ```
+
+4. **Run Migrations**
+   ```bash
+   php artisan migrate
+   ```
+
+## Running the Application
+
+### Development Server
+
+Use the VS Code task "Serve Laravel Application" or run:
+
+```bash
+php artisan serve
+```
+
+The application will be available at [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+## Usage
+
+1. Navigate to `/reconciliations` to view all reports
+2. Click "Create New Report" to generate a new reconciliation report
+3. Fill in the report details including title, period start/end dates, and description
+4. View and export reports as needed
+
+## Project Structure
+
+- `app/Models/Reconciliation.php` - Reconciliation model
+- `app/Http/Controllers/ReconciliationController.php` - Report controller
+- `database/migrations/` - Database migrations
+- `resources/views/reconciliations/` - Report views
+- `routes/web.php` - Application routes
 
 ## License
 
-See [LICENSE](LICENSE).
-
-## Contributing
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
-  
+This project is open-sourced software.
