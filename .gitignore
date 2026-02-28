@@ -10,5 +10,10 @@ Homestead.json
 Homestead.yaml
 npm-debug.log
 .env
+.env.backup
 .env.production
-/.azure
+.phpunit.result.cache
+auth.json
+yarn-error.log
+/.fleet
+/.vscode

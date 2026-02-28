@@ -1,0 +1,312 @@
+/* Agora Color Palette */
+:root {
+    --primary-blue: #345262;
+    --header-light-blue: #5a7585;
+    --dark-blue: #1a365d;
+    --accent-green: #38a169;
+    --success-green: #2f855a;
+    --light-gray: #f8f9fa;
+    --border-gray: #e2e8f0;
+    --text-dark: #2d3748;
+    --text-gray: #4a5568;
+    --text-light: #718096;
+}
+
+/* Reset */
+* { 
+    margin: 0; 
+    padding: 0; 
+    box-sizing: border-box; 
+}
+
+/* Base Styles */
+body { 
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; 
+    background: var(--light-gray); 
+    color: #333;
+    line-height: 1.6;
+}
+
+.container { 
+    max-width: 1200px; 
+    margin: 0 auto; 
+    padding: 20px; 
+}
+
+/* Header Styles */
+header { 
+    background: var(--header-light-blue); 
+    color: white; 
+    padding: 15px 0; 
+    margin-bottom: 30px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+header .header-top {
+    background: var(--primary-blue);
+    padding: 8px 0;
+    font-size: 13px;
+}
+
+header .header-top .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
+}
+
+header .header-top a {
+    color: white;
+    text-decoration: none;
+    margin-left: 20px;
+    transition: opacity 0.2s;
+}
+
+header .header-top a:hover {
+    opacity: 0.8;
+}
+
+header .logo-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+header .logo {
+    height: 60px;
+    width: auto;
+}
+
+header .brand-info {
+    display: flex;
+    flex-direction: column;
+}
+
+header h1 { 
+    font-size: 32px; 
+    font-weight: 300;
+    letter-spacing: 0.5px;
+    margin: 0;
+}
+
+header .tagline {
+    font-size: 18px;
+    color: #22343C;
+    margin-top: 5px;
+    font-weight: 400;
+}
+
+/* Button Styles */
+.btn { 
+    display: inline-block; 
+    padding: 10px 24px; 
+    background: var(--accent-green); 
+    color: white; 
+    text-decoration: none; 
+    border-radius: 4px; 
+    border: none; 
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    font-size: 14px;
+}
+
+.btn:hover { 
+    background: var(--success-green);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+/* Card Styles */
+.card { 
+    background: white; 
+    padding: 24px; 
+    border-radius: 6px; 
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); 
+    margin-bottom: 20px;
+    border: 1px solid var(--border-gray);
+}
+
+/* Table Styles */
+table { 
+    width: 100%; 
+    border-collapse: collapse; 
+}
+
+th, td { 
+    padding: 14px; 
+    text-align: left; 
+    border-bottom: 1px solid var(--border-gray); 
+}
+
+th { 
+    background: #f7fafc; 
+    font-weight: 600;
+    color: var(--text-dark);
+    text-transform: uppercase;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+}
+
+tr:hover {
+    background: #f7fafc;
+}
+
+/* Form Styles */
+.form-group { 
+    margin-bottom: 18px; 
+}
+
+.form-group label { 
+    display: block; 
+    margin-bottom: 6px; 
+    font-weight: 500;
+    color: var(--text-dark);
+}
+
+.form-group input, 
+.form-group textarea { 
+    width: 100%; 
+    padding: 10px 14px; 
+    border: 1px solid #cbd5e0; 
+    border-radius: 4px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+    font-family: inherit;
+}
+
+.form-group input:focus, 
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--accent-green);
+    box-shadow: 0 0 0 3px rgba(56, 161, 105, 0.1);
+}
+
+/* Alert Styles */
+.alert { 
+    padding: 14px 20px; 
+    border-radius: 4px; 
+    margin-bottom: 20px;
+    border-left: 4px solid;
+}
+
+.alert-success { 
+    background: #f0fff4; 
+    color: #22543d;
+    border-color: var(--accent-green);
+}
+
+/* Link Styles */
+a {
+    color: var(--primary-blue);
+    transition: color 0.2s;
+}
+
+a:hover {
+    color: var(--accent-green);
+}
+
+/* Loading Spinner */
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid #e2e8f0;
+    border-top-color: var(--primary-blue);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Progress Bar Animation */
+@keyframes progress {
+    0% { width: 0%; }
+    50% { width: 70%; }
+    100% { width: 100%; opacity: 0.8; }
+}
+
+/* Pagination Styles */
+nav[role="navigation"] {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    border: none !important;
+    padding: 0;
+}
+
+nav[role="navigation"] > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: nowrap;
+    border: none !important;
+    padding: 0;
+}
+
+nav[role="navigation"] span.relative {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+nav[role="navigation"] p {
+    margin: 0 16px;
+    font-size: 14px;
+    color: var(--text-dark);
+    white-space: nowrap;
+}
+
+nav[role="navigation"] a,
+nav[role="navigation"] span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 36px;
+    height: 36px;
+    padding: 6px 12px;
+    font-size: 14px;
+    border: 1px solid #cbd5e0;
+    border-radius: 4px;
+    background: white;
+    color: var(--text-dark);
+    text-decoration: none;
+    transition: all 0.2s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Remove border from ellipsis */
+nav[role="navigation"] span[aria-disabled="true"]:not([aria-current]) {
+    border: none !important;
+    background: transparent !important;
+    opacity: 0.7;
+}
+
+nav[role="navigation"] a:hover {
+    background: var(--primary-blue);
+    color: white;
+    border-color: var(--primary-blue);
+}
+
+nav[role="navigation"] span[aria-current="page"] {
+    background: var(--primary-blue);
+    color: white;
+    border-color: var(--primary-blue);
+    font-weight: 600;
+}
+
+nav[role="navigation"] span[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+nav[role="navigation"] svg {
+    width: 16px;
+    height: 16px;
+}
