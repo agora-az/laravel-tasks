@@ -28,10 +28,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "18"
-        # Remove this block if your app does NOT use Vite
-      - run: |
-          npm ci
-          npm run build
 
       - name: Create storage symlink
         run: php artisan storage:link || true
