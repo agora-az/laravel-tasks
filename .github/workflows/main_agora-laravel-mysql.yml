@@ -1,7 +1,4 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
-name: Build and deploy PHP app to Azure Web App - agora-laravel-mysql
+name: Build and deploy Agora Reconciliation app to Azure Web App
 
 on:
   push:
@@ -13,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -22,16 +19,19 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: "8.2"
+          extensions: mbstring, intl, pdo_mysql, bcmath, openssl
 
-      - name: Check if composer.json exists
-        id: check_files
-        uses: andstor/file-existence-action@v1
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --prefer-dist
+
+      - name: Build frontend assets (Vite)
+        uses: actions/setup-node@v4
         with:
-          files: "composer.json"
-
-      - name: Run composer install if composer.json exists
-        if: steps.check_files.outputs.files_exists == 'true'
-        run: composer validate --no-check-publish && composer install --prefer-dist --no-progress
+          node-version: "18"
+        # Remove this block if your app does NOT use Vite
+      - run: |
+          npm ci
+          npm run build
 
       - name: Create storage symlink
         run: php artisan storage:link || true
@@ -39,11 +39,23 @@ jobs:
       - name: Prepare deploy package
         run: |
           mkdir deploy
-          rsync -av --exclude='.git' --exclude='node_modules' --exclude='tests' --exclude='.env' --exclude='.github' ./ deploy/
+          rsync -av \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='tests' \
+            --exclude='.env' \
+            --exclude='.devcontainer' \
+            --exclude='infra' \
+            --exclude='ssl' \
+            --exclude='default' \
+            --exclude='hostingstart.html' \
+            ./ deploy/
+
           cd deploy
           zip -r ../app.zip .
 
-      - name: Upload artifact for deployment job
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: php-app
@@ -53,11 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write
+      contents: read
 
     steps:
-      - name: Download artifact from build job
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: php-app
@@ -65,14 +77,14 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_45C596F713724017B545964677821373 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_717678C703E446958CD58D7F82302A27 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_35F6613299DD4FE788FC444D2DB60CFA }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID }}
 
-      - name: "Deploy to Azure Web App"
+      - name: Deploy to Azure Web App (clean deploy)
         uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
         with:
           app-name: "agora-laravel-mysql"
           slot-name: "Production"
           package: app.zip
+          clean: true
