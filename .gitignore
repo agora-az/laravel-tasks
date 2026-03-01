@@ -18,4 +18,8 @@ yarn-error.log
 /.fleet
 /.vscode
 .DS_Store
-.env
+/.devcontainer
+/infra
+/ssl
+azure.yaml
+default
