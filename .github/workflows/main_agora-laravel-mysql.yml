@@ -78,7 +78,7 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_35F6613299DD4FE788FC444D2DB60CFA }}
 
       - name: Debug hostname length
-        run: echo "Hostname length: ${#HOSTNAME}"
+        run: echo "Hostname length - ${#HOSTNAME}"
         env:
           HOSTNAME: ${{ secrets.AZUREAPPSERVICE_HOSTNAME }}
 
