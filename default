@@ -6,13 +6,16 @@ server {
     server_name example.com www.example.com;
     port_in_redirect off;
 
-    # Increase POST size (upload limit)
     client_max_body_size 100M;
+    client_body_timeout 300;
+    client_header_timeout 300;
+    client_body_buffer_size 1M;
 
-    # Increase general timeouts
     proxy_read_timeout 300;
     proxy_send_timeout 300;
-    send_timeout 300;
+
+    fastcgi_read_timeout 300;
+    fastcgi_send_timeout 300;
 
     location / {
         index index.php index.html index.htm hostingstart.html;
