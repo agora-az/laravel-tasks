@@ -21,3 +21,7 @@ yarn-error.log
 /.devcontainer
 /infra
 azure.yaml
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/framework/cache/*
+/storage/logs/*
