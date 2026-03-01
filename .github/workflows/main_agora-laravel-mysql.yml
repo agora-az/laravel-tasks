@@ -82,6 +82,13 @@ jobs:
         env:
           HOSTNAME: ${{ secrets.AZUREAPPSERVICE_HOSTNAME }}
 
+      - name: Debug hostname characters
+        run: |
+          echo "[$HOSTNAME]"
+          printf '%q\n' "$HOSTNAME"
+        env:
+          HOSTNAME: ${{ secrets.AZUREAPPSERVICE_HOSTNAME }}
+
       - name: Clean deploy ZIP to Azure (Kudu API)
         run: |
           curl -X POST \
