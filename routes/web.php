@@ -10,6 +10,15 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+Route::get('/debug-proxy', function () {
+    return [
+        'secure' => request()->secure(),
+        'scheme' => request()->getScheme(),
+        'forwarded_proto' => request()->header('X-Forwarded-Proto'),
+        'url' => url()->current(),
+    ];
+});
+
 // Authentication routes (no auth required)
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login']);
@@ -41,10 +50,10 @@ Route::middleware('auth.check')->group(function () {
         Route::post('/upload', [ImportController::class, 'upload'])->name('imports.upload');
         Route::post('/viefund', [ImportController::class, 'vieFundUpload'])->name('imports.viefund.upload');
         Route::post('/fundserv', [ImportController::class, 'fundservUpload'])->name('imports.fundserv.upload');
-        
+
         // Unified transaction management routes
         Route::get('/transactions/{type?}', [ImportController::class, 'transactions'])->name('imports.transactions');
-        
+
         // Legacy transaction routes (kept for backwards compatibility with truncate)
         Route::get('/viefund/transactions', [ImportController::class, 'vieFundTransactions'])->name('imports.viefund.transactions');
         Route::get('/fundserv/transactions', [ImportController::class, 'fundservTransactions'])->name('imports.fundserv.transactions');
@@ -54,7 +63,7 @@ Route::middleware('auth.check')->group(function () {
         Route::delete('/viefund/truncate', [ImportController::class, 'truncateVieFund'])->name('imports.viefund.truncate');
         Route::delete('/fundserv/truncate', [ImportController::class, 'truncateFundserv'])->name('imports.fundserv.truncate');
         Route::delete('/bank/truncate', [ImportController::class, 'truncateBank'])->name('imports.bank.truncate');
-        
+
         // Import record management
         Route::delete('/history/{id}', [ImportController::class, 'deleteImport'])->name('imports.delete');
         Route::get('/history/{id}/view', [ImportController::class, 'viewImport'])->name('imports.view');
