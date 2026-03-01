@@ -44,7 +44,6 @@ jobs:
             --exclude='.devcontainer' \
             --exclude='infra' \
             --exclude='ssl' \
-            --exclude='default' \
             --exclude='hostingstart.html' \
             ./ deploy/
 
