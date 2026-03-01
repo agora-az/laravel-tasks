@@ -80,7 +80,6 @@ jobs:
       - name: Clean deploy ZIP to Azure (Kudu API)
         run: |
           curl -X POST \
-            -H "Content-Type: application/zip" \
+            -u "${{ secrets.AZURE_DEPLOY_USERNAME }}:${{ secrets.AZURE_DEPLOY_PASSWORD }}" \
             --data-binary @"app.zip" \
-            -u ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE }} \
             "https://${{ secrets.AZUREAPPSERVICE_HOSTNAME }}/api/zipdeploy?clean=true"
