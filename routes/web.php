@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\ReconciliationController;
 use App\Http\Controllers\ImportController;
+use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\AuthController;
 
 // Welcome page (no auth required)
@@ -68,4 +69,7 @@ Route::middleware('auth.check')->group(function () {
         Route::delete('/history/{id}', [ImportController::class, 'deleteImport'])->name('imports.delete');
         Route::get('/history/{id}/view', [ImportController::class, 'viewImport'])->name('imports.view');
     });
+
+    // Chunked upload route for large files
+    Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');
 });

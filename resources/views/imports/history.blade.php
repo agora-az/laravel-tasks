@@ -3,11 +3,63 @@
 @section('title', 'Import History')
 
 @section('content')
+    <style>
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: white;
+            border-left: 4px solid #38a169;
+            border-radius: 8px;
+            padding: 16px 20px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            animation: slideIn 0.3s ease-out;
+            z-index: 10000;
+        }
+        
+        .toast.success {
+            border-left-color: #38a169;
+        }
+        
+        .toast-title {
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 4px;
+        }
+        
+        .toast-message {
+            color: #718096;
+            font-size: 14px;
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOut {
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+    </style>
+
     @if(session('success'))
         <div class="alert alert-success">
             {{ session('success') }}
         </div>
     @endif
+
+    <!-- Toast for import summary -->
+    <div id="importToast"></div>
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
         <h2 style="margin: 0;">📋 Import History</h2>
@@ -180,6 +232,50 @@
         function showErrors(importId) {
             const errorDiv = document.getElementById('errors-' + importId);
             errorDiv.style.display = errorDiv.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        // Display toast if coming from upload
+        document.addEventListener('DOMContentLoaded', function() {
+            const importSummary = sessionStorage.getItem('importSummary');
+            if (importSummary) {
+                try {
+                    const data = JSON.parse(importSummary);
+                    showImportToast(data.imported, data.duplicates, data.errors);
+                    sessionStorage.removeItem('importSummary');
+                } catch (e) {
+                    console.error('Error parsing import summary:', e);
+                }
+            }
+        });
+        
+        function showImportToast(imported, duplicates, errors) {
+            const toastContainer = document.getElementById('importToast');
+            let message = `✅ Successfully imported <strong>${imported} record${imported !== 1 ? 's' : ''}</strong>`;
+            
+            if (duplicates > 0) {
+                message += ` (${duplicates} duplicate${duplicates !== 1 ? 's' : ''} skipped)`;
+            }
+            if (errors > 0) {
+                message += ` - ${errors} error${errors !== 1 ? 's' : ''}`;
+            }
+            
+            toastContainer.innerHTML = `
+                <div class="toast success">
+                    <div class="toast-title">Import Complete</div>
+                    <div class="toast-message">${message}</div>
+                </div>
+            `;
+            
+            // Auto-hide after 7 seconds
+            setTimeout(() => {
+                const toast = toastContainer.querySelector('.toast');
+                if (toast) {
+                    toast.style.animation = 'slideOut 0.3s ease-out forwards';
+                    setTimeout(() => {
+                        toastContainer.innerHTML = '';
+                    }, 300);
+                }
+            }, 7000);
         }
     </script>
 @endsection

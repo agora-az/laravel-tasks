@@ -3,6 +3,32 @@
 @section('title', 'Import Data')
 
 @section('content')
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/dropzone/5.9.3/basic.min.css">
+    <style>
+        .dz-preview {
+            margin: 0;
+        }
+        .dz-message {
+            margin: 0;
+        }
+        #dropzone {
+            border: 2px dashed #cbd5e0;
+            border-radius: 4px;
+            padding: 40px;
+            text-align: center;
+            background: #f7fafc;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        #dropzone.dz-drag-hover {
+            background: #e2e8f0;
+            border-color: #345262;
+        }
+        .dz-progress {
+            background: linear-gradient(90deg, #345262, #5a7585);
+        }
+    </style>
+
     @if(session('success'))
         <div class="alert alert-success">
             {{ session('success') }}
@@ -78,49 +104,146 @@
     <div class="card">
         <h3 style="margin-bottom: 15px; color: #2d3748;">Upload Transaction Data</h3>
         <p style="color: #718096; margin-bottom: 20px; font-size: 14px;">
-            Select the data type and upload your CSV file.
+            Select the data type and upload your CSV file. Files are uploaded in chunks (5 MB each) to handle large files up to 100 MB.
         </p>
         
-        <form action="{{ route('imports.upload') }}" method="POST" enctype="multipart/form-data" class="upload-form">
-            @csrf
-            
-            <div class="form-group">
-                <label for="import_type">Data Type</label>
-                <select id="import_type" name="import_type" required 
-                        style="padding: 10px 14px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; background: white; font-size: 14px;"
-                        onchange="updateFormatInfo()">
-                    <option value="">Select data type...</option>
-                    <option value="viefund">VieFund - Cash Position Data</option>
-                    <option value="fundserv">Fundserv - Transaction Data</option>
-                    <option value="bank">Bank Statements</option>
-                </select>
-            </div>
+        <div class="form-group">
+            <label for="import_type">Data Type</label>
+            <select id="import_type" name="import_type" required 
+                    style="padding: 10px 14px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; background: white; font-size: 14px;"
+                    onchange="updateFormatInfo()">
+                <option value="">Select data type...</option>
+                <option value="viefund">VieFund - Cash Position Data</option>
+                <option value="fundserv">Fundserv - Transaction Data</option>
+                <option value="bank">Bank Statements</option>
+            </select>
+        </div>
 
-            <div class="form-group">
-                <label for="csv_file">Select File</label>
-                <input type="file" id="csv_file" name="csv_file" accept=".csv,.txt,.pdf" required 
-                       style="padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; background: white;"
-                       onchange="updateFileInfo(this, 'main')">
-                <p id="main_file_info" style="margin-top: 8px; font-size: 13px; color: #718096;"></p>
-            </div>
-            
-            <div id="format_info" style="margin-top: 15px; padding: 12px; background: #f7fafc; border-radius: 4px; border-left: 3px solid #cbd5e0; display: none;">
-                <strong style="color: #2d3748; font-size: 14px;">Expected Format:</strong>
-                <p id="format_text" style="color: #4a5568; font-size: 13px; margin-top: 5px;"></p>
-            </div>
-
-            <button type="submit" class="btn" style="margin-top: 20px; width: 100%;" id="upload_button" disabled>
-                Upload Data
-            </button>
-        </form>
+        <div class="form-group">
+            <label>Select File (Drag & Drop or Click)</label>
+            <form id="uploadForm" class="dropzone" action="{{ route('api.upload.chunk') }}" method="POST" enctype="multipart/form-data">
+                @csrf
+                <div class="dz-message">
+                    <div style="font-size: 32px; margin-bottom: 10px;">📁</div>
+                    <div style="font-size: 16px; color: #2d3748; margin-bottom: 5px;"><strong>Drag files here or click to select</strong></div>
+                    <div style="font-size: 14px; color: #718096;">Supports CSV and PDF files up to 100 MB</div>
+                </div>
+            </form>
+        </div>
+        
+        <div id="format_info" style="margin-top: 15px; padding: 12px; background: #f7fafc; border-radius: 4px; border-left: 3px solid #cbd5e0; display: none;">
+            <strong style="color: #2d3748; font-size: 14px;">Expected Format:</strong>
+            <p id="format_text" style="color: #4a5568; font-size: 13px; margin-top: 5px;"></p>
+        </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dropzone/5.9.3/min/dropzone.min.js"></script>
     <script>
+        // Disable Dropzone auto-discovery
+        Dropzone.autoDiscover = false;
+
+        // Initialize Dropzone
+        const dropzone = new Dropzone('#uploadForm', {
+            paramName: 'file',
+            maxFilesize: 100, // 100 MB
+            maxFiles: 1,
+            acceptedFiles: '.csv,.txt,.pdf',
+            chunkSize: 5242880, // 5 MB chunks
+            parallelChunkUploads: false,
+            chunking: true,
+            retryChunks: true,
+            retryChunksLimit: 3,
+            autoProcessQueue: false,
+            timeout: 300000, // 5 minutes per chunk
+            
+            init: function() {
+                const dz = this;
+
+                // Add CSRF token
+                this.on('sending', function(file, xhr, formData) {
+                    console.log('Sending chunk:', file.name);
+                    const importType = document.getElementById('import_type').value;
+                    if (!importType) {
+                        dz.removeFile(file);
+                        alert('Please select a data type first');
+                        return;
+                    }
+
+                    formData.append('_token', @json(csrf_token()));
+                    formData.append('importType', importType);
+                    formData.append('fileId', file.upload.uuid);
+                    formData.append('originalFilename', file.name);
+                    
+                    if (file.upload.chunked) {
+                        formData.append('chunkIndex', file.upload.chunk);
+                        formData.append('totalChunks', Math.ceil(file.size / dz.options.chunkSize));
+                        console.log(`Uploading chunk ${file.upload.chunk} of ${Math.ceil(file.size / dz.options.chunkSize)}`);
+                    } else {
+                        formData.append('chunkIndex', 0);
+                        formData.append('totalChunks', 1);
+                    }
+                });
+
+                this.on('uploadprogress', function(file, progress, bytesSent) {
+                    console.log('Progress:', Math.round(progress) + '%');
+                    const progressBar = document.querySelector('.progress-bar');
+                    if (progressBar) {
+                        progressBar.style.width = Math.round(progress) + '%';
+                    }
+                });
+
+                this.on('success', function(file, response) {
+                    console.log('Upload success, response:', response);
+                    
+                    if (response && response.success) {
+                        console.log('Import successful:', response);
+                        showUploadOverlay(response.imported || 0, response.duplicates || 0, response.errors || 0);
+                    } else if (response) {
+                        // Partial success or still processing
+                        console.log('Chunk received, response:', response);
+                    }
+                });
+
+                this.on('error', function(file, errorMessage, xhr) {
+                    console.error('Upload error:', errorMessage, xhr);
+                    const overlay = document.getElementById('uploadOverlay');
+                    overlay.style.display = 'none';
+                    alert('Upload failed: ' + (errorMessage?.message || errorMessage || 'Unknown error'));
+                    dz.removeFile(file);
+                });
+
+                this.on('complete', function(file) {
+                    console.log('File upload complete, status:', file.status);
+                });
+
+                // Handle file added
+                this.on('addedfile', function(file) {
+                    console.log('File added:', file.name, 'Size:', file.size);
+                    const importType = document.getElementById('import_type').value;
+                    if (!importType) {
+                        dz.removeFile(file);
+                        alert('Please select a data type first');
+                        return false;
+                    }
+                    
+                    // Show overlay and start upload
+                    const overlay = document.getElementById('uploadOverlay');
+                    overlay.style.display = 'flex';
+                    const statusEl = document.querySelector('#uploadStatus');
+                    const progressBar = document.querySelector('.progress-bar');
+                    statusEl.textContent = `Uploading file (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`;
+                    progressBar.style.width = '5%';
+                    
+                    console.log('Starting upload for:', file.name);
+                    dz.processFile(file);
+                });
+            }
+        });
+
         function updateFormatInfo() {
             const type = document.getElementById('import_type').value;
             const formatInfo = document.getElementById('format_info');
             const formatText = document.getElementById('format_text');
-            const uploadButton = document.getElementById('upload_button');
             
             if (type === 'viefund') {
                 formatInfo.style.display = 'block';
@@ -128,70 +251,51 @@
                 formatInfo.style.borderColor = '#38b2ac';
                 formatText.style.color = '#2c7a7b';
                 formatText.textContent = 'Client Name, Rep Code, Plan Description, Institution, Account ID, Trx ID, Created Date, Trx Type, Trade Date, Settlement Date, Processing Date, Source ID, Status, Amount, Balance, Fund Code, Fund TrxType, Fund Trx Amount, Fund Settlement Source, Fund WO#, Fund SourceID';
-                uploadButton.disabled = false;
             } else if (type === 'fundserv') {
                 formatInfo.style.display = 'block';
                 formatInfo.style.background = '#ebf8ff';
                 formatInfo.style.borderColor = '#4299e1';
                 formatText.style.color = '#2c5282';
                 formatText.textContent = '#, Company, Settlement Date, Code, Src, Trade date, FundID, Dealer Account ID, Order ID, Source Identifier, TxType, Settlement Amt, Actual Amount (or Actual Amunt)';
-                uploadButton.disabled = false;
             } else if (type === 'bank') {
                 formatInfo.style.display = 'block';
                 formatInfo.style.background = '#fef5e7';
                 formatInfo.style.borderColor = '#f6ad55';
                 formatText.style.color = '#7c2d12';
                 formatText.textContent = 'Upload a bank statement PDF (e.g., CIBC account statement) with Transaction details section.';
-                uploadButton.disabled = false;
             } else {
                 formatInfo.style.display = 'none';
-                uploadButton.disabled = true;
             }
         }
 
-        function updateFileInfo(input, prefix) {
-            const file = input.files[0];
-            const infoEl = document.getElementById(prefix + '_file_info');
+        function showUploadOverlay(imported, duplicates, errors) {
+            const overlay = document.getElementById('uploadOverlay');
+            const statusElement = document.getElementById('uploadStatus');
+            const progressBar = overlay.querySelector('.progress-bar');
             
-            if (file) {
-                const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
-                infoEl.textContent = `📄 ${file.name} (${sizeMB} MB)`;
-                infoEl.style.color = '#38a169';
+            progressBar.style.width = '100%';
+            
+            let message = `✅ Import complete! ${imported} records imported`;
+            if (duplicates > 0) {
+                message += `, ${duplicates} duplicates skipped`;
             }
+            if (errors > 0) {
+                message += `, ${errors} errors`;
+            }
+            
+            statusElement.textContent = message;
+            
+            // Redirect to import history page and show toast
+            setTimeout(() => {
+                // Store import summary in sessionStorage for the history page to display as toast
+                sessionStorage.setItem('importSummary', JSON.stringify({
+                    imported: imported,
+                    duplicates: duplicates,
+                    errors: errors,
+                    timestamp: new Date().toISOString()
+                }));
+                window.location.href = '{{ route("imports.history") }}';
+            }, 1000);
         }
-
-        document.querySelectorAll('.upload-form').forEach(form => {
-            form.addEventListener('submit', function(e) {
-                const fileInput = this.querySelector('input[type="file"]');
-                const file = fileInput.files[0];
-                
-                if (file) {
-                    const overlay = document.getElementById('uploadOverlay');
-                    const status = document.getElementById('uploadStatus');
-                    const progressBar = overlay.querySelector('.progress-bar');
-                    
-                    overlay.style.display = 'flex';
-                    status.textContent = `Uploading file (${(file.size / (1024 * 1024)).toFixed(2)} MB)...`;
-                    progressBar.style.width = '10%';
-                    progressBar.style.transition = 'width 0.5s ease';
-                    
-                    // Simulate progress updates
-                    setTimeout(() => {
-                        progressBar.style.width = '30%';
-                        status.textContent = 'Processing CSV data...';
-                    }, 500);
-                    
-                    setTimeout(() => {
-                        progressBar.style.width = '60%';
-                        status.textContent = 'Importing records to database...';
-                    }, 1500);
-                    
-                    setTimeout(() => {
-                        progressBar.style.width = '90%';
-                        status.textContent = 'Finalizing import...';
-                    }, 3000);
-                }
-            });
-        });
     </script>
 @endsection
