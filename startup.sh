@@ -1,10 +1,15 @@
 #!/bin/bash
 
-# Copy your custom nginx site config
+# Copy custom nginx config
 cp /home/site/wwwroot/default /etc/nginx/sites-available/default
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
-# Reload nginx to apply the new config
+# Apply PHP overrides (.user.ini)
+if [ -f /home/site/wwwroot/.user.ini ]; then
+    cp /home/site/wwwroot/.user.ini /usr/local/etc/php/conf.d/user.ini
+fi
+
+# Reload nginx to apply new limits
 service nginx reload
 
 # Laravel optimizations
@@ -18,6 +23,11 @@ mkdir -p storage/logs
 
 # Fix permissions
 chmod -R 755 storage bootstrap/cache
+
+# Cache Laravel config/routes/views (ignore errors if DB not ready)
 php artisan config:cache || true
 php artisan route:cache || true
 php artisan view:cache || true
+
+# Start supervisord (required by Azure)
+supervisord -c /etc/supervisor/supervisord.conf
