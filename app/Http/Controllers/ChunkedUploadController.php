@@ -4,19 +4,31 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Queue;
 use App\Models\VieFundTransaction;
 use App\Models\FundservTransaction;
 use App\Models\BankTransaction;
 use App\Models\Import;
+use App\Jobs\ProcessImportJob;
 use Smalot\PdfParser\Parser;
 
 class ChunkedUploadController extends Controller
 {
+    public function __construct()
+    {
+        // Increase execution time for file processing
+        // Some large files may take 10+ minutes to process
+        set_time_limit(1800); // 30 minutes
+    }
+
     /**
      * Handle chunk upload
      */
     public function uploadChunk(Request $request)
     {
+        // Extra safety: set time limit inside method too
+        set_time_limit(1800); // 30 minutes
+        
         try {
             // Dropzone.js sends chunk info with 'dz' prefix (dzchunkindex, dztotalchunkcount)
             // Extract the actual chunk info
@@ -196,23 +208,34 @@ class ChunkedUploadController extends Controller
             
             \Log::info("Processing file: {$finalFilePath}, original filename: {$originalFilename}");
 
-            // Process based on import type
-            if ($importType === 'viefund') {
-                $result = $this->processVieFundFile($finalFilePath, $originalFilename);
-            } elseif ($importType === 'fundserv') {
-                $result = $this->processFundservFile($finalFilePath, $originalFilename);
-            } elseif ($importType === 'bank') {
-                $result = $this->processBankFile($finalFilePath, $originalFilename);
-            } else {
-                $result = ['success' => false, 'message' => 'Invalid import type'];
-            }
+            // Create import record
+            $import = Import::create([
+                'type' => $importType,
+                'filename' => $originalFilename,
+                'file_size' => filesize($finalFilePath),
+                'status' => 'processing',
+                'import_started_at' => now(),
+            ]);
 
-            \Log::info('Processing result: ' . json_encode($result));
+            \Log::info("Import record created", ['import_id' => $import->id]);
+
+            // Dispatch processing to background job
+            ProcessImportJob::dispatch($finalFilePath, $importType, $originalFilename, $import->id);
+
+            \Log::info('ProcessImportJob dispatched', ['import_id' => $import->id]);
 
             // Clean up temp files
             $this->cleanupTempDirectory("{$storagePath}/{$uploadDir}");
 
-            return response()->json($result);
+            // Return immediately - processing happens in background
+            return response()->json([
+                'success' => true,
+                'message' => 'File processing started',
+                'import_id' => $import->id,
+                'imported' => 0,
+                'duplicates' => 0,
+                'errors' => 0,
+            ]);
         } catch (\Exception $e) {
             \Log::error('Error in mergeChunks: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
             $this->cleanupTempDirectory("{$storagePath}/{$uploadDir}");
