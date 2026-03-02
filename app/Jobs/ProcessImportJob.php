@@ -24,6 +24,14 @@ class ProcessImportJob implements ShouldQueue
 
     public function __construct($filePath, $importType, $originalFilename, $importId, $tempDir = null)
     {
+        \Log::info("ProcessImportJob constructor called", [
+            'filePath' => $filePath,
+            'importType' => $importType,
+            'originalFilename' => $originalFilename,
+            'importId' => $importId,
+            'tempDir' => $tempDir,
+        ]);
+        
         $this->filePath = $filePath;
         $this->importType = $importType;
         $this->originalFilename = $originalFilename;
@@ -35,27 +43,50 @@ class ProcessImportJob implements ShouldQueue
     {
         set_time_limit(1800); // 30 minutes
 
-        \Log::info("ProcessImportJob started", [
+        \Log::info("ProcessImportJob handle method called", [
             'file' => $this->filePath,
             'type' => $this->importType,
             'import_id' => $this->importId,
+            'tempDir' => $this->tempDir,
+            'file_exists' => file_exists($this->filePath ?? ''),
         ]);
 
         try {
+            \Log::info("ProcessImportJob started", [
+                'file' => $this->filePath,
+                'type' => $this->importType,
+                'import_id' => $this->importId,
+                'tempDir' => $this->tempDir,
+            ]);
+
             $import = Import::find($this->importId);
             if (!$import) {
                 \Log::error("Import record not found", ['import_id' => $this->importId]);
                 return;
             }
+            
+            \Log::info("Import record found", ['import_id' => $this->importId, 'status' => $import->status]);
 
             if (!file_exists($this->filePath)) {
-                \Log::error("File not found at path", ['path' => $this->filePath]);
+                \Log::error("File not found at path", [
+                    'path' => $this->filePath,
+                    'expected_dir' => dirname($this->filePath),
+                    'dir_exists' => is_dir(dirname($this->filePath)),
+                    'files_in_dir' => file_exists(dirname($this->filePath)) ? implode(', ', array_slice(glob(dirname($this->filePath) . '/*'), 0, 10)) : 'dir not found',
+                ]);
+                
                 $import->update([
                     'status' => 'failed',
-                    'error_details' => 'File not found after merge',
+                    'error_details' => "File not found: {$this->filePath}",
                 ]);
                 return;
             }
+
+            \Log::info("File found, processing", [
+                'path' => $this->filePath,
+                'size' => filesize($this->filePath),
+                'type' => $this->importType,
+            ]);
 
             // Process based on type
             if ($this->importType === 'viefund') {
@@ -126,12 +157,25 @@ class ProcessImportJob implements ShouldQueue
 
     private function processVieFundFile()
     {
+        \Log::info("processVieFundFile started", ['path' => $this->filePath, 'import_id' => $this->importId]);
+        
         $handle = fopen($this->filePath, 'r');
         if (!$handle) {
+            \Log::error("Could not open file for reading", ['path' => $this->filePath]);
             throw new \Exception('Could not open file');
         }
 
+        \Log::info("File opened successfully");
+
         $header = fgetcsv($handle);
+        if (!$header) {
+            \Log::error("Could not read header from CSV");
+            fclose($handle);
+            throw new \Exception('Could not read CSV header');
+        }
+        
+        \Log::info("CSV header read", ['column_count' => count($header)]);
+        
         $normalizeHeader = fn($value) => preg_replace(
             '/[^a-z0-9]/',
             '',

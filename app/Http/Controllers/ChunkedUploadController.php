@@ -219,12 +219,26 @@ class ChunkedUploadController extends Controller
 
             \Log::info("Import record created", ['import_id' => $import->id]);
 
+            $tempDir = "{$storagePath}/{$uploadDir}";
+            \Log::info('Before ProcessImportJob dispatch', [
+                'import_id' => $import->id,
+                'finalFilePath' => $finalFilePath,
+                'file_exists' => file_exists($finalFilePath),
+                'file_size' => file_exists($finalFilePath) ? filesize($finalFilePath) : 'N/A',
+                'tempDir' => $tempDir,
+                'tempDir_exists' => is_dir($tempDir),
+                'importType' => $importType,
+            ]);
+
             // Dispatch processing to background job
             // NOTE: Keep temp directory intact - it contains the merged file the job needs
-            ProcessImportJob::dispatch($finalFilePath, $importType, $originalFilename, $import->id, "{$storagePath}/{$uploadDir}")
+            $job = ProcessImportJob::dispatch($finalFilePath, $importType, $originalFilename, $import->id, $tempDir)
                 ->onQueue('default');
 
-            \Log::info('ProcessImportJob dispatched', ['import_id' => $import->id]);
+            \Log::info('ProcessImportJob dispatched successfully', [
+                'import_id' => $import->id,
+                'job' => get_class($job),
+            ]);
 
             // Return immediately - processing happens in background
             // DO NOT clean up temp directory here - job needs the merged file!
