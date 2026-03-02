@@ -38,6 +38,12 @@ class ChunkedUploadController extends Controller
             $importType = $request->input('importType');
             $originalFilename = $request->input('originalFilename');
 
+            // Generate fileId if not provided (fallback for some upload scenarios)
+            if (empty($fileId)) {
+                $fileId = md5($originalFilename . time() . rand(1000, 9999));
+                \Log::info("Generated fileId for upload", ['fileId' => $fileId, 'filename' => $originalFilename]);
+            }
+
             // Log incoming request for debugging
             \Log::info("uploadChunk request received", [
                 'chunkIndex' => $chunkIndex,
