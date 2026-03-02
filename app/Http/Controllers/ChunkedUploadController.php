@@ -268,6 +268,8 @@ class ChunkedUploadController extends Controller
             return ['success' => false, 'message' => 'File not found after merge'];
         }
 
+        \Log::info("Starting VieFund processing", ['file' => $filePath, 'filename' => $originalFilename]);
+
         $import = Import::create([
             'type' => 'viefund',
             'filename' => $originalFilename,
@@ -282,6 +284,8 @@ class ChunkedUploadController extends Controller
                 throw new \Exception('Could not open file');
             }
 
+            \Log::info("File opened for reading");
+
             // Read header
             $header = fgetcsv($handle);
             $normalizeHeader = fn($value) => preg_replace(
@@ -295,6 +299,8 @@ class ChunkedUploadController extends Controller
                 $headerMap[$normalizeHeader($label)] = $index;
             }
 
+            \Log::info("Header parsed", ['column_count' => count($headerMap)]);
+
             $imported = 0;
             $duplicates = 0;
             $errors = [];
@@ -305,6 +311,7 @@ class ChunkedUploadController extends Controller
 
             // Check for format
             $isNewFormat = isset($headerMap['trxid']) || isset($headerMap['fundtrxtype']);
+            \Log::info("Format detected", ['isNewFormat' => $isNewFormat]);
 
             while (($data = fgetcsv($handle)) !== false) {
                 $lineNumber++;
@@ -367,12 +374,19 @@ class ChunkedUploadController extends Controller
                         $batch[] = $recordData;
 
                         if (count($batch) >= $batchSize) {
+                            \Log::info("Inserting batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                             VieFundTransaction::insert($batch);
                             $imported += count($batch);
+                            \Log::info("Batch inserted successfully", ['total_imported' => $imported]);
                             $batch = [];
                         }
                     } else {
                         $duplicates++;
+                    }
+
+                    // Log progress every 10000 lines
+                    if (($lineNumber - 1) % 10000 === 0 && $lineNumber > 1) {
+                        \Log::info("Processing progress", ['lines_read' => $lineNumber, 'imported' => $imported, 'duplicates' => $duplicates]);
                     }
                 } catch (\Exception $e) {
                     $errors[] = "Line {$lineNumber}: " . $e->getMessage();
@@ -380,11 +394,15 @@ class ChunkedUploadController extends Controller
             }
 
             if (!empty($batch)) {
+                \Log::info("Inserting final batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                 VieFundTransaction::insert($batch);
                 $imported += count($batch);
+                \Log::info("Final batch inserted", ['total_imported' => $imported]);
             }
 
             fclose($handle);
+
+            \Log::info("VieFund processing complete", ['imported' => $imported, 'duplicates' => $duplicates, 'errors' => count($errors)]);
 
             $import->update([
                 'status' => 'completed',
@@ -403,6 +421,7 @@ class ChunkedUploadController extends Controller
                 'errors' => count($errors),
             ];
         } catch (\Exception $e) {
+            \Log::error("Error in VieFund processing", ['error' => $e->getMessage(), 'file' => $e->getFile(), 'line' => $e->getLine()]);
             $import->update([
                 'status' => 'failed',
                 'error_details' => $e->getMessage(),
@@ -424,6 +443,8 @@ class ChunkedUploadController extends Controller
             return ['success' => false, 'message' => 'File not found after merge'];
         }
 
+        \Log::info("Starting Fundserv processing", ['file' => $filePath, 'filename' => $originalFilename]);
+
         $import = Import::create([
             'type' => 'fundserv',
             'filename' => $originalFilename,
@@ -438,6 +459,8 @@ class ChunkedUploadController extends Controller
                 throw new \Exception('Could not open file');
             }
 
+            \Log::info("File opened for reading");
+
             $header = fgetcsv($handle);
             $normalizeHeader = fn($value) => preg_replace(
                 '/[^a-z0-9]/',
@@ -449,6 +472,8 @@ class ChunkedUploadController extends Controller
             foreach ($header as $index => $label) {
                 $headerMap[$normalizeHeader($label)] = $index;
             }
+
+            \Log::info("Header parsed", ['column_count' => count($headerMap)]);
 
             $imported = 0;
             $duplicates = 0;
@@ -495,12 +520,19 @@ class ChunkedUploadController extends Controller
                         $batch[] = $recordData;
 
                         if (count($batch) >= $batchSize) {
+                            \Log::info("Inserting batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                             FundservTransaction::insert($batch);
                             $imported += count($batch);
+                            \Log::info("Batch inserted successfully", ['total_imported' => $imported]);
                             $batch = [];
                         }
                     } else {
                         $duplicates++;
+                    }
+
+                    // Log progress every 10000 lines
+                    if (($lineNumber - 1) % 10000 === 0 && $lineNumber > 1) {
+                        \Log::info("Processing progress", ['lines_read' => $lineNumber, 'imported' => $imported, 'duplicates' => $duplicates]);
                     }
                 } catch (\Exception $e) {
                     $errors[] = "Line {$lineNumber}: " . $e->getMessage();
@@ -508,11 +540,15 @@ class ChunkedUploadController extends Controller
             }
 
             if (!empty($batch)) {
+                \Log::info("Inserting final batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                 FundservTransaction::insert($batch);
                 $imported += count($batch);
+                \Log::info("Final batch inserted", ['total_imported' => $imported]);
             }
 
             fclose($handle);
+
+            \Log::info("Fundserv processing complete", ['imported' => $imported, 'duplicates' => $duplicates, 'errors' => count($errors)]);
 
             $import->update([
                 'status' => 'completed',
@@ -718,8 +754,10 @@ class ChunkedUploadController extends Controller
 
                                     if (count($batch) >= $batchSize) {
                                         if (!empty($batch)) {
+                                            \Log::info("Inserting bank transaction batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                                             BankTransaction::insert($batch);
                                             $imported += count($batch);
+                                            \Log::info("Bank batch inserted successfully", ['total_imported' => $imported]);
                                         }
                                         $batch = [];
                                     }
@@ -764,8 +802,10 @@ class ChunkedUploadController extends Controller
                                 ];
 
                                 if (count($batch) >= $batchSize) {
+                                    \Log::info("Inserting bank CSV batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                                     BankTransaction::insert($batch);
                                     $imported += count($batch);
+                                    \Log::info("Bank CSV batch inserted successfully", ['total_imported' => $imported]);
                                     $batch = [];
                                 }
                             } catch (\Exception $e) {
@@ -781,9 +821,13 @@ class ChunkedUploadController extends Controller
             }
 
             if (!empty($batch)) {
+                \Log::info("Inserting final bank batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                 BankTransaction::insert($batch);
                 $imported += count($batch);
+                \Log::info("Final bank batch inserted", ['total_imported' => $imported]);
             }
+
+            \Log::info("Bank processing complete", ['imported' => $imported, 'duplicates' => $duplicateCount, 'errors' => count($errors)]);
 
             $import->update([
                 'status' => 'completed',
