@@ -220,7 +220,7 @@ class ChunkedUploadController extends Controller
             \Log::info("Import record created", ['import_id' => $import->id]);
 
             $tempDir = "{$storagePath}/{$uploadDir}";
-            \Log::info('Before ProcessImportJob dispatch', [
+            \Log::info('Before ProcessImportJob execution', [
                 'import_id' => $import->id,
                 'finalFilePath' => $finalFilePath,
                 'file_exists' => file_exists($finalFilePath),
@@ -230,25 +230,29 @@ class ChunkedUploadController extends Controller
                 'importType' => $importType,
             ]);
 
-            // Dispatch processing to background job
-            // NOTE: Keep temp directory intact - it contains the merged file the job needs
-            $job = ProcessImportJob::dispatch($finalFilePath, $importType, $originalFilename, $import->id, $tempDir)
-                ->onQueue('default');
+            // Execute processing job synchronously (no queue worker available on Azure)
+            // The job's handle() method will:
+            // - Set 30-minute time limit
+            // - Process the file
+            // - Update Import record with results
+            // - Clean up temp directory in finally block
+            $job = new ProcessImportJob($finalFilePath, $importType, $originalFilename, $import->id, $tempDir);
+            $job->handle();
 
-            \Log::info('ProcessImportJob dispatched successfully', [
+            \Log::info('ProcessImportJob executed successfully', [
                 'import_id' => $import->id,
-                'job' => get_class($job),
             ]);
 
-            // Return immediately - processing happens in background
-            // DO NOT clean up temp directory here - job needs the merged file!
+            // Refresh import record to get updated counts
+            $import->refresh();
+
             return response()->json([
                 'success' => true,
-                'message' => 'File processing started',
+                'message' => 'File processing completed',
                 'import_id' => $import->id,
-                'imported' => 0,
-                'duplicates' => 0,
-                'errors' => 0,
+                'imported' => $import->imported_count ?? 0,
+                'duplicates' => $import->duplicate_count ?? 0,
+                'errors' => $import->error_count ?? 0,
             ]);
         } catch (\Exception $e) {
             \Log::error('Error in mergeChunks: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
