@@ -20,13 +20,15 @@ class ProcessImportJob implements ShouldQueue
     protected $importType;
     protected $originalFilename;
     protected $importId;
+    protected $tempDir;
 
-    public function __construct($filePath, $importType, $originalFilename, $importId)
+    public function __construct($filePath, $importType, $originalFilename, $importId, $tempDir = null)
     {
         $this->filePath = $filePath;
         $this->importType = $importType;
         $this->originalFilename = $originalFilename;
         $this->importId = $importId;
+        $this->tempDir = $tempDir;
     }
 
     public function handle()
@@ -95,7 +97,31 @@ class ProcessImportJob implements ShouldQueue
                     'error_details' => $e->getMessage(),
                 ]);
             }
+        } finally {
+            // Clean up temp directory after job completes
+            if ($this->tempDir && is_dir($this->tempDir)) {
+                \Log::info("Cleaning up temp directory", ['dir' => $this->tempDir]);
+                $this->cleanupTempDirectory($this->tempDir);
+            }
         }
+    }
+
+    /**
+     * Cleanup temporary directory
+     */
+    private function cleanupTempDirectory(string $dir)
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+
+        $files = glob($dir . '/*');
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                @unlink($file);
+            }
+        }
+        @rmdir($dir);
     }
 
     private function processVieFundFile()
