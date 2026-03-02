@@ -343,7 +343,7 @@ class ProcessImportJob implements ShouldQueue
                     'source_identifier' => $this->cleanString($getValue('sourceidentifier')),
                     'tx_type' => $this->cleanString($getValue('txtype')),
                     'settlement_amt' => $this->parseAmount($getValue('settlementamt') ?? '0'),
-                    'actual_amount' => $this->parseAmount($getValue('actualamount') ?? $getValue('actualam') ?? '0'),
+                    'actual_amount' => $this->parseAmount($getValue('actualamount') ?? $getValue('actualamunt') ?? $getValue('actualam') ?? '0'),
                     'import_id' => $this->importId,
                 ];
 
