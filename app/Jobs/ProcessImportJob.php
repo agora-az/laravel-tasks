@@ -440,7 +440,6 @@ class ProcessImportJob implements ShouldQueue
 
                                 $record['import_id'] = $this->importId;
                                 $record['record_hash'] = $record_hash;
-                                $record['type'] = 'bank_statement';
                                 $record['created_at'] = now();
                                 $record['updated_at'] = now();
                                 $batch[] = $record;
@@ -586,6 +585,7 @@ class ProcessImportJob implements ShouldQueue
                 'currency' => $currency,
                 'txn_date' => $currentDate,
                 'description' => $description,
+                'type' => $this->detectBankTransactionType($description),
                 'amount' => $amount,
                 'balance' => $balance,
             ];
@@ -680,5 +680,19 @@ class ProcessImportJob implements ShouldQueue
         }
         $cleaned = preg_replace('/[^0-9.-]/', '', (string) $value);
         return (float) $cleaned;
+    }
+
+    private function detectBankTransactionType(string $description): string
+    {
+        $lower = strtolower($description);
+        if (preg_match('/\b(credit|deposit|preauth credit|interest|payment received|pay)\b/i', $lower)) {
+            return 'deposit';
+        }
+
+        if (preg_match('/\b(debit|withdrawal|payment|memo|fee|wire|eft)\b/i', $lower)) {
+            return 'withdrawal';
+        }
+
+        return 'withdrawal';
     }
 }
