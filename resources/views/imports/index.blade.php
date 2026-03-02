@@ -189,11 +189,15 @@
                     console.log('Upload success, response:', response);
                     
                     if (response && response.success) {
-                        console.log('Import successful:', response);
-                        showUploadOverlay(response.imported || 0, response.duplicates || 0, response.errors || 0);
-                    } else if (response) {
-                        // Partial success or still processing
-                        console.log('Chunk received, response:', response);
+                        // Only show overlay on final import results (has 'imported' field)
+                        // Intermediate chunk uploads have 'chunkIndex' field instead
+                        if (response.hasOwnProperty('imported')) {
+                            console.log('Import completed:', response);
+                            showUploadOverlay(response.imported || 0, response.duplicates || 0, response.errors || 0);
+                        } else {
+                            // Intermediate chunk receipt
+                            console.log('Chunk received:', response);
+                        }
                     }
                 });
 
