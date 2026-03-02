@@ -20,16 +20,16 @@ class ChunkedUploadController extends Controller
         try {
             $request->validate([
                 'file' => 'required|file',
-                'chunkIndex' => 'required|integer',
-                'totalChunks' => 'required|integer',
+                'chunkIndex' => 'required|numeric',
+                'totalChunks' => 'required|numeric',
                 'fileId' => 'required|string',
                 'importType' => 'required|in:viefund,fundserv,bank',
                 'originalFilename' => 'required|string',
             ]);
 
             $fileId = $request->input('fileId');
-            $chunkIndex = $request->input('chunkIndex');
-            $totalChunks = $request->input('totalChunks');
+            $chunkIndex = (int)$request->input('chunkIndex');
+            $totalChunks = (int)$request->input('totalChunks');
             $importType = $request->input('importType');
             $originalFilename = $request->input('originalFilename');
 
