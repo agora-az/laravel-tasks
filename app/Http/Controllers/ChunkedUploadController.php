@@ -18,30 +18,28 @@ class ChunkedUploadController extends Controller
     public function uploadChunk(Request $request)
     {
         try {
+            // Dropzone.js sends chunk info with 'dz' prefix (dzchunkindex, dztotalchunkcount)
+            // Extract the actual chunk info
+            $chunkIndex = (int)($request->input('dzchunkindex') ?? $request->input('chunkIndex') ?? 0);
+            $totalChunks = (int)($request->input('dztotalchunkcount') ?? $request->input('totalChunks') ?? 1);
+            $fileId = $request->input('dzuuid') ?? $request->input('fileId');
+            $importType = $request->input('importType');
+            $originalFilename = $request->input('originalFilename');
+
             // Log incoming request for debugging
             \Log::info("uploadChunk request received", [
-                'chunkIndex' => $request->input('chunkIndex'),
-                'chunkIndex_type' => gettype($request->input('chunkIndex')),
-                'totalChunks' => $request->input('totalChunks'),
-                'fileId' => $request->input('fileId'),
-                'importType' => $request->input('importType'),
-                'all_inputs' => $request->except(['file']),
+                'chunkIndex' => $chunkIndex,
+                'totalChunks' => $totalChunks,
+                'fileId' => $fileId,
+                'importType' => $importType,
+                'originalFilename' => $originalFilename,
             ]);
 
             $request->validate([
                 'file' => 'required|file',
-                'chunkIndex' => 'required',
-                'totalChunks' => 'required',
-                'fileId' => 'required|string',
                 'importType' => 'required|in:viefund,fundserv,bank',
                 'originalFilename' => 'required|string',
             ]);
-
-            $fileId = $request->input('fileId');
-            $chunkIndex = (int)$request->input('chunkIndex');
-            $totalChunks = (int)$request->input('totalChunks');
-            $importType = $request->input('importType');
-            $originalFilename = $request->input('originalFilename');
 
             $chunk = $request->file('file');
             $chunkDir = "temp/uploads/{$fileId}";

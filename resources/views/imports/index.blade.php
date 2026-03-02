@@ -171,17 +171,10 @@
 
                     formData.append('_token', @json(csrf_token()));
                     formData.append('importType', importType);
-                    formData.append('fileId', file.upload.uuid);
                     formData.append('originalFilename', file.name);
                     
-                    if (file.upload.chunked) {
-                        formData.append('chunkIndex', file.upload.chunk);
-                        formData.append('totalChunks', Math.ceil(file.size / dz.options.chunkSize));
-                        console.log(`Uploading chunk ${file.upload.chunk} of ${Math.ceil(file.size / dz.options.chunkSize)}`);
-                    } else {
-                        formData.append('chunkIndex', 0);
-                        formData.append('totalChunks', 1);
-                    }
+                    // Dropzone automatically includes dzchunkindex, dztotalchunkcount, dzuuid
+                    // We just need to add our custom fields
                 });
 
                 this.on('uploadprogress', function(file, progress, bytesSent) {
