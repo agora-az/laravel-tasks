@@ -18,10 +18,20 @@ class ChunkedUploadController extends Controller
     public function uploadChunk(Request $request)
     {
         try {
+            // Log incoming request for debugging
+            \Log::info("uploadChunk request received", [
+                'chunkIndex' => $request->input('chunkIndex'),
+                'chunkIndex_type' => gettype($request->input('chunkIndex')),
+                'totalChunks' => $request->input('totalChunks'),
+                'fileId' => $request->input('fileId'),
+                'importType' => $request->input('importType'),
+                'all_inputs' => $request->except(['file']),
+            ]);
+
             $request->validate([
                 'file' => 'required|file',
-                'chunkIndex' => 'required|numeric',
-                'totalChunks' => 'required|numeric',
+                'chunkIndex' => 'required',
+                'totalChunks' => 'required',
                 'fileId' => 'required|string',
                 'importType' => 'required|in:viefund,fundserv,bank',
                 'originalFilename' => 'required|string',
