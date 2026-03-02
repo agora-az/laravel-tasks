@@ -466,10 +466,8 @@ class ProcessImportJob implements ShouldQueue
                             $hasDate = preg_match('/(\d{1,2}\/\d{1,2}|Nov|December|January|February|March|April|May|June|July|August|September|October|Nov|Dec|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep)\s+(\d{1,2}|(\d{4}-\d{2}-\d{2}))/i', $line, $dateMatch);
                             
                             if ($hasDate) {
-                                // Only skip if it matches EXACT patterns of balance/opening/closing
-                                // Not just containing those words
-                                if (preg_match('/^\s*(opening|closing)\s+balance/i', $line) || 
-                                    preg_match('/balance\s+forward\s*$/i', $line)) {
+                                // Skip balance/opening/closing lines (they shouldn't be transactions)
+                                if (preg_match('/(opening|closing|balance forward)\s/i', $line)) {
                                     if (count($skippedLines) < 5) {
                                         $skippedLines[] = "Skipped: " . substr($line, 0, 80);
                                     }
