@@ -405,9 +405,9 @@ class ProcessImportJob implements ShouldQueue
         $errors = [];
         $batch = [];
         $batchSize = 500;
+        $existingHashes = [];
 
         try {
-            // Check if it's a PDF
             if (strtolower($fileExt) === 'pdf') {
                 \Log::info("Processing as PDF");
                 try {
@@ -417,154 +417,49 @@ class ProcessImportJob implements ShouldQueue
                     
                     \Log::info("PDF text extracted", ['length' => strlen($text)]);
 
-                    // Remove null bytes and control characters from entire text
-                    $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', ' ', $text);
-                    
-                    \Log::info("Text sanitized", ['length' => strlen($text)]);
+                    $records = $this->parseBankStatementText($text);
+                    \Log::info("PDF processing complete", ['transactions_found' => count($records)]);
 
-                    // Simple parsing - extract transaction lines
-                    $lines = explode("\n", $text);
-                    \Log::info("Total lines found", ['count' => count($lines)]);
-                    
-                    // Find where transactions start (usually after header section)
-                    $startLine = 0;
-                    foreach ($lines as $i => $line) {
-                        if (preg_match('/^(Date|Date\s+Description|Posting\s+Date|Transaction\s+Date)/i', trim($line))) {
-                            $startLine = $i + 1;
-                            break;
-                        }
-                        // For CIBC, transactions often start after "Account Summary" or a date range line
-                        if (preg_match('/^For\s+(\w+\s+\d+)\s+to\s+(\w+\s+\d+)/i', trim($line))) {
-                            $startLine = $i + 5; // Skip a few lines after the date range
-                            break;
-                        }
-                    }
-                    
-                    \Log::info("Transaction section starts around line", ['line' => $startLine]);
-                    
-                    $transactionCount = 0;
-                    $skippedLines = [];
-                    foreach ($lines as $lineNum => $line) {
-                        // Skip header section
-                        if ($lineNum < $startLine) {
-                            continue;
-                        }
-                        
-                        $line = trim($line);
-                        if (empty($line) || strlen($line) < 5) {
+                    foreach ($records as $record) {
+                        if (empty($record['txn_date']) || empty($record['description']) || empty($record['amount'])) {
                             continue;
                         }
 
                         try {
-                            // Skip non-transaction lines more carefully
-                            if (preg_match('/^(Page|-----|[=]+|Cheques|Deposits|Transfers|Balance|Total|Statement|Opening|Closing|Summary|Beginning|Ending|Subtotal|Debit|Credit)\s*$/i', $line)) {
-                                continue;
-                            }
+                            $hashData = $record;
+                            $record_hash = hash('sha256', json_encode($hashData));
 
-                            // CIBC format: typically has date at start, description in middle, amount at end
-                            // Look for patterns like: "Nov 15" or "11/15" or "2025-11-15"
-                            $hasDate = preg_match('/(\d{1,2}\/\d{1,2}|Nov|December|January|February|March|April|May|June|July|August|September|October|Nov|Dec|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep)\s+(\d{1,2}|(\d{4}-\d{2}-\d{2}))/i', $line, $dateMatch);
-                            
-                            if ($hasDate) {
-                                // Skip balance/opening/closing lines (they shouldn't be transactions)
-                                if (preg_match('/(opening|closing|balance forward)\s/i', $line)) {
-                                    if (count($skippedLines) < 5) {
-                                        $skippedLines[] = "Skipped: " . substr($line, 0, 80);
-                                    }
+                            if (!isset($existingHashes[$record_hash])) {
+                                $existingHashes[$record_hash] = true;
+                                
+                                $existing = BankTransaction::where('record_hash', $record_hash)->exists();
+                                if ($existing) {
+                                    $duplicateCount++;
                                     continue;
                                 }
-                                
-                                // Look for numeric amounts (currency values) - typically at end of line
-                                $hasAmount = preg_match('/\d+\.\d{2}/', $line);
-                                
-                                if ($hasAmount) {
-                                    $amount = 0;
-                                    // Try to find a numeric amount
-                                    if (preg_match('/(?:[\$])?(\d+(?:,\d{3})*(?:\.\d{2})?)\s*(?:CR|DR|$)/i', $line, $amountMatch)) {
-                                        $cleaned = str_replace(['$', ','], '', $amountMatch[1]);
-                                        $amount = (float)$cleaned;
-                                    }
 
-                                    // Try to parse the date
-                                    $parsedDate = null;
-                                    
-                                    // Try various date formats
-                                    $dateFormats = [
-                                        'd/m/Y',
-                                        'm/d/Y',
-                                        'Y-m-d',
-                                        'd-m-Y',
-                                        'j M Y',
-                                        'd M Y',
-                                        'M d, Y',
-                                    ];
+                                $record['import_id'] = $this->importId;
+                                $record['record_hash'] = $record_hash;
+                                $record['type'] = 'bank_statement';
+                                $record['created_at'] = now();
+                                $record['updated_at'] = now();
+                                $batch[] = $record;
 
-                                    foreach ($dateFormats as $format) {
-                                        try {
-                                            $parsedDate = \Carbon\Carbon::createFromFormat($format, $dateMatch[0]);
-                                            break;
-                                        } catch (\Exception $e) {
-                                            continue;
-                                        }
-                                    }
-
-                                    // If no format worked, try parsing naturally
-                                    if (!$parsedDate) {
-                                        try {
-                                            $parsedDate = \Carbon\Carbon::parse($dateMatch[0]);
-                                        } catch (\Exception $e) {
-                                            $parsedDate = null;
-                                        }
-                                    }
-
-                                    // Generate hash for duplicate detection
-                                    $hashInput = json_encode([
-                                        'date' => $parsedDate?->toDateString(),
-                                        'description' => substr($line, 0, 255),
-                                        'amount' => $amount,
-                                    ]);
-                                    $recordHash = hash('sha256', $hashInput);
-                                    
-                                    // Check if this hash already exists in the database
-                                    if (BankTransaction::where('record_hash', $recordHash)->exists()) {
-                                        // Duplicate found, skip it
-                                        $duplicateCount++;
-                                        continue;
-                                    }
-
-                                    $batch[] = [
-                                        'txn_date' => $parsedDate ?? now(),
-                                        'description' => substr($line, 0, 255),
-                                        'type' => 'bank_statement',
-                                        'amount' => $amount,
-                                        'record_hash' => $recordHash,
-                                        'import_id' => $this->importId,
-                                        'created_at' => now(),
-                                        'updated_at' => now(),
-                                    ];
-                                    
-                                    $transactionCount++;
-
-                                    if (count($batch) >= $batchSize) {
-                                        if (!empty($batch)) {
-                                            \Log::info("Inserting bank transaction batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
-                                            BankTransaction::insert($batch);
-                                            $imported += count($batch);
-                                            \Log::info("Bank batch inserted successfully", ['total_imported' => $imported]);
-                                        }
-                                        $batch = [];
-                                    }
+                                if (count($batch) >= $batchSize) {
+                                    \Log::info("Inserting bank batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
+                                    BankTransaction::insert($batch);
+                                    $imported += count($batch);
+                                    $batch = [];
                                 }
+                            } else {
+                                $duplicateCount++;
                             }
                         } catch (\Exception $e) {
-                            $errors[] = "Line {$lineNum} parse error: " . $e->getMessage();
-                            continue;
+                            $errors[] = $e->getMessage();
                         }
                     }
-                    
-                    \Log::info("PDF processing complete", ['transactions_found' => $transactionCount]);
                 } catch (\Exception $e) {
-                    \Log::error("PDF parsing error: " . $e->getMessage());
+                    \Log::error("PDF parsing error", ['error' => $e->getMessage()]);
                     $errors[] = "PDF parsing error: " . $e->getMessage();
                 }
             } else {
@@ -575,18 +470,17 @@ class ProcessImportJob implements ShouldQueue
                         throw new \Exception('Could not open file');
                     }
 
-                    // Skip header
                     $header = fgetcsv($handle);
                     
                     while (($data = fgetcsv($handle)) !== false) {
                         if (count($data) >= 2) {
                             try {
                                 $batch[] = [
-                                    'txn_date' => $this->parseDate($data[0] ?? null) ?? now(),
+                                    'txn_date' => $this->parseDate($data[0]) ?? now(),
                                     'description' => $this->cleanString($data[1] ?? ''),
-                                    'type' => 'bank_statement',
                                     'amount' => $this->parseAmount($data[2] ?? '0'),
                                     'import_id' => $this->importId,
+                                    'type' => 'bank_statement',
                                     'created_at' => now(),
                                     'updated_at' => now(),
                                 ];
@@ -595,12 +489,10 @@ class ProcessImportJob implements ShouldQueue
                                     \Log::info("Inserting bank CSV batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                                     BankTransaction::insert($batch);
                                     $imported += count($batch);
-                                    \Log::info("Bank CSV batch inserted successfully", ['total_imported' => $imported]);
                                     $batch = [];
                                 }
                             } catch (\Exception $e) {
-                                $errors[] = "Row parse error: " . $e->getMessage();
-                                continue;
+                                $errors[] = "Row error: " . $e->getMessage();
                             }
                         }
                     }
@@ -614,7 +506,6 @@ class ProcessImportJob implements ShouldQueue
                 \Log::info("Inserting final bank batch", ['batch_size' => count($batch), 'total_imported' => $imported]);
                 BankTransaction::insert($batch);
                 $imported += count($batch);
-                \Log::info("Final bank batch inserted", ['total_imported' => $imported]);
             }
 
             \Log::info("Bank processing complete", ['imported' => $imported, 'duplicates' => $duplicateCount, 'errors' => count($errors)]);
@@ -628,6 +519,126 @@ class ProcessImportJob implements ShouldQueue
             \Log::error("Error in bank processing", ['error' => $e->getMessage()]);
             throw $e;
         }
+    }
+
+    private function parseBankStatementText(string $text): array
+    {
+        $year = $this->extractStatementYear($text) ?? now()->year;
+        $accountNumber = $this->extractAccountNumber($text);
+        $currency = $this->extractStatementCurrency($text) ?? 'CAD';
+        $lines = preg_split('/\r\n|\r|\n/', $text);
+        $transactions = [];
+        $currentDate = null;
+        $currentDescription = '';
+
+        foreach ($lines as $rawLine) {
+            $line = trim($rawLine);
+            if ($line === '') {
+                continue;
+            }
+
+            $lower = strtolower($line);
+            if (
+                str_contains($lower, 'transaction details')
+                || str_contains($lower, 'account summary')
+                || str_contains($lower, 'account statement')
+                || str_contains($lower, 'continued on next page')
+                || (str_contains($lower, 'withdrawals') && str_contains($lower, 'deposits') && str_contains($lower, 'balance'))
+                || str_contains($lower, 'opening balance')
+                || str_contains($lower, 'balance forward')
+            ) {
+                continue;
+            }
+
+            if (preg_match('/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\b/i', $line, $matches)) {
+                $currentDate = $this->parseStatementDate($matches[0], $year);
+                $line = trim(substr($line, strlen($matches[0])));
+                $currentDescription = $line;
+                if ($line === '') {
+                    continue;
+                }
+            }
+
+            if ($currentDate === null) {
+                continue;
+            }
+
+            preg_match_all('/\d{1,3}(?:,\d{3})*\.\d{2}/', $line, $amountMatches);
+            $amounts = $amountMatches[0] ?? [];
+
+            if (count($amounts) < 2) {
+                $currentDescription = trim(($currentDescription ? $currentDescription . ' ' : '') . $line);
+                continue;
+            }
+
+            $balance = $this->parseAmount($amounts[count($amounts) - 1]);
+            $amount = $this->parseAmount($amounts[count($amounts) - 2]);
+            $lineWithoutAmounts = trim(preg_replace('/\d{1,3}(?:,\d{3})*\.\d{2}/', '', $line));
+            $lineWithoutAmounts = trim(preg_replace('/\s{2,}/', ' ', $lineWithoutAmounts));
+            $description = trim($this->normalizeBankDescription(trim($currentDescription . ' ' . $lineWithoutAmounts)));
+
+            if ($description === '') {
+                $description = 'Transaction';
+            }
+
+            $transactions[] = [
+                'account_number' => $accountNumber,
+                'currency' => $currency,
+                'txn_date' => $currentDate,
+                'description' => $description,
+                'amount' => $amount,
+                'balance' => $balance,
+            ];
+
+            $currentDescription = '';
+        }
+
+        return $transactions;
+    }
+
+    private function extractStatementYear(string $text): ?int
+    {
+        if (preg_match('/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+to\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+(\d{4})/i', $text, $matches)) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/\bFor\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+(\d{4})/i', $text, $matches)) {
+            return (int) $matches[1];
+        }
+
+        return null;
+    }
+
+    private function extractAccountNumber(string $text): ?string
+    {
+        if (preg_match('/Account number\s*\n?\s*([0-9\-]+)/i', $text, $matches)) {
+            return trim($matches[1]);
+        }
+
+        return null;
+    }
+
+    private function extractStatementCurrency(string $text): ?string
+    {
+        if (preg_match('/Closing balance\s+on\s+[^\n]+\s+(CAD|USD)\s*=/i', $text, $matches)) {
+            return strtoupper($matches[1]);
+        }
+
+        return null;
+    }
+
+    private function parseStatementDate(string $dateText, int $year): ?string
+    {
+        try {
+            return Carbon::createFromFormat('M j Y', trim($dateText) . ' ' . $year)->format('Y-m-d');
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    private function normalizeBankDescription(string $description): string
+    {
+        return preg_replace('/\s{2,}/', ' ', trim($description));
     }
 
     protected function cleanString($value)
