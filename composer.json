@@ -4,7 +4,8 @@
     "type": "project",
     "require": {
         "laravel/framework": "^11.0",
-        "smalot/pdfparser": "^2.12"
+        "smalot/pdfparser": "^2.12",
+        "laravel/tinker": "^2.11"
     },
     "autoload": {
         "psr-4": {

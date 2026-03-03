@@ -4,8 +4,11 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Reconciliation;
+use App\Models\VieFundTransaction;
+use App\Models\MatchingSession;
 use Illuminate\Support\Facades\DB;
-use App\Services\Reconciliation\TransactionMatcher;
+use Illuminate\Support\Facades\Log;
+use App\Services\Reconciliation\VieFundFundservMatcher;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class ReconciliationController extends Controller
@@ -77,6 +80,7 @@ class ReconciliationController extends Controller
      */
     public function matches(Request $request)
     {
+        Log::info('Matches page loaded');
         $sort = $request->query('sort', 'matched_at');
         $direction = strtolower($request->query('direction', 'desc')) === 'asc' ? 'asc' : 'desc';
         $sortable = ['viefund', 'fundserv', 'bank', 'difference', 'confidence', 'matched_at'];
@@ -105,17 +109,9 @@ class ReconciliationController extends Controller
             ->count('left_id');
 
         $matches = DB::table('reconciliation_matches as rm')
-            ->leftJoin('fundserv_transactions as f_left', function ($join) {
-                $join->on('rm.left_id', '=', 'f_left.id')
-                    ->where('rm.left_type', '=', 'fundserv');
-            })
-            ->leftJoin('viefund_transactions as v_right', function ($join) {
-                $join->on('rm.right_id', '=', 'v_right.id')
-                    ->where('rm.right_type', '=', 'viefund');
-            })
-            ->leftJoin('bank_transactions as b_left', function ($join) {
-                $join->on('rm.left_id', '=', 'b_left.id')
-                    ->where('rm.left_type', '=', 'bank');
+            ->leftJoin('viefund_transactions as v_left', function ($join) {
+                $join->on('rm.left_id', '=', 'v_left.id')
+                    ->where('rm.left_type', '=', 'viefund');
             })
             ->leftJoin('fundserv_transactions as f_right', function ($join) {
                 $join->on('rm.right_id', '=', 'f_right.id')
@@ -132,21 +128,15 @@ class ReconciliationController extends Controller
                 'rm.confidence',
                 'rm.status',
                 'rm.metadata',
+                'rm.match_criteria_met',
                 'rm.created_at',
-                'f_left.order_id as fundserv_order_id',
-                'f_left.settlement_amt as fundserv_amount',
-                'f_left.actual_amount as fundserv_actual_amount',
-                'v_right.fund_wo_number as viefund_fund_wo_number',
-                'v_right.fund_trx_amount as viefund_amount',
-                'v_right.settlement_date as viefund_settlement_date',
-                'v_right.trade_date as viefund_trade_date',
-                'v_right.processing_date as viefund_processing_date',
-                'b_left.txn_date as bank_txn_date',
-                'b_left.amount as bank_amount',
-                'b_left.description as bank_description',
-                'f_right.settlement_date as fundserv_right_date',
-                'f_right.settlement_amt as fundserv_right_amount',
-                'f_right.actual_amount as fundserv_right_actual_amount',
+                'v_left.fund_wo_number as viefund_fund_wo_number',
+                'v_left.fund_trx_amount as viefund_amount',
+                'v_left.settlement_date as viefund_settlement_date',
+                'f_right.order_id as fundserv_order_id',
+                'f_right.settlement_amt as fundserv_amount',
+                'f_right.actual_amount as fundserv_actual_amount',
+                'f_right.settlement_date as fundserv_settlement_date',
             ])
             ->orderByDesc('rm.created_at')
             ->get();
@@ -159,101 +149,33 @@ class ReconciliationController extends Controller
                     $row->metadata_array = $decoded;
                 }
             }
+            
+            // Also decode match_criteria_met if present
+            $row->criteria_array = null;
+            if (!empty($row->match_criteria_met)) {
+                $decoded = json_decode($row->match_criteria_met, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $row->criteria_array = $decoded;
+                }
+            }
             return $row;
         });
 
-        $viefundIds = $matches
-            ->filter(function ($row) {
-                return $row->match_rule === TransactionMatcher::RULE_BANK_TO_FUNDSERV
-                    && !empty($row->metadata_array['viefund_id']);
-            })
-            ->map(function ($row) {
-                return (int) $row->metadata_array['viefund_id'];
-            })
-            ->unique()
-            ->values();
-
-        $viefundMap = collect();
-        if ($viefundIds->isNotEmpty()) {
-            $viefundMap = DB::table('viefund_transactions')
-                ->whereIn('id', $viefundIds)
-                ->select([
-                    'id',
-                    'fund_trx_amount',
-                    'fund_wo_number',
-                    'settlement_date',
-                    'trade_date',
-                    'processing_date',
-                ])
-                ->get()
-                ->keyBy('id');
-        }
-
-        if ($viefundMap->isNotEmpty()) {
-            $matches = $matches->map(function ($row) use ($viefundMap) {
-                if ($row->match_rule === TransactionMatcher::RULE_BANK_TO_FUNDSERV
-                    && empty($row->viefund_amount)
-                    && !empty($row->metadata_array['viefund_id'])) {
-                    $vie = $viefundMap->get((int) $row->metadata_array['viefund_id']);
-                    if ($vie) {
-                        $row->viefund_amount = $vie->fund_trx_amount;
-                        if (empty($row->viefund_fund_wo_number)) {
-                            $row->viefund_fund_wo_number = $vie->fund_wo_number;
-                        }
-                        if (empty($row->viefund_settlement_date)) {
-                            $row->viefund_settlement_date = $vie->settlement_date;
-                        }
-                        if (empty($row->viefund_trade_date)) {
-                            $row->viefund_trade_date = $vie->trade_date;
-                        }
-                        if (empty($row->viefund_processing_date)) {
-                            $row->viefund_processing_date = $vie->processing_date;
-                        }
-                    }
-                }
-                return $row;
-            });
-        }
-
         $groupedMatches = $matches
             ->groupBy(function ($match) {
-                if ($match->match_rule === TransactionMatcher::RULE_ORDER_ID_TO_FUND_WO) {
-                    $orderKey = $match->fundserv_order_id ?? $match->viefund_fund_wo_number ?? $match->left_id;
-                    return "order-id|{$match->left_id}|{$orderKey}";
-                }
-
-                if ($match->match_rule === TransactionMatcher::RULE_BANK_TO_FUNDSERV) {
-                    $orderKey = $match->fundserv_order_id ?? $match->viefund_fund_wo_number ?? $match->right_id;
-                    return "bank-fundserv|{$match->left_id}|{$orderKey}";
-                }
-
-                if ($match->match_rule === TransactionMatcher::RULE_BANK_TO_VIEFUND) {
-                    $orderKey = $match->viefund_fund_wo_number ?? $match->right_id;
-                    return "bank-viefund|{$match->left_id}|{$orderKey}";
-                }
-
-                return "single|{$match->id}";
+                // Group by fundserv transaction ID
+                return "fundserv|{$match->right_id}";
             })
             ->map(function ($group, $key) {
                 $first = $group->first();
                 $viefundTotal = $group->sum(function ($item) {
                     return (float) ($item->viefund_amount ?? 0);
                 });
-                $matchedTotal = $group->sum(function ($item) {
-                    return (float) ($item->matched_amount ?? 0);
-                });
-                $fundservAmount = $first->fundserv_actual_amount
-                    ?? $first->fundserv_amount
-                    ?? $first->fundserv_right_actual_amount
-                    ?? $first->fundserv_right_amount
-                    ?? null;
-                $bankAmount = $first->bank_amount ?? null;
+                $fundservAmount = $first->fundserv_actual_amount ?? $first->fundserv_amount;
                 $diff = null;
 
-                if ($fundservAmount !== null) {
+                if ($fundservAmount !== null && $viefundTotal !== null) {
                     $diff = abs((float) $fundservAmount) - abs((float) $viefundTotal);
-                } elseif ($bankAmount !== null) {
-                    $diff = abs((float) $bankAmount) - abs((float) $viefundTotal);
                 }
 
                 return [
@@ -261,29 +183,25 @@ class ReconciliationController extends Controller
                     'items' => $group->values(),
                     'count' => $group->count(),
                     'fundserv_amount' => $fundservAmount,
-                    'bank_amount' => $bankAmount,
                     'viefund_total' => $viefundTotal,
-                    'matched_total' => $matchedTotal,
+                    'bank_amount' => null,
                     'diff' => $diff,
                     'is_multi' => $group->count() > 1,
                     'first' => $first,
                 ];
             })
             ->sortBy(function ($group) use ($sort) {
+                if ($sort === 'confidence') {
+                    return $group['first']->confidence ?? 0;
+                }
                 if ($sort === 'viefund') {
                     return $group['viefund_total'] ?? 0;
                 }
                 if ($sort === 'fundserv') {
                     return $group['fundserv_amount'] ?? 0;
                 }
-                if ($sort === 'bank') {
-                    return $group['bank_amount'] ?? 0;
-                }
                 if ($sort === 'difference') {
                     return $group['diff'] ?? 0;
-                }
-                if ($sort === 'confidence') {
-                    return $group['first']->confidence ?? 0;
                 }
 
                 return $group['first']->created_at ?? null;
@@ -325,16 +243,129 @@ class ReconciliationController extends Controller
      */
     public function runMatches()
     {
-        /** @var TransactionMatcher $matcher */
-        $matcher = app(TransactionMatcher::class);
+        Log::info('runMatches() called - creating matching session');
+        
+        try {
+            // Check if there's already a processing session
+            $activeSession = MatchingSession::where('status', 'processing')->first();
+            if ($activeSession) {
+                return redirect()->route('reconciliations.matches')
+                    ->with('info', 'A matching session is already in progress.');
+            }
 
-        $orderCount = $matcher->matchFundservOrderIdToVieFundWoNumber(false);
-        $bankFundservCount = $matcher->matchBankToFundservViaOrderId(false)
-            + $matcher->matchBankToFundservAmountDate(false);
-        $bankVieFundCount = $matcher->matchBankToVieFundAmountDate(false);
+            // Create a new matching session
+            $session = MatchingSession::create([
+                'status' => 'processing',
+                'total_records' => VieFundTransaction::count(),
+                'processed_records' => 0,
+                'matched_count' => 0,
+                'started_at' => now(),
+            ]);
 
-        return redirect()->route('reconciliations.matches')
-            ->with('success', "Matches updated. Order-ID: {$orderCount}, Bank-Fundserv: {$bankFundservCount}, Bank-VieFund: {$bankVieFundCount}.");
+            Log::info('Created matching session ID: ' . $session->id);
+
+            // Start the matching process asynchronously
+            // Using proper shell redirection to detach from the web process
+            $artisanPath = base_path('artisan');
+            $logPath = storage_path('logs/matching-' . $session->id . '.log');
+            
+            // Use the Herd PHP CLI binary
+            $phpPath = '/Users/staceyrattlesnake/Library/Application Support/Herd/bin/php';
+            
+            // Redirect all output and detach with &
+            // This works better than nohup in web contexts
+            $command = sprintf(
+                '%s %s reconcile:match-viefund-async --session=%d > %s 2>&1 &',
+                escapeshellarg($phpPath),
+                escapeshellarg($artisanPath),
+                $session->id,
+                escapeshellarg($logPath)
+            );
+            
+            Log::info('Running command: ' . $command);
+            
+            // Close file descriptors to fully detach
+            $descriptorspec = array(
+                0 => array("pipe", "r"),  // stdin
+                1 => array("pipe", "w"),  // stdout
+                2 => array("pipe", "w")   // stderr
+            );
+            
+            $process = proc_open($command, $descriptorspec, $pipes, null, null, array('bypass_shell' => false));
+            
+            if (is_resource($process)) {
+                // Close all pipes
+                fclose($pipes[0]);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                proc_close($process);
+                Log::info('Process spawned successfully for session: ' . $session->id);
+            } else {
+                Log::error('Failed to spawn background process');
+            }
+
+            Log::info('Dispatched matching command for session: ' . $session->id);
+
+            return redirect()->route('reconciliations.matches')
+                ->with('info', 'Matching process started. Progress will be shown below.');
+        } catch (\Throwable $e) {
+            Log::error('ERROR in runMatches: ' . $e->getMessage());
+            Log::error('File: ' . $e->getFile() . ':' . $e->getLine());
+            
+            return redirect()->route('reconciliations.matches')
+                ->with('error', 'Error starting match process: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Get the current active matching session via AJAX.
+     */
+    public function getActiveMatchingSession()
+    {
+        $session = MatchingSession::where('status', 'processing')
+            ->orWhere('status', 'pending')
+            ->latest()
+            ->first();
+        
+        if (!$session) {
+            return response()->json(['error' => 'No active session'], 404);
+        }
+
+        return response()->json([
+            'id' => $session->id,
+            'status' => $session->status,
+            'total_records' => $session->total_records,
+            'processed_records' => $session->processed_records,
+            'matched_count' => $session->matched_count,
+            'progress_percentage' => $session->progress_percentage,
+            'error_message' => $session->error_message,
+        ]);
+    }
+
+    /**
+     * Get the status of a matching session via AJAX.
+     */
+    public function getMatchingStatus($sessionId)
+    {
+        $session = MatchingSession::find($sessionId);
+        
+        if (!$session) {
+            return response()->json(['error' => 'Session not found'], 404);
+        }
+
+        return response()->json([
+            'id' => $session->id,
+            'status' => $session->status,
+            'total_records' => $session->total_records,
+            'processed_records' => $session->processed_records,
+            'matched_count' => $session->matched_count,
+            'progress_percentage' => $session->progress_percentage,
+            'current_pass_number' => $session->current_pass_number,
+            'current_pass' => $session->current_pass,
+            'error_message' => $session->error_message,
+            'started_at' => $session->started_at?->toIso8601String(),
+            'completed_at' => $session->completed_at?->toIso8601String(),
+        ]);
     }
 
     /**
@@ -390,7 +421,7 @@ class ReconciliationController extends Controller
             ->groupBy('match_rule')
             ->get()
             ->map(function ($item) {
-                $item->display_label = TransactionMatcher::getRuleLabel($item->match_rule);
+                $item->display_label = VieFundFundservMatcher::getRuleLabel($item->match_rule);
                 return $item;
             });
 
@@ -400,7 +431,7 @@ class ReconciliationController extends Controller
             ->limit(5)
             ->get()
             ->map(function ($item) {
-                $item->display_label = TransactionMatcher::getRuleLabel($item->match_rule);
+                $item->display_label = VieFundFundservMatcher::getRuleLabel($item->match_rule);
                 return $item;
             });
 

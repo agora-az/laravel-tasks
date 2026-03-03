@@ -21,11 +21,13 @@ class ReconciliationMatch extends Model
         'matched_amount',
         'status',
         'metadata',
+        'match_criteria_met',
     ];
 
     protected $casts = [
         'confidence' => 'decimal:4',
         'matched_amount' => 'decimal:2',
         'metadata' => 'array',
+        'match_criteria_met' => 'array',
     ];
 }

@@ -31,6 +31,9 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
 
+    // API routes
+    Route::get('/api/matching-sessions/active', [ReconciliationController::class, 'getActiveMatchingSession'])->name('api.matching.active');
+
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
         Route::get('/manage', function () {
@@ -39,6 +42,7 @@ Route::middleware('auth.check')->group(function () {
         Route::get('/matches', [ReconciliationController::class, 'matches'])->name('reconciliations.matches');
         Route::post('/matches/find', [ReconciliationController::class, 'runMatches'])->name('reconciliations.matches.find');
         Route::delete('/matches', [ReconciliationController::class, 'deleteMatches'])->name('reconciliations.matches.delete');
+        Route::get('/matching-status/{sessionId}', [ReconciliationController::class, 'getMatchingStatus'])->name('reconciliations.matching.status');
         Route::get('/create', [ReconciliationController::class, 'create'])->name('reconciliations.create');
         Route::post('/', [ReconciliationController::class, 'store'])->name('reconciliations.store');
         Route::get('/{id}', [ReconciliationController::class, 'show'])->name('reconciliations.show');

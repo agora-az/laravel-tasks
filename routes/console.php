@@ -2,25 +2,23 @@
 
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
-use App\Services\Reconciliation\TransactionMatcher;
+use App\Services\Reconciliation\VieFundFundservMatcher;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote')->hourly();
 
-Artisan::command('reconcile:match {--rule=order-id} {--dry-run}', function () {
+Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', function () {
     $rule = $this->option('rule');
     $dryRun = (bool) $this->option('dry-run');
 
-    /** @var TransactionMatcher $matcher */
-    $matcher = app(TransactionMatcher::class);
+    /** @var VieFundFundservMatcher $matcher */
+    $matcher = app(VieFundFundservMatcher::class);
 
-    if ($rule === 'order-id') {
-        $count = $matcher->matchFundservOrderIdToVieFundWoNumber($dryRun);
-    } elseif ($rule === 'bank-fundserv') {
-        $count = $matcher->matchBankChained($dryRun);
+    if ($rule === 'viefund-fundserv') {
+        $count = $matcher->matchAll($dryRun);
     } else {
-        $this->error('Unsupported rule. Use --rule=order-id or --rule=bank-fundserv');
+        $this->error('Unsupported rule. Use --rule=viefund-fundserv');
         return 1;
     }
     if ($dryRun) {
