@@ -548,12 +548,26 @@
                         } else if (criterion.rule === 'fund_code') {
                             criteriaMap['Fund Code'] = criterion.matched;
                             criteriaMap['Code'] = criterion.matched;
+                            criteriaMap['Fund ID'] = criterion.matched;
                         } else if (criterion.rule === 'source_id') {
                             criteriaMap['Fund Source ID'] = criterion.matched;
                             criteriaMap['Source Identifier'] = criterion.matched;
                         }
                     });
                 }
+
+                // Helper function to format large numbers and prevent scientific notation
+                const formatValue = (value) => {
+                    if (value === null || value === undefined || value === '-') {
+                        return '-';
+                    }
+                    // Check if it's a number that might be in scientific notation
+                    if (!isNaN(value) && String(value).includes('E')) {
+                        // Convert to regular number without decimal places
+                        return Math.round(parseFloat(value)).toString();
+                    }
+                    return String(value);
+                };
 
                 // Helper function to get cell background color
                 const getCellBackground = (fieldName) => {
@@ -588,7 +602,7 @@
                     ['Fund Trx Type', data.viefund.fund_trx_type],
                     ['Fund Trx Amount', data.viefund.fund_trx_amount],
                     ['Fund Code', data.viefund.fund_code],
-                    ['Fund Source ID', data.viefund.fund_source_id],
+                    ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
                     ['Client Name', data.viefund.client_name],
                     ['Account ID', data.viefund.account_id],
                     ['Status', data.viefund.status],
@@ -618,9 +632,9 @@
                     ['Actual Amount', data.fundserv.actual_amount],
                     ['Settlement Amt', data.fundserv.settlement_amt],
                     ['Code', data.fundserv.code],
-                    ['Source Identifier', data.fundserv.source_identifier],
-                    ['Company', data.fundserv.company],
                     ['Fund ID', data.fundserv.fund_id],
+                    ['Source Identifier', formatValue(data.fundserv.source_identifier)],
+                    ['Company', data.fundserv.company],
                 ];
 
                 fundservFields.forEach(([label, value]) => {
