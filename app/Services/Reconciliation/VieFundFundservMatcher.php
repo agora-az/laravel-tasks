@@ -475,9 +475,15 @@ class VieFundFundservMatcher
                         }
                     }
                     
+                    // Recalculate confidence based on actual criteria matched
+                    $newConfidence = $this->calculateConfidence($criteria);
+                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update(['match_criteria_met' => json_encode($criteria)]);
+                        ->update([
+                            'match_criteria_met' => json_encode($criteria),
+                            'confidence' => $newConfidence,
+                        ]);
 
                     $validated++;
                 }
@@ -550,9 +556,15 @@ class VieFundFundservMatcher
                         }
                     }
                     
+                    // Recalculate confidence based on actual criteria matched
+                    $newConfidence = $this->calculateConfidence($criteria);
+                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update(['match_criteria_met' => json_encode($criteria)]);
+                        ->update([
+                            'match_criteria_met' => json_encode($criteria),
+                            'confidence' => $newConfidence,
+                        ]);
 
                     $validated++;
                 }
@@ -625,9 +637,15 @@ class VieFundFundservMatcher
                         }
                     }
                     
+                    // Recalculate confidence based on actual criteria matched
+                    $newConfidence = $this->calculateConfidence($criteria);
+                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update(['match_criteria_met' => json_encode($criteria)]);
+                        ->update([
+                            'match_criteria_met' => json_encode($criteria),
+                            'confidence' => $newConfidence,
+                        ]);
 
                     $validated++;
                 }
@@ -700,9 +718,15 @@ class VieFundFundservMatcher
                         }
                     }
                     
+                    // Recalculate confidence based on actual criteria matched
+                    $newConfidence = $this->calculateConfidence($criteria);
+                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update(['match_criteria_met' => json_encode($criteria)]);
+                        ->update([
+                            'match_criteria_met' => json_encode($criteria),
+                            'confidence' => $newConfidence,
+                        ]);
 
                     $validated++;
                 }
