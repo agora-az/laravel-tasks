@@ -860,8 +860,10 @@ class VieFundFundservMatcher
 
         $vieFundAmount = (float)$vieFund->fund_trx_amount;
         $fundservAmount = (float)$fundserv->actual_amount;
-        $vieFundType = $vieFund->fund_trx_type;
-        $fundservType = $fundserv->tx_type;
+        
+        // Trim whitespace from types for more robust comparison
+        $vieFundType = trim($vieFund->fund_trx_type ?? '');
+        $fundservType = trim($fundserv->tx_type ?? '');
 
         // Map VieFund type to expected Fundserv type
         $expectedFundservType = self::VIEFUND_TO_FUNDSERV_TYPE_MAP[$vieFundType] ?? null;
@@ -872,18 +874,12 @@ class VieFundFundservMatcher
             return abs($vieFundAmount) === abs($fundservAmount);
         }
 
-        // Check if Fundserv type matches expected
-        if ($fundservType !== $expectedFundservType) {
+        // Check if Fundserv type matches expected (case-insensitive comparison)
+        if (strtolower($fundservType) !== strtolower($expectedFundservType)) {
             return false;
         }
 
-        // Check amounts with counter-logic
-        if ($fundservType === 'Fee') {
-            // Fee should have matching amounts
-            return $vieFundAmount === $fundservAmount;
-        }
-
-        // For Buy/Sell: VieFund amount should equal negative Fundserv amount
+        // For all transaction types (Buy/Sell/Fee): VieFund amount should equal negative Fundserv amount
         return $vieFundAmount === -$fundservAmount;
     }
 
