@@ -263,6 +263,10 @@ class VieFundFundservMatcher
                 'progress_percentage' => 80.0,
             ]);
             $this->passValidateSourceId($session, $lastUpdateTime, $inserted);
+            
+            // Final step: Recalculate confidence for all matches based on actual criteria
+            Log::info('matchAllWithProgressTracking(): Recalculating confidence for all matches');
+            $this->recalculateAllConfidences();
 
             // Get final count of matches
             $finalCount = DB::table('reconciliation_matches')
@@ -475,15 +479,9 @@ class VieFundFundservMatcher
                         }
                     }
                     
-                    // Recalculate confidence based on actual criteria matched
-                    $newConfidence = $this->calculateConfidence($criteria);
-                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update([
-                            'match_criteria_met' => json_encode($criteria),
-                            'confidence' => $newConfidence,
-                        ]);
+                        ->update(['match_criteria_met' => json_encode($criteria)]);
 
                     $validated++;
                 }
@@ -556,15 +554,9 @@ class VieFundFundservMatcher
                         }
                     }
                     
-                    // Recalculate confidence based on actual criteria matched
-                    $newConfidence = $this->calculateConfidence($criteria);
-                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update([
-                            'match_criteria_met' => json_encode($criteria),
-                            'confidence' => $newConfidence,
-                        ]);
+                        ->update(['match_criteria_met' => json_encode($criteria)]);
 
                     $validated++;
                 }
@@ -637,15 +629,9 @@ class VieFundFundservMatcher
                         }
                     }
                     
-                    // Recalculate confidence based on actual criteria matched
-                    $newConfidence = $this->calculateConfidence($criteria);
-                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update([
-                            'match_criteria_met' => json_encode($criteria),
-                            'confidence' => $newConfidence,
-                        ]);
+                        ->update(['match_criteria_met' => json_encode($criteria)]);
 
                     $validated++;
                 }
@@ -718,15 +704,9 @@ class VieFundFundservMatcher
                         }
                     }
                     
-                    // Recalculate confidence based on actual criteria matched
-                    $newConfidence = $this->calculateConfidence($criteria);
-                    
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
-                        ->update([
-                            'match_criteria_met' => json_encode($criteria),
-                            'confidence' => $newConfidence,
-                        ]);
+                        ->update(['match_criteria_met' => json_encode($criteria)]);
 
                     $validated++;
                 }
@@ -962,5 +942,37 @@ class VieFundFundservMatcher
         }
 
         return round($matchedWeight / $totalWeight, 4);
+    }
+
+    /**
+     * Recalculate confidence for all matches based on their actual criteria state.
+     * This is called once at the end of all validation passes to ensure
+     * final confidence scores reflect all 5 criteria evaluations.
+     */
+    private function recalculateAllConfidences(): void
+    {
+        Log::info('recalculateAllConfidences(): Starting');
+        $updated = 0;
+
+        DB::table('reconciliation_matches')
+            ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
+            ->where('status', 'matched')
+            ->orderBy('id')
+            ->chunk(500, function($batch) use (&$updated) {
+                foreach ($batch as $match) {
+                    $criteria = json_decode($match->match_criteria_met, true) ?? [];
+                    
+                    // Calculate confidence based on final criteria state
+                    $newConfidence = $this->calculateConfidence($criteria);
+                    
+                    DB::table('reconciliation_matches')
+                        ->where('id', $match->id)
+                        ->update(['confidence' => $newConfidence]);
+                    
+                    $updated++;
+                }
+            });
+
+        Log::info('recalculateAllConfidences(): Completed. Updated ' . $updated . ' match confidences');
     }
 }
