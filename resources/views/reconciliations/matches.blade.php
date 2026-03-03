@@ -530,6 +530,39 @@
                     return;
                 }
 
+                // Build criteria map - maps field names to whether they matched
+                const criteriaMap = {};
+                if (data.criteria && Array.isArray(data.criteria)) {
+                    data.criteria.forEach(criterion => {
+                        // Map criteria rules to field names
+                        if (criterion.rule === 'order_id') {
+                            criteriaMap['Fund WO Number'] = criterion.matched;
+                            criteriaMap['Order ID'] = criterion.matched;
+                        } else if (criterion.rule === 'settlement_date') {
+                            criteriaMap['Settlement Date'] = criterion.matched;
+                        } else if (criterion.rule === 'amount_type') {
+                            criteriaMap['Fund Trx Type'] = criterion.matched;
+                            criteriaMap['Fund Trx Amount'] = criterion.matched;
+                            criteriaMap['Tx Type'] = criterion.matched;
+                            criteriaMap['Actual Amount'] = criterion.matched;
+                        } else if (criterion.rule === 'fund_code') {
+                            criteriaMap['Fund Code'] = criterion.matched;
+                            criteriaMap['Code'] = criterion.matched;
+                        } else if (criterion.rule === 'source_id') {
+                            criteriaMap['Fund Source ID'] = criterion.matched;
+                            criteriaMap['Source Identifier'] = criterion.matched;
+                        }
+                    });
+                }
+
+                // Helper function to get cell background color
+                const getCellBackground = (fieldName) => {
+                    if (fieldName in criteriaMap) {
+                        return criteriaMap[fieldName] ? '#f0fff4' : '#fef3c7';
+                    }
+                    return 'transparent';
+                };
+
                 // Populate modal with data
                 const modal = document.getElementById('match-detail-modal');
                 const content = modal.querySelector('.modal-content-wrapper');
@@ -538,6 +571,7 @@
                 let html = `
                     <div style="margin-bottom: 20px;">
                         <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Details</h3>
+                        <p style="margin: 0 0 16px 0; font-size: 12px; color: #718096;"><span style="background: #f0fff4; padding: 2px 6px; border-radius: 3px; margin-right: 8px;">Green = Matched Field</span><span style="background: #fef3c7; padding: 2px 6px; border-radius: 3px;">Yellow = No Match</span></p>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
                 `;
 
@@ -561,9 +595,10 @@
                 ];
 
                 viefundFields.forEach(([label, value]) => {
+                    const bgColor = getCellBackground(label);
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
                         <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 8px 0; color: #2d3748; font-family: monospace; word-break: break-all;">${value || '-'}</td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
                     </tr>`;
                 });
 
@@ -589,38 +624,14 @@
                 ];
 
                 fundservFields.forEach(([label, value]) => {
+                    const bgColor = getCellBackground(label);
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
                         <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 8px 0; color: #2d3748; font-family: monospace; word-break: break-all;">${value || '-'}</td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
                     </tr>`;
                 });
 
                 html += `</table></div></div></div>`;
-
-                // Match Criteria section
-                if (data.criteria && data.criteria.length > 0) {
-                    html += `<div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e2e8f0;">
-                        <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2d3748;">Matching Criteria</h4>
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
-                    `;
-
-                    data.criteria.forEach(criterion => {
-                        const matched = criterion.matched;
-                        const bgColor = matched ? '#f0fff4' : '#fef3c7';
-                        const borderColor = matched ? '#c6f6d5' : '#fcd34d';
-                        const textColor = matched ? '#22863a' : '#92400e';
-                        const icon = matched ? '✓' : '✗';
-
-                        html += `<div style="padding: 12px; border-radius: 6px; border: 1px solid ${borderColor}; background: ${bgColor};">
-                            <div style="color: ${textColor}; font-weight: 500;">
-                                <span style="font-size: 16px; margin-right: 6px;">${icon}</span>
-                                ${criterion.rule.replace(/_/g, ' ')}
-                            </div>
-                        </div>`;
-                    });
-
-                    html += `</div></div>`;
-                }
 
                 content.innerHTML = html;
                 modal.style.display = 'flex';
