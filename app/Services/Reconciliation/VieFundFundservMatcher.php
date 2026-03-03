@@ -359,7 +359,7 @@ class VieFundFundservMatcher
                     'right_type' => 'fundserv',
                     'right_id' => $fundservId,
                     'match_rule' => self::RULE_VIEFUND_FUNDSERV,
-                    'confidence' => 0.95,  // High confidence for Order ID match (95%)
+                    'confidence' => 0.20,  // Only order_id matched in Pass 1 (20%)
                     'matched_amount' => $vieFundTrx->fund_trx_amount,
                     'status' => 'matched',
                     'metadata' => json_encode(['match_type' => 'order_id']),
