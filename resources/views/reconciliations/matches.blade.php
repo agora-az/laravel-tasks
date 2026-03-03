@@ -134,7 +134,7 @@
                                 $columnBackground = $hasDiff ? '#fef3c7' : 'transparent';
                             @endphp
 
-                            <tr class="group-toggle" data-group="{{ $groupId }}" data-expandable="{{ $group['is_multi'] ? 'true' : 'false' }}" style="border-bottom: 1px solid #e2e8f0; cursor: {{ $group['is_multi'] ? 'pointer' : 'default' }};">
+                            <tr class="group-toggle match-row-clickable" data-match-id="{{ $first->id }}" data-group="{{ $groupId }}" data-expandable="{{ $group['is_multi'] ? 'true' : 'false' }}" style="border-bottom: 1px solid #e2e8f0; cursor: pointer; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#f0f4f8'" onmouseout="this.style.backgroundColor='transparent'">
                                 <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center;">
                                     @php
                                         $ruleLabel = match($first->match_rule) {                                            'viefund_to_fundserv_criteria_based' => 'VieFund<br>to<br>Fundserv',                                            'viefund_to_fundserv_criteria_based' => 'VieFund<br>to<br>Fundserv',
@@ -210,7 +210,7 @@
                             </tr>
 
                             @foreach($group['items'] as $match)
-                                <tr class="group-row {{ $groupId }}" style="border-bottom: 1px solid #e2e8f0; display: none; background: #f9fafb;">
+                                <tr class="group-row match-row-clickable {{ $groupId }}" data-match-id="{{ $match->id }}" style="border-bottom: 1px solid #e2e8f0; display: none; background: #f9fafb; cursor: pointer; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#e6ecf1'" onmouseout="this.style.backgroundColor='#f9fafb'">
                                     <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center;">
                                         @php
                                             $ruleLabel = match($match->match_rule) {
@@ -304,6 +304,20 @@
                 <p style="font-size: 18px; margin-bottom: 10px;">No reconciliation matches found.</p>
             </div>
         @endif
+    </div>
+
+    <!-- Match Detail Modal -->
+    <div id="match-detail-modal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 1000; align-items: center; justify-content: center; overflow-y: auto;">
+        <div class="modal-overlay" style="position: absolute; inset: 0; cursor: pointer;"></div>
+        <div class="modal-content" style="position: relative; background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); max-width: 1000px; width: 90%; max-height: 90vh; overflow-y: auto; margin: 20px auto;">
+            <div style="position: sticky; top: 0; background: white; padding: 20px; border-bottom: 2px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; z-index: 10;">
+                <h3 style="margin: 0; font-size: 20px; font-weight: 700; color: #2d3748;">Transaction Comparison</h3>
+                <button class="modal-close" style="background: none; border: none; font-size: 28px; cursor: pointer; color: #718096; padding: 0; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#e2e8f0'" onmouseout="this.style.backgroundColor='transparent';">×</button>
+            </div>
+            <div class="modal-content-wrapper" style="padding: 24px;">
+                <!-- Content will be populated by JavaScript -->
+            </div>
+        </div>
     </div>
 
     <script>
@@ -470,5 +484,151 @@
                 })
                 .catch(() => {}); // No active session
         });
+
+        // Modal functionality - Handle match detail modal
+        const detailModal = document.getElementById('match-detail-modal');
+        const modalClose = detailModal.querySelector('.modal-close');
+        const modalOverlay = detailModal.querySelector('.modal-overlay');
+
+        // Close modal handlers
+        modalClose.addEventListener('click', () => {
+            detailModal.style.display = 'none';
+        });
+
+        modalOverlay.addEventListener('click', () => {
+            detailModal.style.display = 'none';
+        });
+
+        // Prevent closing modal when clicking on modal content
+        detailModal.querySelector('.modal-content').addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        // Handle row clicks to open modal
+        document.querySelectorAll('.match-row-clickable').forEach(row => {
+            row.addEventListener('click', function (e) {
+                // Don't open modal if clicking on the expansion toggle and it's expandable
+                if (this.getAttribute('data-expandable') === 'true' && e.target.closest('td:first-child')) {
+                    // Let the group toggle happen instead
+                    return;
+                }
+
+                const matchId = this.getAttribute('data-match-id');
+                if (matchId) {
+                    openMatchDetailModal(matchId);
+                }
+            });
+        });
+
+        async function openMatchDetailModal(matchId) {
+            try {
+                const response = await fetch(`/api/matches/${matchId}/details`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Match details not found');
+                    return;
+                }
+
+                // Populate modal with data
+                const modal = document.getElementById('match-detail-modal');
+                const content = modal.querySelector('.modal-content-wrapper');
+
+                // Create comparison table
+                let html = `
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Details</h3>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                `;
+
+                // VieFund side
+                html += `<div>
+                    <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2f855a; padding-bottom: 8px; border-bottom: 2px solid #c6f6d5;">VieFund Transaction</h4>
+                    <table style="width: 100%; font-size: 13px;">
+                `;
+
+                const viefundFields = [
+                    ['Fund WO Number', data.viefund.fund_wo_number],
+                    ['Settlement Date', data.viefund.settlement_date],
+                    ['Trade Date', data.viefund.trade_date],
+                    ['Fund Trx Type', data.viefund.fund_trx_type],
+                    ['Fund Trx Amount', data.viefund.fund_trx_amount],
+                    ['Fund Code', data.viefund.fund_code],
+                    ['Fund Source ID', data.viefund.fund_source_id],
+                    ['Client Name', data.viefund.client_name],
+                    ['Account ID', data.viefund.account_id],
+                    ['Status', data.viefund.status],
+                ];
+
+                viefundFields.forEach(([label, value]) => {
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
+                        <td style="padding: 8px 0; color: #2d3748; font-family: monospace; word-break: break-all;">${value || '-'}</td>
+                    </tr>`;
+                });
+
+                html += `</table></div>`;
+
+                // Fundserv side
+                html += `<div>
+                    <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #3182ce; padding-bottom: 8px; border-bottom: 2px solid #90cdf4;">Fundserv Transaction</h4>
+                    <table style="width: 100%; font-size: 13px;">
+                `;
+
+                const fundservFields = [
+                    ['Order ID', data.fundserv.order_id],
+                    ['Settlement Date', data.fundserv.settlement_date],
+                    ['Trade Date', data.fundserv.trade_date],
+                    ['Tx Type', data.fundserv.tx_type],
+                    ['Actual Amount', data.fundserv.actual_amount],
+                    ['Settlement Amt', data.fundserv.settlement_amt],
+                    ['Code', data.fundserv.code],
+                    ['Source Identifier', data.fundserv.source_identifier],
+                    ['Company', data.fundserv.company],
+                    ['Fund ID', data.fundserv.fund_id],
+                ];
+
+                fundservFields.forEach(([label, value]) => {
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
+                        <td style="padding: 8px 0; color: #2d3748; font-family: monospace; word-break: break-all;">${value || '-'}</td>
+                    </tr>`;
+                });
+
+                html += `</table></div></div></div>`;
+
+                // Match Criteria section
+                if (data.criteria && data.criteria.length > 0) {
+                    html += `<div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e2e8f0;">
+                        <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2d3748;">Matching Criteria</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;">
+                    `;
+
+                    data.criteria.forEach(criterion => {
+                        const matched = criterion.matched;
+                        const bgColor = matched ? '#f0fff4' : '#fef3c7';
+                        const borderColor = matched ? '#c6f6d5' : '#fcd34d';
+                        const textColor = matched ? '#22863a' : '#92400e';
+                        const icon = matched ? '✓' : '✗';
+
+                        html += `<div style="padding: 12px; border-radius: 6px; border: 1px solid ${borderColor}; background: ${bgColor};">
+                            <div style="color: ${textColor}; font-weight: 500;">
+                                <span style="font-size: 16px; margin-right: 6px;">${icon}</span>
+                                ${criterion.rule.replace(/_/g, ' ')}
+                            </div>
+                        </div>`;
+                    });
+
+                    html += `</div></div>`;
+                }
+
+                content.innerHTML = html;
+                modal.style.display = 'flex';
+
+            } catch (error) {
+                console.error('Error fetching match details:', error);
+                alert('Error loading match details');
+            }
+        }
     </script>
 @endsection

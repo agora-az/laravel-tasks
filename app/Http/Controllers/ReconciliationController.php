@@ -457,4 +457,127 @@ class ReconciliationController extends Controller
             'recentMatches'
         ));
     }
+
+    /**
+     * Get detailed transaction data for a match (API endpoint)
+     */
+    public function getMatchDetails($matchId)
+    {
+        $match = DB::table('reconciliation_matches as rm')
+            ->leftJoin('viefund_transactions as v', function ($join) {
+                $join->on('rm.left_id', '=', 'v.id')
+                    ->where('rm.left_type', '=', 'viefund');
+            })
+            ->leftJoin('fundserv_transactions as f', function ($join) {
+                $join->on('rm.right_id', '=', 'f.id')
+                    ->where('rm.right_type', '=', 'fundserv');
+            })
+            ->select('rm.*', 'v.*', 'f.*')
+            ->select([
+                'rm.id as match_id',
+                'rm.match_rule',
+                'rm.left_id',
+                'rm.right_id',
+                'rm.confidence',
+                'rm.match_criteria_met',
+                
+                // VieFund fields
+                'v.id as viefund_id',
+                'v.client_name',
+                'v.rep_code',
+                'v.plan_description',
+                'v.institution',
+                'v.account_id',
+                'v.trx_id',
+                'v.created_date as viefund_created_date',
+                'v.trx_type as viefund_trx_type',
+                'v.trade_date as viefund_trade_date',
+                'v.settlement_date as viefund_settlement_date',
+                'v.processing_date',
+                'v.source_id as viefund_source_id',
+                'v.status as viefund_status',
+                'v.amount',
+                'v.balance',
+                'v.fund_code',
+                'v.fund_trx_type',
+                'v.fund_trx_amount',
+                'v.fund_settlement_source',
+                'v.fund_wo_number',
+                'v.currency',
+                
+                // Fundserv fields
+                'f.id as fundserv_id',
+                'f.company',
+                'f.settlement_date as fundserv_settlement_date',
+                'f.code',
+                'f.src',
+                'f.trade_date as fundserv_trade_date',
+                'f.fund_id',
+                'f.dealer_account_id',
+                'f.order_id',
+                'f.source_identifier',
+                'f.tx_type',
+                'f.settlement_amt',
+                'f.actual_amount',
+            ])
+            ->where('rm.id', $matchId)
+            ->first();
+
+        if (!$match) {
+            return response()->json(['error' => 'Match not found'], 404);
+        }
+
+        // Decode criteria
+        $criteria = [];
+        if (!empty($match->match_criteria_met)) {
+            $decoded = json_decode($match->match_criteria_met, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $criteria = $decoded;
+            }
+        }
+
+        return response()->json([
+            'match' => $match,
+            'criteria' => $criteria,
+            'viefund' => (object) [
+                'id' => $match->viefund_id,
+                'client_name' => $match->client_name,
+                'rep_code' => $match->rep_code,
+                'plan_description' => $match->plan_description,
+                'institution' => $match->institution,
+                'account_id' => $match->account_id,
+                'trx_id' => $match->trx_id,
+                'created_date' => $match->viefund_created_date,
+                'trx_type' => $match->viefund_trx_type,
+                'trade_date' => $match->viefund_trade_date,
+                'settlement_date' => $match->viefund_settlement_date,
+                'processing_date' => $match->processing_date,
+                'source_id' => $match->viefund_source_id,
+                'status' => $match->viefund_status,
+                'amount' => $match->amount,
+                'balance' => $match->balance,
+                'fund_code' => $match->fund_code,
+                'fund_trx_type' => $match->fund_trx_type,
+                'fund_trx_amount' => $match->fund_trx_amount,
+                'fund_settlement_source' => $match->fund_settlement_source,
+                'fund_wo_number' => $match->fund_wo_number,
+                'currency' => $match->currency,
+            ],
+            'fundserv' => (object) [
+                'id' => $match->fundserv_id,
+                'company' => $match->company,
+                'settlement_date' => $match->fundserv_settlement_date,
+                'code' => $match->code,
+                'src' => $match->src,
+                'trade_date' => $match->fundserv_trade_date,
+                'fund_id' => $match->fund_id,
+                'dealer_account_id' => $match->dealer_account_id,
+                'order_id' => $match->order_id,
+                'source_identifier' => $match->source_identifier,
+                'tx_type' => $match->tx_type,
+                'settlement_amt' => $match->settlement_amt,
+                'actual_amount' => $match->actual_amount,
+            ]
+        ]);
+    }
 }

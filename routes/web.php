@@ -33,6 +33,7 @@ Route::middleware('auth.check')->group(function () {
 
     // API routes
     Route::get('/api/matching-sessions/active', [ReconciliationController::class, 'getActiveMatchingSession'])->name('api.matching.active');
+    Route::get('/api/matches/{matchId}/details', [ReconciliationController::class, 'getMatchDetails'])->name('api.matches.details');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
