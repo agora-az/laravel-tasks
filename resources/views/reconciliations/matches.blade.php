@@ -87,42 +87,84 @@
     </div>
 
     <div class="card">
-        <!-- Criteria Filters -->
+        <!-- Filters Row -->
         <div style="padding: 16px; border-bottom: 1px solid #e2e8f0; background: #f9fafb;">
-            <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Matched Criteria:</div>
-            <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;">
-                @php
-                    $criteriaLabels = [
-                        'order_id' => 'Order ID',
-                        'settlement_date' => 'Settlement Date',
-                        'amount_type' => 'Amount & Type',
-                        'fund_code' => 'Fund Code',
-                        'source_id' => 'Source Identifier',
-                    ];
-                @endphp
-                @foreach($availableCriteria as $criterion)
-                    @php
-                        $currentValue = $criteriaFilters[$criterion] ?? 'off';
-                        $queryParams = request()->query();
-                    @endphp
-                    <div style="display: flex; flex-direction: column; gap: 4px;">
-                        <label style="font-size: 12px; color: #4a5568; font-weight: 500;">{{ $criteriaLabels[$criterion] ?? $criterion }}</label>
-                        <select class="criteria-filter-select" data-criterion="{{ $criterion }}" onchange="
-                            updateFilterSelectColor(this);
-                            const params = new URLSearchParams(window.location.search);
-                            if (this.value === 'off') {
-                                params.delete('criteria_{{ $criterion }}');
-                            } else {
-                                params.set('criteria_{{ $criterion }}', this.value);
-                            }
-                            window.location.search = params.toString();
-                        " style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer;">
-                            <option value="off" {{ $currentValue === 'off' ? 'selected' : '' }}>Off</option>
-                            <option value="matched" {{ $currentValue === 'matched' ? 'selected' : '' }}>Matched</option>
-                            <option value="unmatched" {{ $currentValue === 'unmatched' ? 'selected' : '' }}>Unmatched</option>
-                        </select>
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px;">
+                <!-- Confidence Filter (1/3 width) -->
+                <div>
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Confidence:</div>
+                    <div style="display: flex; gap: 12px; align-items: flex-start;">
+                        <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                            <label style="font-size: 12px; color: #4a5568; font-weight: 500;">Confidence Level</label>
+                            <select id="confidence-filter-select" onchange="
+                                updateConfidenceFilterColor(this);
+                                const params = new URLSearchParams(window.location.search);
+                                if (this.value === 'hide_100') {
+                                    params.set('confidence_filter', 'hide_100');
+                                } else if (this.value === 'show_only_100') {
+                                    params.set('confidence_filter', 'show_only_100');
+                                } else {
+                                    params.set('confidence_filter', 'show_all');
+                                }
+                                window.location.search = params.toString();
+                            " style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer; width: 100%;">
+                                <option value="show_all" {{ $confidenceFilter === 'show_all' ? 'selected' : '' }}>Show All</option>
+                                <option value="hide_100" {{ $confidenceFilter === 'hide_100' ? 'selected' : '' }}>Hide 100% Matches</option>
+                                <option value="show_only_100" {{ $confidenceFilter === 'show_only_100' ? 'selected' : '' }}>Show Only 100%</option>
+                            </select>
+                        </div>
                     </div>
-                @endforeach
+                </div>
+
+                <!-- Criteria Filters (2/3 width) -->
+                <div>
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Matched Criteria:</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;">
+                        @php
+                            $criteriaLabels = [
+                                'order_id' => 'Order ID',
+                                'settlement_date' => 'Settlement Date',
+                                'amount_type' => 'Amount & Type',
+                                'fund_code' => 'Fund Code',
+                                'source_id' => 'Source Identifier',
+                            ];
+                        @endphp
+                        @foreach($availableCriteria as $criterion)
+                            @php
+                                $currentValue = $criteriaFilters[$criterion] ?? 'off';
+                                $queryParams = request()->query();
+                            @endphp
+                            <div style="display: flex; flex-direction: column; gap: 4px;">
+                                <label style="font-size: 12px; color: #4a5568; font-weight: 500;">{{ $criteriaLabels[$criterion] ?? $criterion }}</label>
+                                <select class="criteria-filter-select" data-criterion="{{ $criterion }}" onchange="
+                                    updateFilterSelectColor(this);
+                                    const params = new URLSearchParams(window.location.search);
+                                    if (this.value === 'off') {
+                                        params.delete('criteria_{{ $criterion }}');
+                                    } else {
+                                        params.set('criteria_{{ $criterion }}', this.value);
+                                    }
+                                    window.location.search = params.toString();
+                                " style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer;">
+                                    <option value="off" {{ $currentValue === 'off' ? 'selected' : '' }}>Off</option>
+                                    <option value="matched" {{ $currentValue === 'matched' ? 'selected' : '' }}>Matched</option>
+                                    <option value="unmatched" {{ $currentValue === 'unmatched' ? 'selected' : '' }}>Unmatched</option>
+                                </select>
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Summary Row -->
+        <div style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; background: #ffffff; font-size: 13px; color: #4a5568; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <strong style="color: #2d3748;">{{ $matchesPaginator->total() }}</strong> results
+                @if($matchesPaginator->total() > 0)
+                    showing <strong style="color: #2d3748;">{{ $matchesPaginator->perPage() }}</strong> per page
+                    on page <strong style="color: #2d3748;">{{ $matchesPaginator->currentPage() }}</strong> of <strong style="color: #2d3748;">{{ $matchesPaginator->lastPage() }}</strong>
+                @endif
             </div>
         </div>
 
@@ -766,12 +808,39 @@
             selectElement.style.color = textColor;
         }
 
+        // Color code confidence filter based on selection
+        function updateConfidenceFilterColor(selectElement) {
+            const value = selectElement.value;
+            let bgColor = 'white';
+            let textColor = '#2d3748';
+
+            if (value === 'hide_100') {
+                bgColor = '#fef3c7'; // Light yellow/amber
+                textColor = '#92400e'; // Dark amber
+            } else if (value === 'show_only_100') {
+                bgColor = '#dcfce7'; // Light green
+                textColor = '#166534'; // Dark green
+            }
+
+            selectElement.style.backgroundColor = bgColor;
+            selectElement.style.color = textColor;
+        }
+
         // Initialize all filter selects on page load
         document.addEventListener('DOMContentLoaded', function() {
-            const filterSelects = document.querySelectorAll('.criteria-filter-select');
-            filterSelects.forEach(select => {
+            const criteriaSelects = document.querySelectorAll('.criteria-filter-select');
+            criteriaSelects.forEach(select => {
                 updateFilterSelectColor(select);
             });
+
+            const confidenceSelect = document.getElementById('confidence-filter-select');
+            if (confidenceSelect) {
+                updateConfidenceFilterColor(confidenceSelect);
+                // Also update on change
+                confidenceSelect.addEventListener('change', function() {
+                    updateConfidenceFilterColor(this);
+                });
+            }
         });
     </script>
 @endsection

@@ -89,6 +89,14 @@ class ReconciliationController extends Controller
             $sort = 'matched_at';
         }
 
+        // Get confidence filter from query parameters
+        // Default: hide_100 (hide 100% confidence matches)
+        // Options: show_all, hide_100, show_only_100
+        $confidenceFilter = $request->query('confidence_filter', 'hide_100');
+        if (!in_array($confidenceFilter, ['show_all', 'hide_100', 'show_only_100'])) {
+            $confidenceFilter = 'hide_100';
+        }
+
         // Get criterion filters from query parameters
         // Format: criteria_order_id=matched, criteria_settlement_date=unmatched, etc.
         $criteriaFilters = [];
@@ -249,6 +257,18 @@ class ReconciliationController extends Controller
             })->values();
         }
 
+        // Filter grouped matches by confidence level
+        if ($confidenceFilter === 'hide_100') {
+            $groupedMatches = $groupedMatches->filter(function ($group) {
+                return ($group['first']->confidence ?? 0) < 1.0;
+            })->values();
+        } elseif ($confidenceFilter === 'show_only_100') {
+            $groupedMatches = $groupedMatches->filter(function ($group) {
+                return ($group['first']->confidence ?? 0) >= 1.0;
+            })->values();
+        }
+        // 'show_all' doesn't need filtering
+
         $perPage = 50;
         $page = (int) $request->query('page', 1);
         $pagedGroups = $groupedMatches->forPage($page, $perPage)->values();
@@ -277,7 +297,8 @@ class ReconciliationController extends Controller
             'sort',
             'direction',
             'criteriaFilters',
-            'availableCriteria'
+            'availableCriteria',
+            'confidenceFilter'
         ));
     }
 
