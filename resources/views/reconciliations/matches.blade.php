@@ -595,20 +595,45 @@
                     <table style="width: 100%; font-size: 13px;">
                 `;
 
+                // Criterion fields in order, then non-criterion
                 const viefundFields = [
+                    // Criterion fields (in matching order)
                     ['Fund WO Number', data.viefund.fund_wo_number],
                     ['Settlement Date', data.viefund.settlement_date],
-                    ['Trade Date', data.viefund.trade_date],
                     ['Fund Trx Type', data.viefund.fund_trx_type],
                     ['Fund Trx Amount', data.viefund.fund_trx_amount],
-                    ['Fund Code', data.viefund.fund_code],
-                    ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
-                    ['Client Name', data.viefund.client_name],
-                    ['Account ID', data.viefund.account_id],
-                    ['Status', data.viefund.status],
                 ];
 
-                viefundFields.forEach(([label, value]) => {
+                viefundFields.forEach(([label, value, special]) => {
+                    const bgColor = getCellBackground(label);
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
+                    </tr>`;
+                });
+
+                // Fund Code - shown twice on VieFund side to align with Code + Fund ID on Fundserv
+                const viefundFundCodeBgColor = getCellBackground('Fund Code');
+                const fundCode = data.viefund.fund_code || '';
+                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund Code:</td>
+                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;"><strong>${fundCode.substring(0, 3) || '-'}</strong>${fundCode.substring(3) || ''}</td>
+                </tr>`;
+                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;"></td>
+                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;">${fundCode.substring(0, 3) || ''}<strong>${fundCode.substring(3) || '-'}</strong></td>
+                </tr>`;
+
+                // Continue with remaining fields
+                const viefundRemainingFields = [
+                    ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
+                    // Non-criterion fields
+                    ['Trade Date', data.viefund.trade_date],
+                    ['Account ID', data.viefund.account_id],
+                    ['Client Name', data.viefund.client_name],
+                ];
+
+                viefundRemainingFields.forEach(([label, value]) => {
                     const bgColor = getCellBackground(label);
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
                         <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
@@ -624,24 +649,52 @@
                     <table style="width: 100%; font-size: 13px;">
                 `;
 
-                const fundservFields = [
+                // Build fundserv table with aligned criterion fields
+                const fundservCriteriaRows = [
                     ['Order ID', data.fundserv.order_id],
                     ['Settlement Date', data.fundserv.settlement_date],
-                    ['Trade Date', data.fundserv.trade_date],
                     ['Tx Type', data.fundserv.tx_type],
-                    ['Actual Amount', data.fundserv.actual_amount],
-                    ['Settlement Amt', data.fundserv.settlement_amt],
-                    ['Code', data.fundserv.code],
-                    ['Fund ID', data.fundserv.fund_id],
-                    ['Source Identifier', formatValue(data.fundserv.source_identifier)],
-                    ['Company', data.fundserv.company],
+                    ['Actual Amount', formatValue(data.fundserv.actual_amount)],
                 ];
 
-                fundservFields.forEach(([label, value]) => {
+                fundservCriteriaRows.forEach(([label, value]) => {
                     const bgColor = getCellBackground(label);
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
                         <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
                         <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
+                    </tr>`;
+                });
+
+                // Fund Code criterion - Fund Code maps to Code + Fund ID (2 rows)
+                const fundCodeBgColor = getCellBackground('Code');
+
+                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Code:</td>
+                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px;">${data.fundserv.code || '-'}</td>
+                </tr>`;
+                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund ID:</td>
+                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px;">${data.fundserv.fund_id || '-'}</td>
+                </tr>`;
+
+                // Source ID criterion
+                const sourceIdBgColor = getCellBackground('Source Identifier');
+                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Source Identifier:</td>
+                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${sourceIdBgColor}; border-radius: 4px;">${formatValue(data.fundserv.source_identifier) || '-'}</td>
+                </tr>`;
+
+                // Non-criterion fields
+                const fundservNonCriteriaFields = [
+                    ['Trade Date', data.fundserv.trade_date],
+                    ['Dealer Account ID', data.fundserv.dealer_account_id],
+                    ['Company', data.fundserv.company],
+                ];
+
+                fundservNonCriteriaFields.forEach(([label, value]) => {
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: transparent; border-radius: 4px;">${value || '-'}</td>
                     </tr>`;
                 });
 

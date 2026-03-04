@@ -889,6 +889,7 @@ class VieFundFundservMatcher
 
     /**
      * Criterion 4: Match VieFund Fund Code with Fundserv Code concatenated with Fund ID
+     * Fund ID is padded to 3 digits with leading zeros to handle cases like "99" vs "099"
      */
     private function matchFundCodeAndFundId(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
     {
@@ -896,7 +897,9 @@ class VieFundFundservMatcher
             return false;
         }
 
-        $concatenated = $fundserv->code . $fundserv->fund_id;
+        // Pad fund_id to 3 digits with leading zeros (e.g., "99" becomes "099")
+        $paddedFundId = str_pad((string)$fundserv->fund_id, 3, '0', STR_PAD_LEFT);
+        $concatenated = $fundserv->code . $paddedFundId;
         return $vieFund->fund_code === $concatenated;
     }
 
