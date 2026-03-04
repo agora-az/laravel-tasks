@@ -552,7 +552,7 @@ class ReconciliationController extends Controller
                 'trade_date' => $match->viefund_trade_date,
                 'settlement_date' => $match->viefund_settlement_date,
                 'processing_date' => $match->processing_date,
-                'source_id' => $match->viefund_source_id,
+                'fund_source_id' => $match->viefund_source_id,
                 'status' => $match->viefund_status,
                 'amount' => $match->amount,
                 'balance' => $match->balance,
