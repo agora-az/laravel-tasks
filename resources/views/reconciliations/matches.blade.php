@@ -87,6 +87,44 @@
     </div>
 
     <div class="card">
+        <!-- Criteria Filters -->
+        <div style="padding: 16px; border-bottom: 1px solid #e2e8f0; background: #f9fafb;">
+            <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Matched Criteria:</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start;">
+                @php
+                    $criteriaLabels = [
+                        'order_id' => 'Order ID',
+                        'settlement_date' => 'Settlement Date',
+                        'amount_type' => 'Amount & Type',
+                        'fund_code' => 'Fund Code',
+                        'source_id' => 'Source Identifier',
+                    ];
+                @endphp
+                @foreach($availableCriteria as $criterion)
+                    @php
+                        $currentValue = $criteriaFilters[$criterion] ?? 'off';
+                        $queryParams = request()->query();
+                    @endphp
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        <label style="font-size: 12px; color: #4a5568; font-weight: 500;">{{ $criteriaLabels[$criterion] ?? $criterion }}</label>
+                        <select onchange="
+                            const params = new URLSearchParams(window.location.search);
+                            if (this.value === 'off') {
+                                params.delete('criteria_{{ $criterion }}');
+                            } else {
+                                params.set('criteria_{{ $criterion }}', this.value);
+                            }
+                            window.location.search = params.toString();
+                        " style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer;">
+                            <option value="off" {{ $currentValue === 'off' ? 'selected' : '' }}>Off</option>
+                            <option value="matched" {{ $currentValue === 'matched' ? 'selected' : '' }}>Matched</option>
+                            <option value="unmatched" {{ $currentValue === 'unmatched' ? 'selected' : '' }}>Unmatched</option>
+                        </select>
+                    </div>
+                @endforeach
+            </div>
+        </div>
+
         @if($matchesPaginator->count() > 0)
             <div style="overflow-x: auto;">
                 <table style="width: 100%; border-collapse: collapse;">

@@ -88,6 +88,17 @@ class ReconciliationController extends Controller
         if (!in_array($sort, $sortable, true)) {
             $sort = 'matched_at';
         }
+
+        // Get criterion filters from query parameters
+        // Format: criteria_order_id=matched, criteria_settlement_date=unmatched, etc.
+        $criteriaFilters = [];
+        $availableCriteria = ['order_id', 'settlement_date', 'amount_type', 'fund_code', 'source_id'];
+        foreach ($availableCriteria as $criterion) {
+            $filterValue = $request->query("criteria_{$criterion}", 'off');
+            if (in_array($filterValue, ['matched', 'unmatched'])) {
+                $criteriaFilters[$criterion] = $filterValue;
+            }
+        }
         $totalMatches = DB::table('reconciliation_matches')->count();
         $fundservTotal = DB::table('fundserv_transactions')->count();
         $viefundTotal = DB::table('viefund_transactions')->count();
@@ -208,6 +219,36 @@ class ReconciliationController extends Controller
             }, SORT_REGULAR, $direction === 'desc')
             ->values();
 
+        // Filter grouped matches by selected criteria (AND logic)
+        if (!empty($criteriaFilters)) {
+            $groupedMatches = $groupedMatches->filter(function ($group) use ($criteriaFilters) {
+                // Get the first match's criteria
+                $criteria = $group['first']->criteria_array ?? [];
+                
+                // Check ALL filters - all must pass (AND logic)
+                foreach ($criteriaFilters as $filterCriterion => $filterValue) {
+                    $criterionMatched = false;
+                    foreach ($criteria as $criterion) {
+                        if ($criterion['rule'] === $filterCriterion) {
+                            $criterionMatched = $criterion['matched'] === true;
+                            break;
+                        }
+                    }
+                    
+                    // Apply the filter logic
+                    if ($filterValue === 'matched' && !$criterionMatched) {
+                        // Filter wants matched, but it's not matched
+                        return false;
+                    }
+                    if ($filterValue === 'unmatched' && $criterionMatched) {
+                        // Filter wants unmatched, but it is matched
+                        return false;
+                    }
+                }
+                return true;
+            })->values();
+        }
+
         $perPage = 50;
         $page = (int) $request->query('page', 1);
         $pagedGroups = $groupedMatches->forPage($page, $perPage)->values();
@@ -234,7 +275,9 @@ class ReconciliationController extends Controller
             'viefundMatched',
             'bankMatched',
             'sort',
-            'direction'
+            'direction',
+            'criteriaFilters',
+            'availableCriteria'
         ));
     }
 
