@@ -107,7 +107,8 @@
                     @endphp
                     <div style="display: flex; flex-direction: column; gap: 4px;">
                         <label style="font-size: 12px; color: #4a5568; font-weight: 500;">{{ $criteriaLabels[$criterion] ?? $criterion }}</label>
-                        <select onchange="
+                        <select class="criteria-filter-select" data-criterion="{{ $criterion }}" onchange="
+                            updateFilterSelectColor(this);
                             const params = new URLSearchParams(window.location.search);
                             if (this.value === 'off') {
                                 params.delete('criteria_{{ $criterion }}');
@@ -746,5 +747,31 @@
                 alert('Error loading match details');
             }
         }
+
+        // Color code filter selects based on their values
+        function updateFilterSelectColor(selectElement) {
+            const value = selectElement.value;
+            let bgColor = 'white';
+            let textColor = '#2d3748';
+
+            if (value === 'matched') {
+                bgColor = '#dcfce7'; // Light green
+                textColor = '#166534'; // Dark green
+            } else if (value === 'unmatched') {
+                bgColor = '#fee2e2'; // Light red
+                textColor = '#991b1b'; // Dark red
+            }
+
+            selectElement.style.backgroundColor = bgColor;
+            selectElement.style.color = textColor;
+        }
+
+        // Initialize all filter selects on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const filterSelects = document.querySelectorAll('.criteria-filter-select');
+            filterSelects.forEach(select => {
+                updateFilterSelectColor(select);
+            });
+        });
     </script>
 @endsection
