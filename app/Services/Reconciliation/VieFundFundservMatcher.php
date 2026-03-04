@@ -304,7 +304,7 @@ class VieFundFundservMatcher
         $batch = [];
         $batchSize = 1000;  // Batch size for match inserts
         $totalProcessed = 0;
-        $matchedFundservIds = []; // Track which Fundserv already matched in this pass
+        $processedPairs = []; // Track processed VieFund-Fundserv pairs to avoid duplicates
         $processedFundWoNumbers = []; // Track unique fund_wo_number values we've processed
 
         // Build index: order_id => Fundserv ID (much faster than iterating all Fundserv for each VieFund)
@@ -316,17 +316,19 @@ class VieFundFundservMatcher
         Log::info('passMatchOnOrderId(): Built index with ' . count($fundservIndex) . ' order IDs');
         $session->update(['processed_records' => 0, 'matched_count' => 0, 'progress_percentage' => 0]);
 
-        // Get Fundserv IDs already matched (to avoid duplicates)
-        $alreadyMatchedFundservIds = DB::table('reconciliation_matches')
+        // Get existing matches to avoid creating duplicates
+        $existingMatches = DB::table('reconciliation_matches')
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
-            ->where('right_type', 'fundserv')
-            ->pluck('right_id')
-            ->toArray();
+            ->select('left_id', 'right_id')
+            ->get();
         
-        Log::info('passMatchOnOrderId(): ' . count($alreadyMatchedFundservIds) . ' Fundserv already matched');
+        foreach ($existingMatches as $match) {
+            $processedPairs[$match->left_id . ':' . $match->right_id] = true;
+        }
+        
+        Log::info('passMatchOnOrderId(): Found ' . count($processedPairs) . ' existing matches to skip');
 
-        // Process VieFund transactions
-        VieFundTransaction::whereNotNull('fund_wo_number')->chunk(100, function ($chunk) use (&$inserted, &$batch, $batchSize, &$lastUpdateTime, $fundservIndex, $session, &$totalProcessed, &$matchedFundservIds, $alreadyMatchedFundservIds, $totalRecordsInPass, &$processedFundWoNumbers) {
+        VieFundTransaction::whereNotNull('fund_wo_number')->chunk(100, function ($chunk) use (&$inserted, &$batch, $batchSize, &$lastUpdateTime, $fundservIndex, $session, &$totalProcessed, &$processedPairs, $totalRecordsInPass, &$processedFundWoNumbers) {
             foreach ($chunk as $vieFundTrx) {
                 // Count unique fund_wo_number values processed (not total rows)
                 if (!isset($processedFundWoNumbers[$vieFundTrx->fund_wo_number])) {
@@ -341,8 +343,8 @@ class VieFundFundservMatcher
 
                 $fundservId = $fundservIndex[$vieFundTrx->fund_wo_number];
 
-                // Skip if this Fundserv is already matched (respects unique constraint)
-                if (in_array($fundservId, $alreadyMatchedFundservIds) || isset($matchedFundservIds[$fundservId])) {
+                // Skip if this pair already exists
+                if (isset($processedPairs[$vieFundTrx->id . ':' . $fundservId])) {
                     continue;
                 }
 
@@ -363,14 +365,15 @@ class VieFundFundservMatcher
                     'right_type' => 'fundserv',
                     'right_id' => $fundservId,
                     'match_rule' => self::RULE_VIEFUND_FUNDSERV,
-                    'confidence' => 0.20,  // Only order_id matched in Pass 1 (20%)
+                    'confidence' => 0.1667,  // Only order_id matched in Pass 1 (1/6 ≈ 16.67%)
                     'matched_amount' => $vieFundTrx->fund_trx_amount,
                     'status' => 'matched',
                     'metadata' => json_encode(['match_type' => 'order_id']),
                     'match_criteria_met' => json_encode([
                         ['rule' => 'order_id', 'matched' => true],
                         ['rule' => 'settlement_date', 'matched' => false],
-                        ['rule' => 'amount_type', 'matched' => false],
+                        ['rule' => 'transaction_type', 'matched' => false],
+                        ['rule' => 'amount', 'matched' => false],
                         ['rule' => 'fund_code', 'matched' => false],
                         ['rule' => 'source_id', 'matched' => false],
                     ]),
@@ -378,8 +381,8 @@ class VieFundFundservMatcher
                     'updated_at' => now(),
                 ];
 
-                // Track this Fundserv as matched in current batch
-                $matchedFundservIds[$fundservId] = true;
+                // Track this pair as processed
+                $processedPairs[$vieFundTrx->id . ':' . $fundservId] = true;
 
                 if (count($batch) >= $batchSize) {
                     try {
@@ -398,10 +401,9 @@ class VieFundFundservMatcher
                             'progress_percentage' => $overallProgress,
                         ]);
                         
-                        // Log every 3 seconds to reduce excessive logging
-                        if (now()->diffInSeconds($lastUpdateTime) >= 3) {
-                            Log::info('passMatchOnOrderId(): Inserted batch of ' . count($batch) . ' matches. Total: ' . $inserted);
-                            Log::info('passMatchOnOrderId() CHUNK UPDATE - pass: ' . $session->current_pass_number . ', processed: ' . $totalProcessed . ', totalInPass: ' . $totalRecordsInPass . ', progressWithin: ' . round($progressWithinPass, 3) . ', overall: ' . $overallProgress);
+                        // Log every 10 seconds to reduce excessive logging
+                        if (now()->diffInSeconds($lastUpdateTime) >= 10) {
+                            Log::info('passMatchOnOrderId(): Inserted ' . $inserted . ' total matches. Progress: ' . round($totalProcessed / $totalRecordsInPass * 100, 1) . '%');
                             $lastUpdateTime = now();
                         }
                     } catch (\Exception $e) {
@@ -497,9 +499,9 @@ class VieFundFundservMatcher
                     'progress_percentage' => $overallProgress,
                 ]);
                 
-                // Log every 3 seconds to reduce excessive logging
-                if (now()->diffInSeconds($lastUpdateTime) >= 3) {
-                    Log::info('passValidateSettlementDate(): Validated ' . $validated . ' matches');
+                // Log every 10 seconds to reduce excessive logging
+                if (now()->diffInSeconds($lastUpdateTime) >= 10) {
+                    Log::info('passValidateSettlementDate(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
                     $lastUpdateTime = now();
                 }
             });
@@ -545,12 +547,16 @@ class VieFundFundservMatcher
                     }
 
                     $criteria = json_decode($match->match_criteria_met, true) ?? [];
-                    // Update the amount_type criteria in the array
-                    $matched = $this->matchAmountAndType($vieFund, $fundserv);
+                    
+                    // Update transaction_type and amount criteria separately
+                    $transactionTypeMatched = $this->matchTransactionType($vieFund, $fundserv);
+                    $amountMatched = $this->matchAmount($vieFund, $fundserv);
+                    
                     foreach ($criteria as &$criterion) {
-                        if ($criterion['rule'] === 'amount_type') {
-                            $criterion['matched'] = $matched;
-                            break;
+                        if ($criterion['rule'] === 'transaction_type') {
+                            $criterion['matched'] = $transactionTypeMatched;
+                        } elseif ($criterion['rule'] === 'amount') {
+                            $criterion['matched'] = $amountMatched;
                         }
                     }
                     
@@ -572,9 +578,9 @@ class VieFundFundservMatcher
                     'progress_percentage' => $overallProgress,
                 ]);
                 
-                // Log every 3 seconds to reduce excessive logging
-                if (now()->diffInSeconds($lastUpdateTime) >= 3) {
-                    Log::info('passValidateAmountAndType(): Validated ' . $validated . ' matches');
+                // Log every 10 seconds to reduce excessive logging
+                if (now()->diffInSeconds($lastUpdateTime) >= 10) {
+                    Log::info('passValidateAmountAndType(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
                     $lastUpdateTime = now();
                 }
             });
@@ -647,9 +653,9 @@ class VieFundFundservMatcher
                     'progress_percentage' => $overallProgress,
                 ]);
                 
-                // Log every 3 seconds to reduce excessive logging
-                if (now()->diffInSeconds($lastUpdateTime) >= 3) {
-                    Log::info('passValidateFundCode(): Validated ' . $validated . ' matches');
+                // Log every 10 seconds to reduce excessive logging
+                if (now()->diffInSeconds($lastUpdateTime) >= 10) {
+                    Log::info('passValidateFundCode(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
                     $lastUpdateTime = now();
                 }
             });
@@ -722,9 +728,9 @@ class VieFundFundservMatcher
                     'progress_percentage' => $overallProgress,
                 ]);
                 
-                // Log every 3 seconds to reduce excessive logging
-                if (now()->diffInSeconds($lastUpdateTime) >= 3) {
-                    Log::info('passValidateSourceId(): Validated ' . $validated . ' matches');
+                // Log every 10 seconds to reduce excessive logging
+                if (now()->diffInSeconds($lastUpdateTime) >= 10) {
+                    Log::info('passValidateSourceId(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
                     $lastUpdateTime = now();
                 }
             });
@@ -804,19 +810,25 @@ class VieFundFundservMatcher
             'matched' => $this->matchSettlementDate($vieFund, $fundserv),
         ];
 
-        // Criterion 3: Amount and Type
+        // Criterion 3: Transaction Type (split from Amount and Type)
         $results[] = [
-            'rule' => self::CRITERION_AMOUNT_AND_TYPE,
-            'matched' => $this->matchAmountAndType($vieFund, $fundserv),
+            'rule' => 'transaction_type',
+            'matched' => $this->matchTransactionType($vieFund, $fundserv),
         ];
 
-        // Criterion 4: Fund Code and Fund ID
+        // Criterion 4: Amount (split from Amount and Type)
+        $results[] = [
+            'rule' => 'amount',
+            'matched' => $this->matchAmount($vieFund, $fundserv),
+        ];
+
+        // Criterion 5: Fund Code and Fund ID
         $results[] = [
             'rule' => self::CRITERION_FUND_CODE_AND_FUND_ID,
             'matched' => $this->matchFundCodeAndFundId($vieFund, $fundserv),
         ];
 
-        // Criterion 5: Source Identifier
+        // Criterion 6: Source Identifier
         $results[] = [
             'rule' => self::CRITERION_SOURCE_IDENTIFIER,
             'matched' => $this->matchSourceIdentifier($vieFund, $fundserv),
@@ -850,21 +862,14 @@ class VieFundFundservMatcher
     }
 
     /**
-     * Criterion 3: Match amounts with transaction type counter-logic.
-     *
-     * Purchase + Buy: VieFund amount should equal negative Fundserv amount
-     * Redemption + Sell: VieFund amount should equal negative Fundserv amount
-     * Fee + Fee: Amounts should match
+     * Criterion 3: Match VieFund Transaction Type with Fundserv Transaction Type
      */
-    private function matchAmountAndType(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
+    private function matchTransactionType(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
     {
-        if (!$vieFund->fund_trx_amount || !$fundserv->actual_amount) {
+        if (!$vieFund->fund_trx_type || !$fundserv->tx_type) {
             return false;
         }
 
-        $vieFundAmount = (float)$vieFund->fund_trx_amount;
-        $fundservAmount = (float)$fundserv->actual_amount;
-        
         // Trim whitespace from types for more robust comparison
         $vieFundType = trim($vieFund->fund_trx_type ?? '');
         $fundservType = trim($fundserv->tx_type ?? '');
@@ -874,21 +879,34 @@ class VieFundFundservMatcher
 
         // Handle Automatic/Systematic and Fund TrxType - can match either Buy or Sell
         if ($expectedFundservType === null) {
-            // For unknown types, match on amount alone
-            return abs($vieFundAmount) === abs($fundservAmount);
+            // For unknown types, accept any transaction type
+            return true;
         }
 
         // Check if Fundserv type matches expected (case-insensitive comparison)
-        if (strtolower($fundservType) !== strtolower($expectedFundservType)) {
+        return strtolower($fundservType) === strtolower($expectedFundservType);
+    }
+
+    /**
+     * Criterion 4: Match VieFund Amount with Fundserv Amount
+     * 
+     * Purchase/Redemption/Fee: VieFund amount should equal negative Fundserv amount
+     */
+    private function matchAmount(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
+    {
+        if (!$vieFund->fund_trx_amount || !$fundserv->actual_amount) {
             return false;
         }
 
-        // For all transaction types (Buy/Sell/Fee): VieFund amount should equal negative Fundserv amount
+        $vieFundAmount = (float)$vieFund->fund_trx_amount;
+        $fundservAmount = (float)$fundserv->actual_amount;
+
+        // For all transaction types: VieFund amount should equal negative Fundserv amount
         return $vieFundAmount === -$fundservAmount;
     }
 
     /**
-     * Criterion 4: Match VieFund Fund Code with Fundserv Code concatenated with Fund ID
+     * Criterion 5: Match VieFund Fund Code with Fundserv Code concatenated with Fund ID
      * Fund ID is padded to 3 digits with leading zeros to handle cases like "99" vs "099"
      */
     private function matchFundCodeAndFundId(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
@@ -904,7 +922,7 @@ class VieFundFundservMatcher
     }
 
     /**
-     * Criterion 5: Match VieFund Source ID with Fundserv Source Identifier
+     * Criterion 6: Match VieFund Source ID with Fundserv Source Identifier
      */
     private function matchSourceIdentifier(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
     {

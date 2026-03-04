@@ -124,7 +124,8 @@
                             $criteriaLabels = [
                                 'order_id' => 'Order ID',
                                 'settlement_date' => 'Settlement Date',
-                                'amount_type' => 'Amount & Type',
+                                'transaction_type' => 'Transaction Type',
+                                'amount' => 'Amount',
                                 'fund_code' => 'Fund Code',
                                 'source_id' => 'Source Identifier',
                             ];
@@ -204,6 +205,7 @@
                             </th>
                             <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Details</th>
                             <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Matched At</th>
+                            <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -215,7 +217,7 @@
                                 $columnBackground = $hasDiff ? '#fef3c7' : 'transparent';
                             @endphp
 
-                            <tr class="group-toggle match-row-clickable" data-match-id="{{ $first->id }}" data-group="{{ $groupId }}" data-expandable="{{ $group['is_multi'] ? 'true' : 'false' }}" style="border-bottom: 1px solid #e2e8f0; cursor: pointer; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#f0f4f8'" onmouseout="this.style.backgroundColor='transparent'">
+                            <tr class="group-toggle" data-match-id="{{ $first->id }}" data-group="{{ $groupId }}" data-expandable="{{ $group['is_multi'] ? 'true' : 'false' }}" style="border-bottom: 1px solid #e2e8f0; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#f0f4f8'" onmouseout="this.style.backgroundColor='transparent'">
                                 <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center;">
                                     @php
                                         $ruleLabel = match($first->match_rule) {                                            'viefund_to_fundserv_criteria_based' => 'VieFund<br>to<br>Fundserv',                                            'viefund_to_fundserv_criteria_based' => 'VieFund<br>to<br>Fundserv',
@@ -246,7 +248,8 @@
                                 </td>
                                 <td style="padding: 12px; text-align: center;">
                                     @php
-                                        $confidence = (float) ($first->confidence ?? 0);
+                                        // Use aggregated confidence for multi-match groups, individual confidence for single matches
+                                        $confidence = (float) ($group['is_multi'] ? $group['aggregated_confidence'] : $group['first']->confidence ?? 0);
                                         $pctText = number_format($confidence * 100, 1) . '%';
                                         $barWidth = $confidence * 100;
                                     @endphp
@@ -263,14 +266,18 @@
                                     @if($first->match_rule === 'viefund_to_fundserv_criteria_based')
                                         <div><strong>VieFund Fund WO:</strong> {{ $first->viefund_fund_wo_number ?? '-' }}</div>
                                         <div><strong>Fundserv Order ID:</strong> {{ $first->fundserv_order_id ?? '-' }}</div>
-                                        <div><strong>VieFund Settlement Date:</strong> {{ $first->viefund_settlement_date ?? '-' }}</div>
+                                        <div><strong>Fundserv Settlement Date:</strong> {{ $first->fundserv_settlement_date ?? '-' }}</div>
                                         @if($group['count'] > 1)
                                             <div><strong>Transactions:</strong> {{ $group['count'] }}</div>
                                         @endif
-                                        @if(!empty($first->criteria_array))
+                                        @php
+                                            // Use aggregated criteria for multi-match groups, individual criteria for single matches
+                                            $displayCriteria = $group['is_multi'] ? $group['aggregated_criteria'] : $first->criteria_array;
+                                        @endphp
+                                        @if(!empty($displayCriteria))
                                             <div style="margin-top: 8px; font-size: 11px;">
                                                 <strong>Criteria Met:</strong>
-                                                @foreach($first->criteria_array as $criterion)
+                                                @foreach($displayCriteria as $criterion)
                                                     <div style="margin-left: 8px; color: {{ $criterion['matched'] ? '#22863a' : '#cb2431' }};">
                                                         {{ $criterion['matched'] ? '✓' : '✗' }} {{ str_replace('_', ' ', $criterion['rule']) }}
                                                     </div>
@@ -288,22 +295,33 @@
                                 <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;">
                                     {!! \Carbon\Carbon::parse($first->created_at)->format('Y-M-d') . '<br>' . \Carbon\Carbon::parse($first->created_at)->format('H:i:s') !!}
                                 </td>
+                                <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap; text-align: center;">
+                                    <div style="display: flex; gap: 8px; justify-content: center; align-items: center;">
+                                        <!-- View Button -->
+                                        <button class="view-match-btn" data-match-id="{{ $first->id }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                        @if($group['is_multi'])
+                                            <!-- Expand Button (only for multi-match rows) -->
+                                            <button class="expand-match-btn" data-group="{{ $groupId }}" style="background: #805ad5; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#6b46c1'" onmouseout="this.style.backgroundColor='#805ad5'">Expand</button>
+                                        @endif
+                                    </div>
+                                </td>
                             </tr>
 
                             @foreach($group['items'] as $match)
-                                <tr class="group-row match-row-clickable {{ $groupId }}" data-match-id="{{ $match->id }}" style="border-bottom: 1px solid #e2e8f0; display: none; background: #f9fafb; cursor: pointer; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#e6ecf1'" onmouseout="this.style.backgroundColor='#f9fafb'">
+                                <tr class="group-row {{ $groupId }}" data-match-id="{{ $match->id }}" style="border-bottom: 1px solid #e2e8f0; border-top: 1px solid #cbd5e0; border-left: 3px solid #3182ce; display: none; background: #e8eef7; transition: background-color 0.2s ease; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.backgroundColor='#d1ddf0'" onmouseout="this.style.backgroundColor='#e8eef7'">
                                     <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center;">
                                         @php
                                             $ruleLabel = match($match->match_rule) {
-                                                'fundserv_order_id_to_viefund_fund_wo_number' => 'Fundserv<br>to<br>VieFund',
+                                                'viefund_to_fundserv_criteria_based' => 'VieFund to Fundserv',
+                                                'fundserv_order_id_to_viefund_fund_wo_number' => 'Fundserv to VieFund',
                                                 'bank_to_fundserv_amount_date' => !empty($match->metadata_array['viefund_id'] ?? null)
-                                                    ? 'Bank<br>to<br>Fundserv<br>&amp;<br>VieFund'
-                                                    : 'Bank<br>to<br>Fundserv',
-                                                'bank_to_viefund_amount_date' => 'Bank<br>to<br>VieFund',
-                                                default => str_replace('_', ' ', $match->match_rule),
+                                                    ? 'Bank to Fundserv & VieFund'
+                                                    : 'Bank to Fundserv',
+                                                'bank_to_viefund_amount_date' => 'Bank to VieFund',
+                                                default => str_replace('_', ' ', ucwords($match->match_rule, '_')),
                                             };
                                         @endphp
-                                        {!! $ruleLabel !!}
+                                        {{ $ruleLabel }}
                                     </td>
                                     <td style="padding: 12px; text-align: right; color: #2d3748; font-family: monospace;">
                                         {{ $match->viefund_amount !== null ? number_format($match->viefund_amount, 2) : '-' }}
@@ -349,7 +367,7 @@
                                         @if($match->match_rule === 'viefund_to_fundserv_criteria_based')
                                             <div><strong>VieFund Fund WO:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
                                             <div><strong>Fundserv Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
-                                            <div><strong>VieFund Settlement Date:</strong> {{ $match->viefund_settlement_date ?? '-' }}</div>
+                                            <div><strong>Fundserv Settlement Date:</strong> {{ $match->fundserv_settlement_date ?? '-' }}</div>
                                             @if(!empty($match->criteria_array))
                                                 <div style="margin-top: 8px; font-size: 11px;">
                                                     <strong>Criteria Met:</strong>
@@ -369,6 +387,9 @@
                                     </td>
                                     <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;">
                                         {!! \Carbon\Carbon::parse($match->created_at)->format('Y-M-d') . '<br>' . \Carbon\Carbon::parse($match->created_at)->format('H:i:s') !!}
+                                    </td>
+                                    <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap; text-align: center;">
+                                        <button class="view-match-btn" data-match-id="{{ $match->id }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
                                     </td>
                                 </tr>
                             @endforeach
@@ -536,20 +557,6 @@
             });
         });
 
-        // Handle group toggle
-        document.querySelectorAll('.group-toggle').forEach(function (row) {
-            row.addEventListener('click', function () {
-                if (row.getAttribute('data-expandable') !== 'true') {
-                    return;
-                }
-                var groupId = row.getAttribute('data-group');
-                document.querySelectorAll('.' + groupId).forEach(function (detailRow) {
-                    var isHidden = detailRow.style.display === 'none' || detailRow.style.display === '';
-                    detailRow.style.display = isHidden ? 'table-row' : 'none';
-                });
-            });
-        });
-
         // Check if there's an active session on page load
         window.addEventListener('load', function() {
             fetch('/api/matching-sessions/active')
@@ -585,22 +592,6 @@
             e.stopPropagation();
         });
 
-        // Handle row clicks to open modal
-        document.querySelectorAll('.match-row-clickable').forEach(row => {
-            row.addEventListener('click', function (e) {
-                // Don't open modal if clicking on the expansion toggle and it's expandable
-                if (this.getAttribute('data-expandable') === 'true' && e.target.closest('td:first-child')) {
-                    // Let the group toggle happen instead
-                    return;
-                }
-
-                const matchId = this.getAttribute('data-match-id');
-                if (matchId) {
-                    openMatchDetailModal(matchId);
-                }
-            });
-        });
-
         async function openMatchDetailModal(matchId) {
             try {
                 const response = await fetch(`/api/matches/${matchId}/details`);
@@ -621,10 +612,11 @@
                             criteriaMap['Order ID'] = criterion.matched;
                         } else if (criterion.rule === 'settlement_date') {
                             criteriaMap['Settlement Date'] = criterion.matched;
-                        } else if (criterion.rule === 'amount_type') {
+                        } else if (criterion.rule === 'transaction_type') {
                             criteriaMap['Fund Trx Type'] = criterion.matched;
-                            criteriaMap['Fund Trx Amount'] = criterion.matched;
                             criteriaMap['Tx Type'] = criterion.matched;
+                        } else if (criterion.rule === 'amount') {
+                            criteriaMap['Fund Trx Amount'] = criterion.matched;
                             criteriaMap['Actual Amount'] = criterion.matched;
                         } else if (criterion.rule === 'fund_code') {
                             criteriaMap['Fund Code'] = criterion.matched;
@@ -841,6 +833,41 @@
                     updateConfidenceFilterColor(this);
                 });
             }
+
+            // Handle View button clicks
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('view-match-btn')) {
+                    e.stopPropagation();
+                    const matchId = e.target.getAttribute('data-match-id');
+                    openMatchDetailModal(matchId);
+                }
+            });
+
+            // Handle Expand button clicks
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('expand-match-btn')) {
+                    e.stopPropagation();
+                    const groupId = e.target.getAttribute('data-group');
+                    // Toggle visibility of detail rows for this group
+                    const detailRows = document.querySelectorAll('tr.' + groupId);
+                    detailRows.forEach(row => {
+                        row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+                    });
+                    // Toggle button text to indicate state
+                    const allDetailRowsVisible = Array.from(detailRows).every(row => row.style.display !== 'none');
+                    e.target.textContent = allDetailRowsVisible ? 'Collapse' : 'Expand';
+                    
+                    // Toggle purple border on parent row
+                    const parentRow = document.querySelector('tr.group-toggle[data-group="' + groupId + '"]');
+                    if (parentRow) {
+                        if (allDetailRowsVisible) {
+                            parentRow.style.borderLeft = '4px solid #805ad5';
+                        } else {
+                            parentRow.style.borderLeft = '0px solid #805ad5';
+                        }
+                    }
+                }
+            });
         });
     </script>
 @endsection

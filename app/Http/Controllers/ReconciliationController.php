@@ -100,7 +100,7 @@ class ReconciliationController extends Controller
         // Get criterion filters from query parameters
         // Format: criteria_order_id=matched, criteria_settlement_date=unmatched, etc.
         $criteriaFilters = [];
-        $availableCriteria = ['order_id', 'settlement_date', 'amount_type', 'fund_code', 'source_id'];
+        $availableCriteria = ['order_id', 'settlement_date', 'transaction_type', 'amount', 'fund_code', 'source_id'];
         foreach ($availableCriteria as $criterion) {
             $filterValue = $request->query("criteria_{$criterion}", 'off');
             if (in_array($filterValue, ['matched', 'unmatched'])) {
@@ -197,6 +197,39 @@ class ReconciliationController extends Controller
                     $diff = abs((float) $fundservAmount) - abs((float) $viefundTotal);
                 }
 
+                // Calculate aggregated confidence (average of all items)
+                $aggregatedConfidence = $group->avg(function ($item) {
+                    return (float) ($item->confidence ?? 0);
+                });
+
+                // Calculate aggregated criteria (met only if ALL items have it met)
+                $aggregatedCriteria = null;
+                if (!empty($first->criteria_array)) {
+                    // Get all unique criteria rules from all items
+                    $allRulesMap = [];
+                    foreach ($group as $item) {
+                        if (!empty($item->criteria_array)) {
+                            foreach ($item->criteria_array as $criterion) {
+                                $rule = $criterion['rule'];
+                                if (!isset($allRulesMap[$rule])) {
+                                    $allRulesMap[$rule] = [];
+                                }
+                                $allRulesMap[$rule][] = $criterion['matched'];
+                            }
+                        }
+                    }
+
+                    // Build aggregated criteria array: a criterion is met only if ALL items have it met
+                    $aggregatedCriteria = [];
+                    foreach ($allRulesMap as $rule => $matchedValues) {
+                        $allMatched = count($matchedValues) === $group->count() && !in_array(false, $matchedValues, true);
+                        $aggregatedCriteria[] = [
+                            'rule' => $rule,
+                            'matched' => $allMatched,
+                        ];
+                    }
+                }
+
                 return [
                     'key' => $key,
                     'items' => $group->values(),
@@ -207,11 +240,14 @@ class ReconciliationController extends Controller
                     'diff' => $diff,
                     'is_multi' => $group->count() > 1,
                     'first' => $first,
+                    'aggregated_confidence' => $aggregatedConfidence,
+                    'aggregated_criteria' => $aggregatedCriteria,
                 ];
             })
             ->sortBy(function ($group) use ($sort) {
                 if ($sort === 'confidence') {
-                    return $group['first']->confidence ?? 0;
+                    // Use aggregated confidence for multi-match groups, individual confidence for single matches
+                    return $group['is_multi'] ? $group['aggregated_confidence'] : ($group['first']->confidence ?? 0);
                 }
                 if ($sort === 'viefund') {
                     return $group['viefund_total'] ?? 0;
@@ -230,8 +266,8 @@ class ReconciliationController extends Controller
         // Filter grouped matches by selected criteria (AND logic)
         if (!empty($criteriaFilters)) {
             $groupedMatches = $groupedMatches->filter(function ($group) use ($criteriaFilters) {
-                // Get the first match's criteria
-                $criteria = $group['first']->criteria_array ?? [];
+                // Use aggregated criteria for multi-match groups, individual criteria for single matches
+                $criteria = $group['is_multi'] ? $group['aggregated_criteria'] : ($group['first']->criteria_array ?? []);
                 
                 // Check ALL filters - all must pass (AND logic)
                 foreach ($criteriaFilters as $filterCriterion => $filterValue) {
@@ -260,11 +296,15 @@ class ReconciliationController extends Controller
         // Filter grouped matches by confidence level
         if ($confidenceFilter === 'hide_100') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                return ($group['first']->confidence ?? 0) < 1.0;
+                // Use aggregated confidence for multi-match groups, individual confidence for single matches
+                $confidence = $group['is_multi'] ? $group['aggregated_confidence'] : ($group['first']->confidence ?? 0);
+                return $confidence < 1.0;
             })->values();
         } elseif ($confidenceFilter === 'show_only_100') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                return ($group['first']->confidence ?? 0) >= 1.0;
+                // Use aggregated confidence for multi-match groups, individual confidence for single matches
+                $confidence = $group['is_multi'] ? $group['aggregated_confidence'] : ($group['first']->confidence ?? 0);
+                return $confidence >= 1.0;
             })->values();
         }
         // 'show_all' doesn't need filtering
