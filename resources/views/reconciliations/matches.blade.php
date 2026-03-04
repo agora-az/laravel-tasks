@@ -298,7 +298,11 @@
                                 <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap; text-align: center;">
                                     <div style="display: flex; gap: 8px; justify-content: center; align-items: center;">
                                         <!-- View Button -->
-                                        <button class="view-match-btn" data-match-id="{{ $first->id }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                        @if($group['is_multi'])
+                                            <button class="view-match-btn" data-match-id="{{ $first->id }}" data-is-parent="true" data-group-data="{{ base64_encode(json_encode(['aggregated_confidence' => $group['aggregated_confidence'], 'aggregated_criteria' => $group['aggregated_criteria'], 'count' => $group['count'], 'fundserv_order_id' => $first->fundserv_order_id, 'viefund_fund_wo_number' => $first->viefund_fund_wo_number])) }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                        @else
+                                            <button class="view-match-btn" data-match-id="{{ $first->id }}" data-is-parent="false" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                        @endif
                                         @if($group['is_multi'])
                                             <!-- Expand Button (only for multi-match rows) -->
                                             <button class="expand-match-btn" data-group="{{ $groupId }}" style="background: #805ad5; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#6b46c1'" onmouseout="this.style.backgroundColor='#805ad5'">Expand</button>
@@ -592,6 +596,82 @@
             e.stopPropagation();
         });
 
+        function openParentGroupDetailModal(groupData) {
+            const modal = document.getElementById('match-detail-modal');
+            const content = modal.querySelector('.modal-content-wrapper');
+            
+            // Map criteria rules to display names
+            const criteriaLabels = {
+                'order_id': 'Order ID',
+                'settlement_date': 'Settlement Date',
+                'transaction_type': 'Transaction Type',
+                'amount': 'Amount',
+                'fund_code': 'Fund Code',
+                'source_id': 'Source ID'
+            };
+            
+            // Build aggregated criteria display
+            let criteriaHtml = `
+                <div style="margin-bottom: 24px;">
+                    <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Criteria Summary</h3>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f7fafc; border-bottom: 2px solid #cbd5e0;">
+                                <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Criteria</th>
+                                <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748;">Matched</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            if (groupData.aggregated_criteria && Array.isArray(groupData.aggregated_criteria)) {
+                groupData.aggregated_criteria.forEach(criterion => {
+                    const label = criteriaLabels[criterion.rule] || criterion.rule;
+                    const isMatched = criterion.matched;
+                    const bgColor = isMatched ? '#f0fff4' : '#fef3c7';
+                    const textColor = isMatched ? '#22863a' : '#b8860b';
+                    const icon = isMatched ? '✓' : '✗';
+                    
+                    criteriaHtml += `
+                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                            <td style="padding: 12px; color: #2d3748; font-weight: 500;">${label}</td>
+                            <td style="padding: 12px; text-align: center; background: ${bgColor}; color: ${textColor}; font-weight: 600; border-radius: 4px;">
+                                ${icon} All transactions matched
+                            </td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            criteriaHtml += `
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            // Build summary section
+            const confidencePercent = (groupData.aggregated_confidence * 100).toFixed(1);
+            const summaryHtml = `
+                <div style="background: #f7fafc; padding: 16px; border-radius: 6px; border-left: 4px solid #3182ce; margin-bottom: 8px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                        <div>
+                            <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Total Transactions</div>
+                            <div style="font-size: 24px; font-weight: 700; color: #2d3748;">${groupData.count}</div>
+                        </div>
+                        <div>
+                            <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Overall Confidence</div>
+                            <div style="font-size: 24px; font-weight: 700; color: #3182ce;">${confidencePercent}%</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            const html = criteriaHtml + '<hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">' + summaryHtml;
+            
+            content.innerHTML = html;
+            modal.style.display = 'flex';
+        }
+
         async function openMatchDetailModal(matchId) {
             try {
                 const response = await fetch(`/api/matches/${matchId}/details`);
@@ -839,7 +919,14 @@
                 if (e.target.classList.contains('view-match-btn')) {
                     e.stopPropagation();
                     const matchId = e.target.getAttribute('data-match-id');
-                    openMatchDetailModal(matchId);
+                    const isParent = e.target.getAttribute('data-is-parent') === 'true';
+                    if (isParent) {
+                        const groupDataEncoded = e.target.getAttribute('data-group-data');
+                        const groupData = JSON.parse(atob(groupDataEncoded));
+                        openParentGroupDetailModal(groupData);
+                    } else {
+                        openMatchDetailModal(matchId);
+                    }
                 }
             });
 
