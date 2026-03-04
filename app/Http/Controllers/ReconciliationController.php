@@ -94,14 +94,14 @@ class ReconciliationController extends Controller
         $bankTotal = DB::table('bank_transactions')->count();
 
         $fundservMatched = DB::table('reconciliation_matches')
-            ->where('left_type', 'fundserv')
-            ->distinct('left_id')
-            ->count('left_id');
-
-        $viefundMatched = DB::table('reconciliation_matches')
-            ->where('right_type', 'viefund')
+            ->where('right_type', 'fundserv')
             ->distinct('right_id')
             ->count('right_id');
+
+        $viefundMatched = DB::table('reconciliation_matches')
+            ->where('left_type', 'viefund')
+            ->distinct('left_id')
+            ->count('left_id');
 
         $bankMatched = DB::table('reconciliation_matches')
             ->where('left_type', 'bank')
@@ -392,14 +392,14 @@ class ReconciliationController extends Controller
 
         // Get matched counts
         $fundservMatched = DB::table('reconciliation_matches')
-            ->where('left_type', 'fundserv')
-            ->distinct('left_id')
-            ->count('left_id');
-
-        $viefundMatched = DB::table('reconciliation_matches')
-            ->where('right_type', 'viefund')
+            ->where('right_type', 'fundserv')
             ->distinct('right_id')
             ->count('right_id');
+
+        $viefundMatched = DB::table('reconciliation_matches')
+            ->where('left_type', 'viefund')
+            ->distinct('left_id')
+            ->count('left_id');
 
         $bankMatched = DB::table('reconciliation_matches')
             ->where('left_type', 'bank')
