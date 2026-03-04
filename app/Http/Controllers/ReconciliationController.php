@@ -494,7 +494,7 @@ class ReconciliationController extends Controller
                 'v.trade_date as viefund_trade_date',
                 'v.settlement_date as viefund_settlement_date',
                 'v.processing_date',
-                'v.source_id as viefund_source_id',
+                'v.fund_source_id as viefund_source_id',
                 'v.status as viefund_status',
                 'v.amount',
                 'v.balance',

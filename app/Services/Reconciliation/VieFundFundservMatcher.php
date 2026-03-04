@@ -905,19 +905,11 @@ class VieFundFundservMatcher
      */
     private function matchSourceIdentifier(VieFundTransaction $vieFund, FundservTransaction $fundserv): bool
     {
-        $vieFundSourceId = $vieFund->fund_source_id;
-        $fundservSourceId = $fundserv->source_identifier;
-        
-        Log::debug('matchSourceIdentifier(): Comparing viefund_source_id=' . var_export($vieFundSourceId, true) . ' vs fundserv_source_identifier=' . var_export($fundservSourceId, true));
-        
         if (!$vieFund->fund_source_id || !$fundserv->source_identifier) {
-            Log::debug('matchSourceIdentifier(): One or both values are null/empty, returning false');
             return false;
         }
 
-        $result = (string)$vieFund->fund_source_id === (string)$fundserv->source_identifier;
-        Log::debug('matchSourceIdentifier(): String comparison result=' . ($result ? 'true' : 'false'));
-        return $result;
+        return (string)$vieFund->fund_source_id === (string)$fundserv->source_identifier;
     }
 
     /**
