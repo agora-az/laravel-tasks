@@ -949,6 +949,7 @@ class VieFundFundservMatcher
 
     /**
      * Recalculate confidence for all matches based on their actual criteria state.
+     * Confidence = (number of matched criteria) / (total criteria)
      * This is called once at the end of all validation passes to ensure
      * final confidence scores reflect all 5 criteria evaluations.
      */
@@ -965,8 +966,22 @@ class VieFundFundservMatcher
                 foreach ($batch as $match) {
                     $criteria = json_decode($match->match_criteria_met, true) ?? [];
                     
-                    // Calculate confidence based on final criteria state
-                    $newConfidence = $this->calculateConfidence($criteria);
+                    if (empty($criteria)) {
+                        continue;
+                    }
+                    
+                    // Count matched criteria
+                    $matchedCount = 0;
+                    $totalCount = count($criteria);
+                    
+                    foreach ($criteria as $criterion) {
+                        if (isset($criterion['matched']) && $criterion['matched'] === true) {
+                            $matchedCount++;
+                        }
+                    }
+                    
+                    // Calculate confidence as percentage of criteria matched
+                    $newConfidence = $totalCount > 0 ? round($matchedCount / $totalCount, 4) : 0;
                     
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
