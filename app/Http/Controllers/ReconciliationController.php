@@ -376,8 +376,8 @@ class ReconciliationController extends Controller
             $artisanPath = base_path('artisan');
             $logPath = storage_path('logs/matching-' . $session->id . '.log');
 
-            // Use the Herd PHP CLI binary
-            $phpPath = '/Users/staceyrattlesnake/Library/Application Support/Herd/bin/php';
+            // Use PHP path from environment or fallback to standard Unix production path
+            $phpPath = env('PHP_PATH', '/usr/local/bin/php');
 
             // Redirect all output and detach with &
             // This works better than nohup in web contexts
