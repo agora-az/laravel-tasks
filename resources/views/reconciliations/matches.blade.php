@@ -1,10 +1,10 @@
 @extends('layouts.app')
 
-@section('title', 'Reconciliation Matches')
+@section('title', 'Reconciliation Review')
 
 @section('content')
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0;">Reconciliation Matches</h2>
+        <h2 style="margin: 0;">Reconciliation Review</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
             <form method="POST" action="{{ route('reconciliations.matches.find') }}" class="match-action-form" data-action="find">
                 @csrf
@@ -90,27 +90,27 @@
         <!-- Filters Row -->
         <div style="padding: 16px; border-bottom: 1px solid #e2e8f0; background: #f9fafb;">
             <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px;">
-                <!-- Confidence Filter (1/3 width) -->
+                <!-- Reconciliation Filter (1/3 width) -->
                 <div>
-                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Confidence:</div>
+                    <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Filter by Reconciliation:</div>
                     <div style="display: flex; gap: 12px; align-items: flex-start;">
                         <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
-                            <label style="font-size: 12px; color: #4a5568; font-weight: 500;">Confidence Level</label>
-                            <select id="confidence-filter-select" onchange="
-                                updateConfidenceFilterColor(this);
+                            <label style="font-size: 12px; color: #4a5568; font-weight: 500;">Status</label>
+                            <select id="reconciliation-filter-select" onchange="
+                                updateReconciliationFilterColor(this);
                                 const params = new URLSearchParams(window.location.search);
-                                if (this.value === 'hide_100') {
-                                    params.set('confidence_filter', 'hide_100');
-                                } else if (this.value === 'show_only_100') {
-                                    params.set('confidence_filter', 'show_only_100');
+                                if (this.value === 'hide_reconciled') {
+                                    params.set('reconciliation_filter', 'hide_reconciled');
+                                } else if (this.value === 'show_reconciled') {
+                                    params.set('reconciliation_filter', 'show_reconciled');
                                 } else {
-                                    params.set('confidence_filter', 'show_all');
+                                    params.set('reconciliation_filter', 'show_all');
                                 }
                                 window.location.search = params.toString();
                             " style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer; width: 100%;">
-                                <option value="show_all" {{ $confidenceFilter === 'show_all' ? 'selected' : '' }}>Show All</option>
-                                <option value="hide_100" {{ $confidenceFilter === 'hide_100' ? 'selected' : '' }}>Hide 100% Matches</option>
-                                <option value="show_only_100" {{ $confidenceFilter === 'show_only_100' ? 'selected' : '' }}>Show Only 100%</option>
+                                <option value="hide_reconciled" {{ $reconciliationFilter === 'hide_reconciled' ? 'selected' : '' }}>Hide Reconciled</option>
+                                <option value="show_reconciled" {{ $reconciliationFilter === 'show_reconciled' ? 'selected' : '' }}>Show Reconciled</option>
+                                <option value="show_all" {{ $reconciliationFilter === 'show_all' ? 'selected' : '' }}>Show All</option>
                             </select>
                         </div>
                     </div>
@@ -263,7 +263,19 @@
                                     </div>
                                 </td>
                                 <td style="padding: 12px; color: #4a5568; font-size: 12px;">
-                                    @if($first->match_rule === 'viefund_to_fundserv_criteria_based')
+                                    @if($first->reconcile_type)
+                                        <!-- Reconciliation Status -->
+                                        <div style="background: #f0fff4; padding: 8px; border-radius: 4px; border-left: 3px solid #22863a;">
+                                            <div><strong style="color: #22863a;">✓ Reconciled</strong></div>
+                                            <div style="font-size: 11px; color: #2d3748; margin-top: 4px;">
+                                                <div><strong>Type:</strong> {{ ucfirst($first->reconcile_type) }}</div>
+                                                <div><strong>Date:</strong> {{ \Carbon\Carbon::parse($first->reconcile_date)->format('M d, Y H:i') ?? '-' }}</div>
+                                                @if($first->reconcile_notes)
+                                                    <div><strong>Notes:</strong> {{ substr($first->reconcile_notes, 0, 50) }}{{ strlen($first->reconcile_notes) > 50 ? '...' : '' }}</div>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    @elseif($first->match_rule === 'viefund_to_fundserv_criteria_based')
                                         <div><strong>VieFund Fund WO:</strong> {{ $first->viefund_fund_wo_number ?? '-' }}</div>
                                         <div><strong>Fundserv Order ID:</strong> {{ $first->fundserv_order_id ?? '-' }}</div>
                                         <div><strong>Fundserv Settlement Date:</strong> {{ $first->fundserv_settlement_date ?? '-' }}</div>
@@ -299,7 +311,7 @@
                                     <div style="display: flex; gap: 8px; justify-content: center; align-items: center;">
                                         <!-- View Button -->
                                         @if($group['is_multi'])
-                                            <button class="view-match-btn" data-match-id="{{ $first->id }}" data-is-parent="true" data-group-data="{{ base64_encode(json_encode(['aggregated_confidence' => $group['aggregated_confidence'], 'aggregated_criteria' => $group['aggregated_criteria'], 'count' => $group['count'], 'fundserv_order_id' => $first->fundserv_order_id, 'viefund_fund_wo_number' => $first->viefund_fund_wo_number])) }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                            <button class="view-match-btn" data-match-id="{{ $first->id }}" data-is-parent="true" data-group-data="{{ base64_encode(json_encode(['aggregated_confidence' => $group['aggregated_confidence'], 'aggregated_criteria' => $group['aggregated_criteria'], 'count' => $group['count'], 'fundserv_order_id' => $first->fundserv_order_id, 'viefund_fund_wo_number' => $first->viefund_fund_wo_number, 'reconcile_type' => $first->reconcile_type, 'reconcile_date' => $first->reconcile_date, 'reconcile_notes' => $first->reconcile_notes])) }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
                                         @else
                                             <button class="view-match-btn" data-match-id="{{ $first->id }}" data-is-parent="false" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
                                         @endif
@@ -368,32 +380,47 @@
                                         </div>
                                     </td>
                                     <td style="padding: 12px; color: #4a5568; font-size: 12px;">
-                                        @if($match->match_rule === 'viefund_to_fundserv_criteria_based')
-                                            <div><strong>VieFund Fund WO:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
-                                            <div><strong>Fundserv Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
-                                            <div><strong>Fundserv Settlement Date:</strong> {{ $match->fundserv_settlement_date ?? '-' }}</div>
-                                            @if(!empty($match->criteria_array))
-                                                <div style="margin-top: 8px; font-size: 11px;">
-                                                    <strong>Criteria Met:</strong>
-                                                    @foreach($match->criteria_array as $criterion)
-                                                        <div style="margin-left: 8px; color: {{ $criterion['matched'] ? '#22863a' : '#cb2431' }};">
-                                                            {{ $criterion['matched'] ? '✓' : '✗' }} {{ str_replace('_', ' ', $criterion['rule']) }}
-                                                        </div>
-                                                    @endforeach
+                                        @if($match->reconcile_type)
+                                            <!-- Reconciliation Status -->
+                                            <div style="background: #f0fff4; padding: 8px; border-radius: 4px; border-left: 3px solid #22863a;">
+                                                <div><strong style="color: #22863a;">✓ Reconciled</strong></div>
+                                                <div style="font-size: 11px; color: #2d3748; margin-top: 4px;">
+                                                    <div><strong>Type:</strong> {{ ucfirst($match->reconcile_type) }}</div>
+                                                    <div><strong>Date:</strong> {{ \Carbon\Carbon::parse($match->reconcile_date)->format('M d, Y H:i') ?? '-' }}</div>
+                                                    @if($match->reconcile_notes)
+                                                        <div><strong>Notes:</strong> {{ substr($match->reconcile_notes, 0, 50) }}{{ strlen($match->reconcile_notes) > 50 ? '...' : '' }}</div>
+                                                    @endif
                                                 </div>
-                                            @endif
-                                        @elseif($match->match_rule === 'fundserv_order_id_to_viefund_fund_wo_number')
-                                            <div><strong>Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
-                                            <div><strong>Fund WO#:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
+                                            </div>
                                         @else
-                                            <div style="font-family: monospace; white-space: pre-wrap;">{{ $match->metadata ?? '-' }}</div>
+                                            <!-- Match Criteria -->
+                                            @if($match->match_rule === 'viefund_to_fundserv_criteria_based')
+                                                <div><strong>VieFund Fund WO:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
+                                                <div><strong>Fundserv Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
+                                                <div><strong>Fundserv Settlement Date:</strong> {{ $match->fundserv_settlement_date ?? '-' }}</div>
+                                                @if(!empty($match->criteria_array))
+                                                    <div style="margin-top: 8px; font-size: 11px;">
+                                                        <strong>Criteria Met:</strong>
+                                                        @foreach($match->criteria_array as $criterion)
+                                                            <div style="margin-left: 8px; color: {{ $criterion['matched'] ? '#22863a' : '#cb2431' }};">
+                                                                {{ $criterion['matched'] ? '✓' : '✗' }} {{ str_replace('_', ' ', $criterion['rule']) }}
+                                                            </div>
+                                                        @endforeach
+                                                    </div>
+                                                @endif
+                                            @elseif($match->match_rule === 'fundserv_order_id_to_viefund_fund_wo_number')
+                                                <div><strong>Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
+                                                <div><strong>Fund WO#:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
+                                            @else
+                                                <div style="font-family: monospace; white-space: pre-wrap;">{{ $match->metadata ?? '-' }}</div>
+                                            @endif
                                         @endif
                                     </td>
                                     <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;">
                                         {!! \Carbon\Carbon::parse($match->created_at)->format('Y-M-d') . '<br>' . \Carbon\Carbon::parse($match->created_at)->format('H:i:s') !!}
                                     </td>
                                     <td style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap; text-align: center;">
-                                        <button class="view-match-btn" data-match-id="{{ $match->id }}" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
+                                        <button class="view-match-btn" data-match-id="{{ $match->id }}" data-is-parent="false" style="background: #3182ce; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">View</button>
                                     </td>
                                 </tr>
                             @endforeach
@@ -596,7 +623,7 @@
             e.stopPropagation();
         });
 
-        function openParentGroupDetailModal(groupData) {
+        function openParentGroupDetailModal(groupData, matchId) {
             const modal = document.getElementById('match-detail-modal');
             const content = modal.querySelector('.modal-content-wrapper');
             
@@ -649,30 +676,57 @@
                 </div>
             `;
             
-            // Build summary section
+            // Build summary section and reconciliation form in a single row
             const confidencePercent = (groupData.aggregated_confidence * 100).toFixed(1);
-            const summaryHtml = `
-                <div style="background: #f7fafc; padding: 16px; border-radius: 6px; border-left: 4px solid #3182ce; margin-bottom: 8px;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-                        <div>
-                            <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Total Transactions</div>
-                            <div style="font-size: 24px; font-weight: 700; color: #2d3748;">${groupData.count}</div>
+            const bottomRowHtml = `
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                    <div style="background: #f7fafc; padding: 16px; border-radius: 6px; border-left: 4px solid #3182ce;">
+                        <div style="display: grid; grid-template-columns: 1fr; gap: 16px;">
+                            <div>
+                                <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Total Transactions</div>
+                                <div style="font-size: 24px; font-weight: 700; color: #2d3748;">${groupData.count}</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Overall Confidence</div>
+                                <div style="font-size: 24px; font-weight: 700; color: #3182ce;">${confidencePercent}%</div>
+                            </div>
                         </div>
-                        <div>
-                            <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Overall Confidence</div>
-                            <div style="font-size: 24px; font-weight: 700; color: #3182ce;">${confidencePercent}%</div>
-                        </div>
+                    </div>
+                    <div>
+                        ${groupData.reconcile_type ? `
+                            <!-- Already reconciled - show status -->
+                            <div style="background: #f0fff4; padding: 12px; border-radius: 4px; border-left: 3px solid #22863a; margin-bottom: 12px;">
+                                <div style="font-size: 12px; color: #22863a; font-weight: 600; margin-bottom: 4px;">✓ Status: ${groupData.reconcile_type === 'auto' ? 'Auto Reconciled' : 'Manually Reconciled'}</div>
+                                <div style="font-size: 11px; color: #2d3748;"><strong>Date:</strong> ${new Date(groupData.reconcile_date).toLocaleString()}</div>
+                                ${groupData.reconcile_notes ? `<div style="font-size: 11px; color: #2d3748; margin-top: 4px;"><strong>Notes:</strong> ${groupData.reconcile_notes}</div>` : ''}
+                            </div>
+                            <button onclick="clearReconciliation(event, ${matchId})" style="background: #e53e3e; color: white; border: none; padding: 10px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s; width: 100%;" onmouseover="this.style.backgroundColor='#c53030'" onmouseout="this.style.backgroundColor='#e53e3e'">
+                                Clear Reconciliation
+                            </button>
+                        ` : `
+                            <!-- Not reconciled - show form -->
+                            <div>
+                                <div style="margin-bottom: 12px;">
+                                    <label style="display: block; font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 8px;">Reconciliation Notes (Optional)</label>
+                                    <textarea id="reconcile-notes" placeholder="Enter reconciliation notes..." style="width: 100%; padding: 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-family: monospace; font-size: 12px; resize: vertical; min-height: 80px; box-sizing: border-box;"></textarea>
+                                </div>
+                                <button id="reconcile-btn" onclick="reconcileMatch(event, 'parent', ${matchId})" style="background: #38a169; color: white; border: none; padding: 10px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2f855a'" onmouseout="this.style.backgroundColor='#38a169'">
+                                    Reconcile
+                                </button>
+                            </div>
+                        `}
                     </div>
                 </div>
             `;
             
-            const html = criteriaHtml + '<hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">' + summaryHtml;
+            const html = criteriaHtml + bottomRowHtml;
             
             content.innerHTML = html;
+            
             modal.style.display = 'flex';
         }
 
-        async function openMatchDetailModal(matchId) {
+        async function openMatchDetailModal(matchId, isParentOverride = null) {
             try {
                 const response = await fetch(`/api/matches/${matchId}/details`);
                 const data = await response.json();
@@ -682,7 +736,8 @@
                     return;
                 }
 
-                // Build criteria map - maps field names to whether they matched
+                // Use provided isParent value if given, otherwise use API response
+                const isParent = isParentOverride !== null ? isParentOverride : data.is_parent;
                 const criteriaMap = {};
                 if (data.criteria && Array.isArray(data.criteria)) {
                     data.criteria.forEach(criterion => {
@@ -734,57 +789,87 @@
                 const modal = document.getElementById('match-detail-modal');
                 const content = modal.querySelector('.modal-content-wrapper');
 
-                // Create comparison table
-                let html = `
-                    <div style="margin-bottom: 20px;">
-                        <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Details</h3>
-                        <p style="margin: 0 0 16px 0; font-size: 12px; color: #718096;"><span style="background: #f0fff4; padding: 2px 6px; border-radius: 3px; margin-right: 8px;">Green = Matched Field</span><span style="background: #fef3c7; padding: 2px 6px; border-radius: 3px;">Yellow = No Match</span></p>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-                `;
+                // Check if transaction is reconciled
+                if (data.match.reconcile_type) {
+                    // Show reconciliation status instead of criteria
+                    const reconcileDate = new Date(data.match.reconcile_date).toLocaleString();
+                    let html = `
+                        <div style="margin-bottom: 20px;">
+                            <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Reconciliation Status</h3>
+                            <div style="background: #f0fff4; padding: 16px; border-radius: 6px; border-left: 4px solid #22863a;">
+                                <table style="width: 100%; font-size: 13px;">
+                                    <tbody>
+                                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                                            <td style="padding: 8px 0; font-weight: 500; color: #2d3748; width: 30%;">Status:</td>
+                                            <td style="padding: 8px 0; color: #22863a; font-weight: 600;">${data.match.reconcile_type === 'auto' ? 'Auto Reconciled' : 'Manually Reconciled'}</td>
+                                        </tr>
+                                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                                            <td style="padding: 8px 0; font-weight: 500; color: #2d3748; width: 30%;">Reconciliation Date:</td>
+                                            <td style="padding: 8px 0; color: #2d3748;">${reconcileDate}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 500; color: #2d3748; width: 30%; vertical-align: top;">Notes:</td>
+                                            <td style="padding: 8px 0; color: #2d3748; font-family: monospace; white-space: pre-wrap;">${data.match.reconcile_notes || 'None'}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    content.innerHTML = html;
+                } else {
+                    // Show transaction comparison criteria (existing logic)
+                    // Create comparison table
+                    let html = `
+                        <div style="margin-bottom: 20px;">
+                            <h3 style="margin: 0 0 12px 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Details</h3>
+                            <p style="margin: 0 0 16px 0; font-size: 12px; color: #718096;"><span style="background: #f0fff4; padding: 2px 6px; border-radius: 3px; margin-right: 8px;">Green = Matched Field</span><span style="background: #fef3c7; padding: 2px 6px; border-radius: 3px;">Yellow = No Match</span></p>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                    `;
 
-                // VieFund side
-                html += `<div>
-                    <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2f855a; padding-bottom: 8px; border-bottom: 2px solid #c6f6d5;">VieFund Transaction</h4>
-                    <table style="width: 100%; font-size: 13px;">
-                `;
+                    // VieFund side
+                    html += `<div>
+                        <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2f855a; padding-bottom: 8px; border-bottom: 2px solid #c6f6d5;">VieFund Transaction</h4>
+                        <table style="width: 100%; font-size: 13px;">
+                    `;
 
-                // Criterion fields in order, then non-criterion
-                const viefundFields = [
-                    // Criterion fields (in matching order)
-                    ['Fund WO Number', data.viefund.fund_wo_number],
-                    ['Settlement Date', data.viefund.settlement_date],
-                    ['Fund Trx Type', data.viefund.fund_trx_type],
-                    ['Fund Trx Amount', data.viefund.fund_trx_amount],
-                ];
+                    // Criterion fields in order, then non-criterion
+                    const viefundFields = [
+                        // Criterion fields (in matching order)
+                        ['Fund WO Number', data.viefund.fund_wo_number],
+                        ['Settlement Date', data.viefund.settlement_date],
+                        ['Fund Trx Type', data.viefund.fund_trx_type],
+                        ['Fund Trx Amount', data.viefund.fund_trx_amount],
+                    ];
 
-                viefundFields.forEach(([label, value, special]) => {
-                    const bgColor = getCellBackground(label);
+                    viefundFields.forEach(([label, value, special]) => {
+                        const bgColor = getCellBackground(label);
+                        html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                            <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
+                            <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
+                        </tr>`;
+                    });
+
+                    // Fund Code - shown twice on VieFund side to align with Code + Fund ID on Fundserv
+                    const viefundFundCodeBgColor = getCellBackground('Fund Code');
+                    const fundCode = data.viefund.fund_code || '';
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund Code:</td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;"><strong>${fundCode.substring(0, 3) || '-'}</strong>${fundCode.substring(3) || ''}</td>
                     </tr>`;
-                });
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;"></td>
+                        <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;">${fundCode.substring(0, 3) || ''}<strong>${fundCode.substring(3) || '-'}</strong></td>
+                    </tr>`;
 
-                // Fund Code - shown twice on VieFund side to align with Code + Fund ID on Fundserv
-                const viefundFundCodeBgColor = getCellBackground('Fund Code');
-                const fundCode = data.viefund.fund_code || '';
-                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund Code:</td>
-                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;"><strong>${fundCode.substring(0, 3) || '-'}</strong>${fundCode.substring(3) || ''}</td>
-                </tr>`;
-                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;"></td>
-                    <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;">${fundCode.substring(0, 3) || ''}<strong>${fundCode.substring(3) || '-'}</strong></td>
-                </tr>`;
-
-                // Continue with remaining fields
-                const viefundRemainingFields = [
-                    ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
-                    // Non-criterion fields
-                    ['Trade Date', data.viefund.trade_date],
-                    ['Account ID', data.viefund.account_id],
-                    ['Client Name', data.viefund.client_name],
-                ];
+                    // Continue with remaining fields
+                    const viefundRemainingFields = [
+                        ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
+                        // Non-criterion fields
+                        ['Trade Date', data.viefund.trade_date],
+                        ['Account ID', data.viefund.account_id],
+                        ['Client Name', data.viefund.client_name],
+                    ];
 
                 viefundRemainingFields.forEach(([label, value]) => {
                     const bgColor = getCellBackground(label);
@@ -849,16 +934,176 @@
                         <td style="padding: 8px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
                         <td style="padding: 8px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: transparent; border-radius: 4px;">${value || '-'}</td>
                     </tr>`;
-                });
+                    });
 
-                html += `</table></div></div></div>`;
+                    html += `</table></div></div></div>`;
 
-                content.innerHTML = html;
+                    content.innerHTML = html;
+                }
+                
+                // Add reconciliation section only for non-reconciled transactions
+                if (!data.match.reconcile_type) {
+                    const reconcileSection = document.createElement('div');
+                    reconcileSection.style.cssText = 'margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0;';
+                    
+                    const confidencePercent = (data.confidence * 100).toFixed(1);
+                    
+                    if (isParent) {
+                        // Parent transaction - show confidence and reconciliation form side by side
+                        reconcileSection.innerHTML = `
+                            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px;">
+                                <div style="background: #f7fafc; padding: 16px; border-radius: 6px; border-left: 4px solid #3182ce;">
+                                    <div>
+                                        <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Confidence</div>
+                                        <div style="font-size: 24px; font-weight: 700; color: #3182ce;">${confidencePercent}%</div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div style="margin-bottom: 12px;">
+                                        <label style="display: block; font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 8px;">Reconciliation Notes (Optional)</label>
+                                        <textarea id="reconcile-notes" placeholder="Enter reconciliation notes..." style="width: 100%; padding: 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-family: monospace; font-size: 12px; resize: vertical; min-height: 80px; box-sizing: border-box;"></textarea>
+                                    </div>
+                                    <button id="reconcile-btn" onclick="reconcileMatch(event, 'individual', ${matchId})" style="background: #38a169; color: white; border: none; padding: 10px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#2f855a'" onmouseout="this.style.backgroundColor='#38a169'">
+                                        Reconcile
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        // Child transaction - show confidence only, full width
+                        reconcileSection.innerHTML = `
+                            <div style="background: #f7fafc; padding: 16px; border-radius: 6px; border-left: 4px solid #3182ce;">
+                                <div>
+                                    <div style="font-size: 12px; color: #718096; font-weight: 500; margin-bottom: 4px;">Confidence</div>
+                                    <div style="font-size: 24px; font-weight: 700; color: #3182ce;">${confidencePercent}%</div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    content.appendChild(reconcileSection);
+                } else {
+                    // Transaction is already reconciled
+                    // Show reconciliation status and controls based on parent/child
+                    console.log('Reconciled record:', { is_parent: isParent, match_id: data.match.match_id, reconcile_type: data.match.reconcile_type });
+                    
+                    // Always show reconciliation status first
+                    const reconcileDate = new Date(data.match.reconcile_date).toLocaleString();
+                    let reconcileHtml = `
+                        <div style="background: #f0fff4; padding: 16px; border-radius: 6px; border-left: 4px solid #22863a; margin-bottom: 16px;">
+                            <div style="margin-bottom: 12px;">
+                                <div style="font-size: 12px; color: #22863a; font-weight: 600; margin-bottom: 2px;">✓ Status: ${data.match.reconcile_type === 'auto' ? 'Auto Reconciled' : 'Manually Reconciled'}</div>
+                                <div style="font-size: 12px; color: #2d3748; margin-bottom: 4px;"><strong>Date:</strong> ${reconcileDate}</div>
+                                ${data.match.reconcile_notes ? `<div style="font-size: 12px; color: #2d3748;"><strong>Notes:</strong> ${data.match.reconcile_notes}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    
+                    // Only show clear button for parent records
+                    if (isParent) {
+                        reconcileHtml += `
+                            <button onclick="clearReconciliation(event, ${matchId})" style="background: #e53e3e; color: white; border: none; padding: 10px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#c53030'" onmouseout="this.style.backgroundColor='#e53e3e'">
+                                Clear Reconciliation
+                            </button>
+                        `;
+                    } else {
+                        reconcileHtml += `
+                            <div style="font-size: 12px; color: #2d3748; padding: 8px; background: #e8f7f0; border-radius: 3px;">
+                                This record is part of a reconciled group. The reconciliation is managed through the parent record.
+                            </div>
+                        `;
+                    }
+                    
+                    const reconcileSection = document.createElement('div');
+                    reconcileSection.style.cssText = 'margin-top: 24px; padding-top: 20px; border-top: 1px solid #e2e8f0;';
+                    reconcileSection.innerHTML = reconcileHtml;
+                    content.appendChild(reconcileSection);
+                }
+                
                 modal.style.display = 'flex';
 
             } catch (error) {
                 console.error('Error fetching match details:', error);
                 alert('Error loading match details');
+            }
+        }
+
+        async function reconcileMatch(event, type, matchId = null) {
+            event.preventDefault();
+            
+            const notesField = document.getElementById('reconcile-notes');
+            const notes = notesField.value.trim();
+            
+            // Show confirmation dialog
+            if (!confirm('Are you sure you want to reconcile this match?')) {
+                return;
+            }
+            
+            try {
+                const endpoint = type === 'parent' 
+                    ? `/api/matches/${matchId}/reconcile-group`
+                    : `/api/matches/${matchId}/reconcile`;
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    },
+                    body: JSON.stringify({
+                        reconcile_type: 'manual',
+                        reconcile_notes: notes || null,
+                    }),
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Match reconciled successfully!');
+                    // Close the modal
+                    document.getElementById('match-detail-modal').style.display = 'none';
+                    // Reload the page to reflect changes
+                    setTimeout(() => location.reload(), 500);
+                } else {
+                    alert('Error reconciling match: ' + (data.message || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error reconciling match:', error);
+                alert('Error reconciling match');
+            }
+        }
+
+        async function clearReconciliation(event, matchId) {
+            event.preventDefault();
+            
+            // Show confirmation dialog
+            if (!confirm('Are you sure you want to clear the reconciliation for this match? This action cannot be undone.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/matches/${matchId}/clear-reconciliation`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    },
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Reconciliation cleared successfully!');
+                    // Close the modal
+                    document.getElementById('match-detail-modal').style.display = 'none';
+                    // Reload the page to reflect changes
+                    setTimeout(() => location.reload(), 500);
+                } else {
+                    alert('Error clearing reconciliation: ' + (data.message || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error clearing reconciliation:', error);
+                alert('Error clearing reconciliation');
             }
         }
 
@@ -880,16 +1125,16 @@
             selectElement.style.color = textColor;
         }
 
-        // Color code confidence filter based on selection
-        function updateConfidenceFilterColor(selectElement) {
+        // Color code reconciliation filter based on selection
+        function updateReconciliationFilterColor(selectElement) {
             const value = selectElement.value;
             let bgColor = 'white';
             let textColor = '#2d3748';
 
-            if (value === 'hide_100') {
+            if (value === 'hide_reconciled') {
                 bgColor = '#fef3c7'; // Light yellow/amber
                 textColor = '#92400e'; // Dark amber
-            } else if (value === 'show_only_100') {
+            } else if (value === 'show_reconciled') {
                 bgColor = '#dcfce7'; // Light green
                 textColor = '#166534'; // Dark green
             }
@@ -905,12 +1150,12 @@
                 updateFilterSelectColor(select);
             });
 
-            const confidenceSelect = document.getElementById('confidence-filter-select');
-            if (confidenceSelect) {
-                updateConfidenceFilterColor(confidenceSelect);
+            const reconciliationSelect = document.getElementById('reconciliation-filter-select');
+            if (reconciliationSelect) {
+                updateReconciliationFilterColor(reconciliationSelect);
                 // Also update on change
-                confidenceSelect.addEventListener('change', function() {
-                    updateConfidenceFilterColor(this);
+                reconciliationSelect.addEventListener('change', function() {
+                    updateReconciliationFilterColor(this);
                 });
             }
 
@@ -923,9 +1168,9 @@
                     if (isParent) {
                         const groupDataEncoded = e.target.getAttribute('data-group-data');
                         const groupData = JSON.parse(atob(groupDataEncoded));
-                        openParentGroupDetailModal(groupData);
+                        openParentGroupDetailModal(groupData, matchId);
                     } else {
-                        openMatchDetailModal(matchId);
+                        openMatchDetailModal(matchId, false);
                     }
                 }
             });

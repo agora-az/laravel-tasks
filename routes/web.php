@@ -34,6 +34,9 @@ Route::middleware('auth.check')->group(function () {
     // API routes
     Route::get('/api/matching-sessions/active', [ReconciliationController::class, 'getActiveMatchingSession'])->name('api.matching.active');
     Route::get('/api/matches/{matchId}/details', [ReconciliationController::class, 'getMatchDetails'])->name('api.matches.details');
+    Route::post('/api/matches/{matchId}/reconcile', [ReconciliationController::class, 'reconcileMatch'])->name('api.matches.reconcile');
+    Route::post('/api/matches/{matchId}/reconcile-group', [ReconciliationController::class, 'reconcileMatchGroup'])->name('api.matches.reconcile-group');
+    Route::post('/api/matches/{matchId}/clear-reconciliation', [ReconciliationController::class, 'clearReconciliation'])->name('api.matches.clear-reconciliation');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');

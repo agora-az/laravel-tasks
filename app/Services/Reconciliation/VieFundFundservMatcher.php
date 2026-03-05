@@ -64,43 +64,43 @@ class VieFundFundservMatcher
             // Get all VieFund transactions that aren't already matched to Fundserv
             Log::info('matchAll(): Querying unmatched VieFund transactions');
             Log::info('matchAll(): Building query...');
-            
+
             // First, check if VieFundTransaction table has data
             $totalCount = VieFundTransaction::count();
             Log::info('matchAll(): Total VieFund transactions: ' . $totalCount);
-            
+
             if ($totalCount === 0) {
                 Log::info('matchAll(): No VieFund transactions found');
                 return 0;
             }
-            
+
             // Get matched IDs to exclude
             $matchedIds = DB::table('reconciliation_matches')
                 ->where('left_type', 'viefund')
                 ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
                 ->pluck('left_id')
                 ->toArray();
-            
+
             Log::info('matchAll(): Found ' . count($matchedIds) . ' already matched VieFund IDs');
-            
+
             // Process in chunks to avoid memory issues
             Log::info('matchAll(): Processing transactions in chunks...');
             $chunkSize = 50; // Smaller chunks = faster processing for large datasets
-            
+
             if (count($matchedIds) > 0) {
                 $query = VieFundTransaction::whereNotIn('id', $matchedIds);
             } else {
                 $query = VieFundTransaction::query();
             }
-            
+
             $processedCount = 0;
             $query->chunk($chunkSize, function ($chunk) use (&$inserted, &$batch, &$processedCount, $batchSize, $dryRun) {
                 $processedCount += $chunk->count();
                 Log::info('matchAll(): [' . now()->format('H:i:s') . '] Processing chunk, total processed: ' . $processedCount);
-                
+
                 foreach ($chunk as $vieFundTrx) {
                     Log::debug('matchAll(): Processing VieFund ID ' . $vieFundTrx->id);
-                    
+
                     // Get candidate Fundserv transactions
                     $fundservCandidates = $this->getCandidateFundservTransactions($vieFundTrx);
 
@@ -196,7 +196,7 @@ class VieFundFundservMatcher
             $totalCount = VieFundTransaction::count();
             $session->update(['total_records' => $totalCount]);
             Log::info('matchAllWithProgressTracking(): Total VieFund transactions: ' . $totalCount);
-            
+
             if ($totalCount === 0) {
                 $session->update(['status' => 'completed', 'completed_at' => now()]);
                 return 0;
@@ -204,7 +204,7 @@ class VieFundFundservMatcher
 
             // PASS 1: Match on Order ID (0-20% of progress bar)
             Log::info('matchAllWithProgressTracking(): PASS 1 - Matching on Order ID');
-            
+
             // Count only unique VieFund order IDs (fund_wo_number) - the actual items we're processing
             $pass1TotalCount = VieFundTransaction::whereNotNull('fund_wo_number')->distinct('fund_wo_number')->count();
             Log::info('matchAllWithProgressTracking(): PASS 1 setup - total_records_in_pass: ' . $pass1TotalCount . ', starting progress: 0');
@@ -218,7 +218,7 @@ class VieFundFundservMatcher
                 'progress_percentage' => 0,
             ]);
             $inserted = $this->passMatchOnOrderId($session, $lastUpdateTime, $pass1TotalCount);
-            
+
             // PASS 2: Validate settlement dates on matched transactions (20-40%)
             Log::info('matchAllWithProgressTracking(): PASS 2 - Validating settlement dates');
             Log::info('matchAllWithProgressTracking(): PASS 2 setup - total_records_in_pass: ' . $inserted . ', starting progress: 20.0');
@@ -230,7 +230,7 @@ class VieFundFundservMatcher
                 'progress_percentage' => 20.0,
             ]);
             $this->passValidateSettlementDate($session, $lastUpdateTime, $inserted);
-            
+
             // PASS 3: Validate amount and type on matched transactions (40-60%)
             Log::info('matchAllWithProgressTracking(): PASS 3 - Validating amount and type');
             $session->update([
@@ -241,7 +241,7 @@ class VieFundFundservMatcher
                 'progress_percentage' => 40.0,
             ]);
             $this->passValidateAmountAndType($session, $lastUpdateTime, $inserted);
-            
+
             // PASS 4: Validate fund code on matched transactions (60-80%)
             Log::info('matchAllWithProgressTracking(): PASS 4 - Validating fund code');
             $session->update([
@@ -252,7 +252,7 @@ class VieFundFundservMatcher
                 'progress_percentage' => 60.0,
             ]);
             $this->passValidateFundCode($session, $lastUpdateTime, $inserted);
-            
+
             // PASS 5: Validate source identifier on matched transactions (80-100%)
             Log::info('matchAllWithProgressTracking(): PASS 5 - Validating source identifier');
             $session->update([
@@ -263,7 +263,7 @@ class VieFundFundservMatcher
                 'progress_percentage' => 80.0,
             ]);
             $this->passValidateSourceId($session, $lastUpdateTime, $inserted);
-            
+
             // Final step: Recalculate confidence for all matches based on actual criteria
             Log::info('matchAllWithProgressTracking(): Recalculating confidence for all matches');
             $this->recalculateAllConfidences();
@@ -281,7 +281,7 @@ class VieFundFundservMatcher
                 'current_pass' => 'Completed',
                 'current_pass_number' => 6,
             ]);
-            
+
             Log::info('matchAllWithProgressTracking(): Completed successfully. Total matches: ' . $finalCount);
             return $finalCount;
         } catch (\Throwable $e) {
@@ -312,7 +312,7 @@ class VieFundFundservMatcher
         $fundservIndex = FundservTransaction::whereNotNull('order_id')
             ->pluck('id', 'order_id')
             ->toArray();
-        
+
         Log::info('passMatchOnOrderId(): Built index with ' . count($fundservIndex) . ' order IDs');
         $session->update(['processed_records' => 0, 'matched_count' => 0, 'progress_percentage' => 0]);
 
@@ -321,11 +321,11 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->select('left_id', 'right_id')
             ->get();
-        
+
         foreach ($existingMatches as $match) {
             $processedPairs[$match->left_id . ':' . $match->right_id] = true;
         }
-        
+
         Log::info('passMatchOnOrderId(): Found ' . count($processedPairs) . ' existing matches to skip');
 
         VieFundTransaction::whereNotNull('fund_wo_number')->chunk(100, function ($chunk) use (&$inserted, &$batch, $batchSize, &$lastUpdateTime, $fundservIndex, $session, &$totalProcessed, &$processedPairs, $totalRecordsInPass, &$processedFundWoNumbers) {
@@ -335,7 +335,7 @@ class VieFundFundservMatcher
                     $processedFundWoNumbers[$vieFundTrx->fund_wo_number] = true;
                     $totalProcessed++;
                 }
-                
+
                 // Look up Fundserv ID by order ID from index (O(1) instead of O(n))
                 if (!isset($fundservIndex[$vieFundTrx->fund_wo_number])) {
                     continue; // No Fundserv with this order ID
@@ -388,11 +388,11 @@ class VieFundFundservMatcher
                     try {
                         ReconciliationMatch::insert($batch);
                         $inserted += count($batch);
-                        
+
                         // Calculate overall progress using master method
                         $progressWithinPass = $totalProcessed / $totalRecordsInPass;
                         $overallProgress = $this->calculateMasterProgress($session->current_pass_number, $progressWithinPass);
-                        
+
                         // Update progress on every batch
                         DB::table('matching_sessions')->where('id', $session->id)->update([
                             'processed_records' => $totalProcessed,
@@ -400,7 +400,7 @@ class VieFundFundservMatcher
                             'current_pass_number' => $session->current_pass_number,
                             'progress_percentage' => $overallProgress,
                         ]);
-                        
+
                         // Log every 10 seconds to reduce excessive logging
                         if (now()->diffInSeconds($lastUpdateTime) >= 10) {
                             Log::info('passMatchOnOrderId(): Inserted ' . $inserted . ' total matches. Progress: ' . round($totalProcessed / $totalRecordsInPass * 100, 1) . '%');
@@ -455,11 +455,11 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->where('status', 'matched')
             ->orderBy('id')
-            ->chunk(100, function($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
+            ->chunk(100, function ($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
                 // Batch load all needed VieFund and Fundserv transactions
                 $vieFundIds = $batch->pluck('left_id')->toArray();
                 $fundservIds = $batch->pluck('right_id')->toArray();
-                
+
                 $vieFunds = VieFundTransaction::whereIn('id', $vieFundIds)->get()->keyBy('id');
                 $fundservs = FundservTransaction::whereIn('id', $fundservIds)->get()->keyBy('id');
 
@@ -480,7 +480,7 @@ class VieFundFundservMatcher
                             break;
                         }
                     }
-                    
+
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
                         ->update(['match_criteria_met' => json_encode($criteria)]);
@@ -491,14 +491,14 @@ class VieFundFundservMatcher
                 // Calculate overall progress using master method
                 $progressWithinPass = $validated / $totalRecordsInPass;
                 $overallProgress = $this->calculateMasterProgress($session->current_pass_number, $progressWithinPass);
-                
+
                 // Update progress using raw SQL to avoid transaction conflicts in chunk callback
                 DB::table('matching_sessions')->where('id', $session->id)->update([
                     'processed_records' => $validated,
                     'current_pass_number' => $session->current_pass_number,
                     'progress_percentage' => $overallProgress,
                 ]);
-                
+
                 // Log every 10 seconds to reduce excessive logging
                 if (now()->diffInSeconds($lastUpdateTime) >= 10) {
                     Log::info('passValidateSettlementDate(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
@@ -530,11 +530,11 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->where('status', 'matched')
             ->orderBy('id')
-            ->chunk(100, function($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
+            ->chunk(100, function ($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
                 // Batch load all needed VieFund and Fundserv transactions
                 $vieFundIds = $batch->pluck('left_id')->toArray();
                 $fundservIds = $batch->pluck('right_id')->toArray();
-                
+
                 $vieFunds = VieFundTransaction::whereIn('id', $vieFundIds)->get()->keyBy('id');
                 $fundservs = FundservTransaction::whereIn('id', $fundservIds)->get()->keyBy('id');
 
@@ -547,11 +547,11 @@ class VieFundFundservMatcher
                     }
 
                     $criteria = json_decode($match->match_criteria_met, true) ?? [];
-                    
+
                     // Update transaction_type and amount criteria separately
                     $transactionTypeMatched = $this->matchTransactionType($vieFund, $fundserv);
                     $amountMatched = $this->matchAmount($vieFund, $fundserv);
-                    
+
                     foreach ($criteria as &$criterion) {
                         if ($criterion['rule'] === 'transaction_type') {
                             $criterion['matched'] = $transactionTypeMatched;
@@ -559,7 +559,7 @@ class VieFundFundservMatcher
                             $criterion['matched'] = $amountMatched;
                         }
                     }
-                    
+
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
                         ->update(['match_criteria_met' => json_encode($criteria)]);
@@ -570,14 +570,14 @@ class VieFundFundservMatcher
                 // Calculate overall progress using master method
                 $progressWithinPass = $validated / $totalRecordsInPass;
                 $overallProgress = $this->calculateMasterProgress($session->current_pass_number, $progressWithinPass);
-                
+
                 // Update progress using raw SQL to avoid transaction conflicts in chunk callback
                 DB::table('matching_sessions')->where('id', $session->id)->update([
                     'processed_records' => $validated,
                     'current_pass_number' => $session->current_pass_number,
                     'progress_percentage' => $overallProgress,
                 ]);
-                
+
                 // Log every 10 seconds to reduce excessive logging
                 if (now()->diffInSeconds($lastUpdateTime) >= 10) {
                     Log::info('passValidateAmountAndType(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
@@ -609,11 +609,11 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->where('status', 'matched')
             ->orderBy('id')
-            ->chunk(100, function($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
+            ->chunk(100, function ($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
                 // Batch load all needed VieFund and Fundserv transactions
                 $vieFundIds = $batch->pluck('left_id')->toArray();
                 $fundservIds = $batch->pluck('right_id')->toArray();
-                
+
                 $vieFunds = VieFundTransaction::whereIn('id', $vieFundIds)->get()->keyBy('id');
                 $fundservs = FundservTransaction::whereIn('id', $fundservIds)->get()->keyBy('id');
 
@@ -634,7 +634,7 @@ class VieFundFundservMatcher
                             break;
                         }
                     }
-                    
+
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
                         ->update(['match_criteria_met' => json_encode($criteria)]);
@@ -645,14 +645,14 @@ class VieFundFundservMatcher
                 // Calculate overall progress using master method
                 $progressWithinPass = $validated / $totalRecordsInPass;
                 $overallProgress = $this->calculateMasterProgress($session->current_pass_number, $progressWithinPass);
-                
+
                 // Update progress using raw SQL to avoid transaction conflicts in chunk callback
                 DB::table('matching_sessions')->where('id', $session->id)->update([
                     'processed_records' => $validated,
                     'current_pass_number' => $session->current_pass_number,
                     'progress_percentage' => $overallProgress,
                 ]);
-                
+
                 // Log every 10 seconds to reduce excessive logging
                 if (now()->diffInSeconds($lastUpdateTime) >= 10) {
                     Log::info('passValidateFundCode(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
@@ -684,11 +684,11 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->where('status', 'matched')
             ->orderBy('id')
-            ->chunk(100, function($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
+            ->chunk(100, function ($batch) use (&$validated, $session, &$lastUpdateTime, $totalRecordsInPass) {
                 // Batch load all needed VieFund and Fundserv transactions
                 $vieFundIds = $batch->pluck('left_id')->toArray();
                 $fundservIds = $batch->pluck('right_id')->toArray();
-                
+
                 $vieFunds = VieFundTransaction::whereIn('id', $vieFundIds)->get()->keyBy('id');
                 $fundservs = FundservTransaction::whereIn('id', $fundservIds)->get()->keyBy('id');
 
@@ -709,7 +709,7 @@ class VieFundFundservMatcher
                             break;
                         }
                     }
-                    
+
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
                         ->update(['match_criteria_met' => json_encode($criteria)]);
@@ -720,14 +720,14 @@ class VieFundFundservMatcher
                 // Calculate overall progress using master method
                 $progressWithinPass = $validated / $totalRecordsInPass;
                 $overallProgress = $this->calculateMasterProgress($session->current_pass_number, $progressWithinPass);
-                
+
                 // Update progress using raw SQL to avoid transaction conflicts in chunk callback
                 DB::table('matching_sessions')->where('id', $session->id)->update([
                     'processed_records' => $validated,
                     'current_pass_number' => $session->current_pass_number,
                     'progress_percentage' => $overallProgress,
                 ]);
-                
+
                 // Log every 10 seconds to reduce excessive logging
                 if (now()->diffInSeconds($lastUpdateTime) >= 10) {
                     Log::info('passValidateSourceId(): Validated ' . $validated . ' matches. Progress: ' . round($validated / $totalRecordsInPass * 100, 1) . '%');
@@ -779,15 +779,15 @@ class VieFundFundservMatcher
                 ]);
             }
         })
-        ->leftJoin('reconciliation_matches as rm', function ($join) {
-            $join->on('rm.right_id', '=', 'fundserv_transactions.id')
-                ->where('rm.right_type', '=', 'fundserv')
-                ->where('rm.match_rule', '=', self::RULE_VIEFUND_FUNDSERV);
-        })
-        ->whereNull('rm.id')
-        ->select('fundserv_transactions.*')
-        ->limit(500)  // Limit candidates to avoid processing too many
-        ->get();
+            ->leftJoin('reconciliation_matches as rm', function ($join) {
+                $join->on('rm.right_id', '=', 'fundserv_transactions.id')
+                    ->where('rm.right_type', '=', 'fundserv')
+                    ->where('rm.match_rule', '=', self::RULE_VIEFUND_FUNDSERV);
+            })
+            ->whereNull('rm.id')
+            ->select('fundserv_transactions.*')
+            ->limit(500)  // Limit candidates to avoid processing too many
+            ->get();
     }
 
     /**
@@ -980,31 +980,31 @@ class VieFundFundservMatcher
             ->where('match_rule', self::RULE_VIEFUND_FUNDSERV)
             ->where('status', 'matched')
             ->orderBy('id')
-            ->chunk(500, function($batch) use (&$updated) {
+            ->chunk(500, function ($batch) use (&$updated) {
                 foreach ($batch as $match) {
                     $criteria = json_decode($match->match_criteria_met, true) ?? [];
-                    
+
                     if (empty($criteria)) {
                         continue;
                     }
-                    
+
                     // Count matched criteria
                     $matchedCount = 0;
                     $totalCount = count($criteria);
-                    
+
                     foreach ($criteria as $criterion) {
                         if (isset($criterion['matched']) && $criterion['matched'] === true) {
                             $matchedCount++;
                         }
                     }
-                    
+
                     // Calculate confidence as percentage of criteria matched
                     $newConfidence = $totalCount > 0 ? round($matchedCount / $totalCount, 4) : 0;
-                    
+
                     DB::table('reconciliation_matches')
                         ->where('id', $match->id)
                         ->update(['confidence' => $newConfidence]);
-                    
+
                     $updated++;
                 }
             });

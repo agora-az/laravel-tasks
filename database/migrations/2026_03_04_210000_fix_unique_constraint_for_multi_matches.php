@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::table('reconciliation_matches', function (Blueprint $table) {
             // Drop the old constraint that prevented multiple VieFund from matching same Fundserv
             $table->dropUnique('unique_right_match');
-            
+
             // Add new constraint: prevent same VieFund-Fundserv pair from being created twice
             // But allow multiple VieFund to match same Fundserv (for grouping)
             $table->unique(['left_id', 'right_id', 'match_rule'], 'unique_match_pair');

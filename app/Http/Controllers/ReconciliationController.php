@@ -89,12 +89,12 @@ class ReconciliationController extends Controller
             $sort = 'matched_at';
         }
 
-        // Get confidence filter from query parameters
-        // Default: hide_100 (hide 100% confidence matches)
-        // Options: show_all, hide_100, show_only_100
-        $confidenceFilter = $request->query('confidence_filter', 'hide_100');
-        if (!in_array($confidenceFilter, ['show_all', 'hide_100', 'show_only_100'])) {
-            $confidenceFilter = 'hide_100';
+        // Get reconciliation filter from query parameters
+        // Default: hide_reconciled (hide reconciled matches)
+        // Options: show_all, hide_reconciled, show_reconciled
+        $reconciliationFilter = $request->query('reconciliation_filter', 'hide_reconciled');
+        if (!in_array($reconciliationFilter, ['show_all', 'hide_reconciled', 'show_reconciled'])) {
+            $reconciliationFilter = 'hide_reconciled';
         }
 
         // Get criterion filters from query parameters
@@ -148,6 +148,9 @@ class ReconciliationController extends Controller
                 'rm.status',
                 'rm.metadata',
                 'rm.match_criteria_met',
+                'rm.reconcile_type',
+                'rm.reconcile_date',
+                'rm.reconcile_notes',
                 'rm.created_at',
                 'v_left.fund_wo_number as viefund_fund_wo_number',
                 'v_left.fund_trx_amount as viefund_amount',
@@ -157,7 +160,7 @@ class ReconciliationController extends Controller
                 'f_right.actual_amount as fundserv_actual_amount',
                 'f_right.settlement_date as fundserv_settlement_date',
             ])
-            ->orderByDesc('rm.created_at')
+            ->orderBy('rm.id')
             ->get();
 
         $matches = $matches->map(function ($row) {
@@ -168,7 +171,7 @@ class ReconciliationController extends Controller
                     $row->metadata_array = $decoded;
                 }
             }
-            
+
             // Also decode match_criteria_met if present
             $row->criteria_array = null;
             if (!empty($row->match_criteria_met)) {
@@ -186,6 +189,8 @@ class ReconciliationController extends Controller
                 return "fundserv|{$match->right_id}";
             })
             ->map(function ($group, $key) {
+                // Sort group by ID ascending so first item is the parent (lowest ID)
+                $group = $group->sortBy('id')->values();
                 $first = $group->first();
                 $viefundTotal = $group->sum(function ($item) {
                     return (float) ($item->viefund_amount ?? 0);
@@ -268,7 +273,7 @@ class ReconciliationController extends Controller
             $groupedMatches = $groupedMatches->filter(function ($group) use ($criteriaFilters) {
                 // Use aggregated criteria for multi-match groups, individual criteria for single matches
                 $criteria = $group['is_multi'] ? $group['aggregated_criteria'] : ($group['first']->criteria_array ?? []);
-                
+
                 // Check ALL filters - all must pass (AND logic)
                 foreach ($criteriaFilters as $filterCriterion => $filterValue) {
                     $criterionMatched = false;
@@ -278,7 +283,7 @@ class ReconciliationController extends Controller
                             break;
                         }
                     }
-                    
+
                     // Apply the filter logic
                     if ($filterValue === 'matched' && !$criterionMatched) {
                         // Filter wants matched, but it's not matched
@@ -293,18 +298,16 @@ class ReconciliationController extends Controller
             })->values();
         }
 
-        // Filter grouped matches by confidence level
-        if ($confidenceFilter === 'hide_100') {
+        // Filter grouped matches by reconciliation status
+        if ($reconciliationFilter === 'hide_reconciled') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                // Use aggregated confidence for multi-match groups, individual confidence for single matches
-                $confidence = $group['is_multi'] ? $group['aggregated_confidence'] : ($group['first']->confidence ?? 0);
-                return $confidence < 1.0;
+                // Hide matches that have been reconciled (where reconcile_type is not null)
+                return empty($group['first']->reconcile_type);
             })->values();
-        } elseif ($confidenceFilter === 'show_only_100') {
+        } elseif ($reconciliationFilter === 'show_reconciled') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                // Use aggregated confidence for multi-match groups, individual confidence for single matches
-                $confidence = $group['is_multi'] ? $group['aggregated_confidence'] : ($group['first']->confidence ?? 0);
-                return $confidence >= 1.0;
+                // Show only matches that have been reconciled (where reconcile_type is not null)
+                return !empty($group['first']->reconcile_type);
             })->values();
         }
         // 'show_all' doesn't need filtering
@@ -338,7 +341,7 @@ class ReconciliationController extends Controller
             'direction',
             'criteriaFilters',
             'availableCriteria',
-            'confidenceFilter'
+            'reconciliationFilter'
         ));
     }
 
@@ -348,7 +351,7 @@ class ReconciliationController extends Controller
     public function runMatches()
     {
         Log::info('runMatches() called - creating matching session');
-        
+
         try {
             // Check if there's already a processing session
             $activeSession = MatchingSession::where('status', 'processing')->first();
@@ -372,10 +375,10 @@ class ReconciliationController extends Controller
             // Using proper shell redirection to detach from the web process
             $artisanPath = base_path('artisan');
             $logPath = storage_path('logs/matching-' . $session->id . '.log');
-            
+
             // Use the Herd PHP CLI binary
             $phpPath = '/Users/staceyrattlesnake/Library/Application Support/Herd/bin/php';
-            
+
             // Redirect all output and detach with &
             // This works better than nohup in web contexts
             $command = sprintf(
@@ -385,18 +388,18 @@ class ReconciliationController extends Controller
                 $session->id,
                 escapeshellarg($logPath)
             );
-            
+
             Log::info('Running command: ' . $command);
-            
+
             // Close file descriptors to fully detach
             $descriptorspec = array(
                 0 => array("pipe", "r"),  // stdin
                 1 => array("pipe", "w"),  // stdout
                 2 => array("pipe", "w")   // stderr
             );
-            
+
             $process = proc_open($command, $descriptorspec, $pipes, null, null, array('bypass_shell' => false));
-            
+
             if (is_resource($process)) {
                 // Close all pipes
                 fclose($pipes[0]);
@@ -415,7 +418,7 @@ class ReconciliationController extends Controller
         } catch (\Throwable $e) {
             Log::error('ERROR in runMatches: ' . $e->getMessage());
             Log::error('File: ' . $e->getFile() . ':' . $e->getLine());
-            
+
             return redirect()->route('reconciliations.matches')
                 ->with('error', 'Error starting match process: ' . $e->getMessage());
         }
@@ -430,7 +433,7 @@ class ReconciliationController extends Controller
             ->orWhere('status', 'pending')
             ->latest()
             ->first();
-        
+
         if (!$session) {
             return response()->json(['error' => 'No active session'], 404);
         }
@@ -452,7 +455,7 @@ class ReconciliationController extends Controller
     public function getMatchingStatus($sessionId)
     {
         $session = MatchingSession::find($sessionId);
-        
+
         if (!$session) {
             return response()->json(['error' => 'Session not found'], 404);
         }
@@ -582,9 +585,13 @@ class ReconciliationController extends Controller
                 'rm.match_rule',
                 'rm.left_id',
                 'rm.right_id',
+                'rm.right_type',
                 'rm.confidence',
                 'rm.match_criteria_met',
-                
+                'rm.reconcile_type',
+                'rm.reconcile_date',
+                'rm.reconcile_notes',
+
                 // VieFund fields
                 'v.id as viefund_id',
                 'v.client_name',
@@ -608,7 +615,7 @@ class ReconciliationController extends Controller
                 'v.fund_settlement_source',
                 'v.fund_wo_number',
                 'v.currency',
-                
+
                 // Fundserv fields
                 'f.id as fundserv_id',
                 'f.company',
@@ -640,8 +647,18 @@ class ReconciliationController extends Controller
             }
         }
 
+        // Check if this is a parent (minimum ID) in its group
+        $parentId = DB::table('reconciliation_matches')
+            ->where('right_id', $match->right_id)
+            ->where('right_type', $match->right_type)
+            ->min('id');
+
+        $isParent = ($match->match_id == $parentId);
+
         return response()->json([
             'match' => $match,
+            'confidence' => $match->confidence,
+            'is_parent' => $isParent,
             'criteria' => $criteria,
             'viefund' => (object) [
                 'id' => $match->viefund_id,
@@ -683,5 +700,132 @@ class ReconciliationController extends Controller
                 'actual_amount' => $match->actual_amount,
             ]
         ]);
+    }
+
+    /**
+     * Reconcile a match
+     */
+    public function reconcileMatch($matchId)
+    {
+        $match = DB::table('reconciliation_matches')->where('id', $matchId)->first();
+
+        if (!$match) {
+            return response()->json(['error' => 'Match not found'], 404);
+        }
+
+        try {
+            $reconcileType = request()->input('reconcile_type', 'manual');
+            $reconcileNotes = request()->input('reconcile_notes');
+
+            // Update the specific match
+            DB::table('reconciliation_matches')
+                ->where('id', $matchId)
+                ->update([
+                    'reconcile_type' => $reconcileType,
+                    'reconcile_date' => now(),
+                    'reconcile_notes' => $reconcileNotes,
+                ]);
+
+            // If this is a multi-match group, also update the parent (lowest ID)
+            $parentMatch = DB::table('reconciliation_matches')
+                ->where('right_id', $match->right_id)
+                ->where('right_type', $match->right_type)
+                ->orderBy('id', 'asc')
+                ->first();
+
+            if ($parentMatch && $parentMatch->id !== $matchId) {
+                // This is a child, update the parent
+                DB::table('reconciliation_matches')
+                    ->where('id', $parentMatch->id)
+                    ->update([
+                        'reconcile_type' => $reconcileType,
+                        'reconcile_date' => now(),
+                        'reconcile_notes' => $reconcileNotes,
+                    ]);
+            }
+
+            return response()->json(['success' => true, 'message' => 'Match reconciled successfully']);
+        } catch (\Exception $e) {
+            Log::error('Error reconciling match: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Reconcile all matches in a group (same right_id)
+     */
+    public function reconcileMatchGroup($matchId)
+    {
+        $match = DB::table('reconciliation_matches')->where('id', $matchId)->first();
+
+        if (!$match) {
+            return response()->json(['error' => 'Match not found'], 404);
+        }
+
+        try {
+            $reconcileType = request()->input('reconcile_type', 'manual');
+            $reconcileNotes = request()->input('reconcile_notes');
+
+            // Reconcile all matches with the same right_id and right_type
+            DB::table('reconciliation_matches')
+                ->where('right_id', $match->right_id)
+                ->where('right_type', $match->right_type)
+                ->update([
+                    'reconcile_type' => $reconcileType,
+                    'reconcile_date' => now(),
+                    'reconcile_notes' => $reconcileNotes,
+                ]);
+
+            return response()->json(['success' => true, 'message' => 'Group reconciled successfully']);
+        } catch (\Exception $e) {
+            Log::error('Error reconciling match group: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Clear reconciliation for a match
+     */
+    public function clearReconciliation($matchId)
+    {
+        $match = DB::table('reconciliation_matches')->where('id', $matchId)->first();
+
+        if (!$match) {
+            return response()->json(['error' => 'Match not found'], 404);
+        }
+
+        try {
+            // Clear the specific match
+            DB::table('reconciliation_matches')
+                ->where('id', $matchId)
+                ->update([
+                    'reconcile_type' => null,
+                    'reconcile_date' => null,
+                    'reconcile_notes' => null,
+                ]);
+
+            // If this is a multi-match group, also clear the parent (lowest ID)
+            $parentMatch = DB::table('reconciliation_matches')
+                ->where('right_id', $match->right_id)
+                ->where('right_type', $match->right_type)
+                ->orderBy('id', 'asc')
+                ->first();
+
+            if ($parentMatch && $parentMatch->id !== $matchId) {
+                // This is a child, clear the parent too
+                DB::table('reconciliation_matches')
+                    ->where('id', $parentMatch->id)
+                    ->update([
+                        'reconcile_type' => null,
+                        'reconcile_date' => null,
+                        'reconcile_notes' => null,
+                    ]);
+            }
+
+            return response()->json(['success' => true, 'message' => 'Reconciliation cleared successfully']);
+        } catch (\Exception $e) {
+            Log::error('Error clearing reconciliation: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 }
