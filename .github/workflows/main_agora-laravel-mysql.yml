@@ -89,4 +89,4 @@ jobs:
           az webapp ssh \
             --resource-group rg-php-mysql-prod \
             --name agora-laravel-mysql \
-            --command "php artisan migrate --force"
+            --container-command "bash -c 'yes | php artisan migrate --force'"
