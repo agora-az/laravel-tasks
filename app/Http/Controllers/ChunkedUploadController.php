@@ -28,7 +28,7 @@ class ChunkedUploadController extends Controller
     {
         // Extra safety: set time limit inside method too
         set_time_limit(1800); // 30 minutes
-        
+
         try {
             // Dropzone.js sends chunk info with 'dz' prefix (dzchunkindex, dztotalchunkcount)
             // Extract the actual chunk info
@@ -61,30 +61,30 @@ class ChunkedUploadController extends Controller
 
             $chunk = $request->file('file');
             $chunkDir = "temp/uploads/{$fileId}";
-            
+
             // Store original filename on first chunk
             if ($chunkIndex == 0) {
                 Storage::disk('local')->makeDirectory($chunkDir, 0755, true);
                 Storage::disk('local')->put("{$chunkDir}/filename.txt", $originalFilename);
             }
-            
+
             \Log::info("Chunk upload: {$chunkIndex}/{$totalChunks} for {$importType}, fileId: {$fileId}, filename: {$originalFilename}");
-            
+
             // Ensure directory exists
             Storage::disk('local')->makeDirectory($chunkDir, 0755, true);
 
             // Read the chunk file as binary data
             $chunkContent = file_get_contents($chunk->getRealPath());
-            
+
             if ($chunkContent === false) {
                 throw new \Exception('Failed to read uploaded chunk');
             }
-            
+
             \Log::info("Chunk {$chunkIndex} size: " . strlen($chunkContent) . " bytes");
-            
+
             // Store chunk with numeric filename
             $result = Storage::disk('local')->put("{$chunkDir}/chunk_{$chunkIndex}", $chunkContent);
-            
+
             if (!$result) {
                 throw new \Exception('Failed to store chunk to disk');
             }
@@ -136,9 +136,9 @@ class ChunkedUploadController extends Controller
         try {
             // Get the storage path
             $mergedFilePath = "{$storagePath}/{$mergedPath}";
-            
+
             \Log::info("Starting merge: {$totalChunks} chunks, import type: {$importType}");
-            
+
             // Ensure we can write
             if (!is_dir(dirname($mergedFilePath))) {
                 mkdir(dirname($mergedFilePath), 0755, true);
@@ -153,7 +153,7 @@ class ChunkedUploadController extends Controller
             $totalSize = 0;
             for ($i = 0; $i < $totalChunks; $i++) {
                 $chunkPath = "{$storagePath}/{$uploadDir}/chunk_{$i}";
-                
+
                 if (!file_exists($chunkPath)) {
                     fclose($mergedHandle);
                     throw new \Exception("Missing chunk {$i} at: {$chunkPath}");
@@ -187,31 +187,31 @@ class ChunkedUploadController extends Controller
             }
 
             fclose($mergedHandle);
-            
+
             \Log::info("Merge complete: {$totalSize} bytes written");
 
             // Determine file extension for proper processing
             $firstChunkPath = "{$storagePath}/{$uploadDir}/chunk_0";
             $extension = $this->detectFileType($firstChunkPath);
-            
+
             \Log::info("Detected file type: {$extension}");
 
             // Rename to proper extension
             $finalPath = "{$mergedPath}.{$extension}";
             $finalFilePath = "{$storagePath}/{$finalPath}";
-            
+
             if (file_exists($finalFilePath)) {
                 unlink($finalFilePath);
             }
-            
+
             if (!rename($mergedFilePath, $finalFilePath)) {
                 throw new \Exception("Could not rename merged file");
             }
-            
+
             // Retrieve original filename
             $filenameFile = "{$storagePath}/{$uploadDir}/filename.txt";
             $originalFilename = file_exists($filenameFile) ? trim(file_get_contents($filenameFile)) : "uploaded_file";
-            
+
             \Log::info("Processing file: {$finalFilePath}, original filename: {$originalFilename}");
 
             // Create import record
@@ -637,7 +637,7 @@ class ChunkedUploadController extends Controller
 
         $fileSize = filesize($filePath);
         $fileExt = pathinfo($filePath, PATHINFO_EXTENSION);
-        
+
         \Log::info("Processing bank file: {$filePath}, size: {$fileSize}, extension: {$fileExt}");
 
         $import = Import::create([
@@ -662,22 +662,22 @@ class ChunkedUploadController extends Controller
                     $parser = new Parser();
                     $pdf = $parser->parseFile($filePath);
                     $text = $pdf->getText();
-                    
+
                     \Log::info("PDF text extracted, length: " . strlen($text));
 
                     // Remove null bytes and control characters from entire text
                     $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', ' ', $text);
-                    
+
                     \Log::info("Text sanitized, length: " . strlen($text));
 
                     // Simple parsing - extract transaction lines
                     $lines = explode("\n", $text);
                     \Log::info("Total lines found: " . count($lines));
-                    
+
                     // Log first 10 lines for debugging
                     $sampleLines = array_slice(array_filter(array_map('trim', $lines)), 0, 10);
                     \Log::info("Sample PDF lines: " . json_encode($sampleLines));
-                    
+
                     // Find where transactions start (usually after header section)
                     $startLine = 0;
                     foreach ($lines as $i => $line) {
@@ -691,9 +691,9 @@ class ChunkedUploadController extends Controller
                             break;
                         }
                     }
-                    
+
                     \Log::info("Transaction section starts around line: {$startLine}");
-                    
+
                     $transactionCount = 0;
                     $skippedLines = [];
                     foreach ($lines as $lineNum => $line) {
@@ -701,7 +701,7 @@ class ChunkedUploadController extends Controller
                         if ($lineNum < $startLine) {
                             continue;
                         }
-                        
+
                         $line = trim($line);
                         if (empty($line) || strlen($line) < 5) {
                             continue;
@@ -716,7 +716,7 @@ class ChunkedUploadController extends Controller
                             // CIBC format: typically has date at start, description in middle, amount at end
                             // Look for patterns like: "Nov 15" or "11/15" or "2025-11-15"
                             $hasDate = preg_match('/(\d{1,2}\/\d{1,2}|Nov|December|January|February|March|April|May|June|July|August|September|October|Nov|Dec|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep)\s+(\d{1,2}|(\d{4}-\d{2}-\d{2}))/i', $line, $dateMatch);
-                            
+
                             if ($hasDate) {
                                 // Skip balance/opening/closing lines (they shouldn't be transactions)
                                 if (preg_match('/(opening|closing|balance forward)\s/i', $line)) {
@@ -725,10 +725,10 @@ class ChunkedUploadController extends Controller
                                     }
                                     continue;
                                 }
-                                
+
                                 // Look for numeric amounts (currency values) - typically at end of line
                                 $hasAmount = preg_match('/\d+\.\d{2}/', $line);
-                                
+
                                 if ($hasAmount) {
                                     $amount = 0;
                                     // Try to find a numeric amount
@@ -739,7 +739,7 @@ class ChunkedUploadController extends Controller
 
                                     // Try to parse the date
                                     $parsedDate = null;
-                                    
+
                                     // Try various date formats
                                     $dateFormats = [
                                         'd/m/Y',
@@ -776,7 +776,7 @@ class ChunkedUploadController extends Controller
                                         'amount' => $amount,
                                     ]);
                                     $recordHash = hash('sha256', $hashInput);
-                                    
+
                                     // Check if this hash already exists in the database
                                     if (BankTransaction::where('record_hash', $recordHash)->exists()) {
                                         // Duplicate found, skip it
@@ -794,7 +794,7 @@ class ChunkedUploadController extends Controller
                                         'created_at' => now(),
                                         'updated_at' => now(),
                                     ];
-                                    
+
                                     $transactionCount++;
 
                                     if (count($batch) >= $batchSize) {
@@ -813,7 +813,7 @@ class ChunkedUploadController extends Controller
                             continue;
                         }
                     }
-                    
+
                     \Log::info("PDF processing complete: {$transactionCount} transactions found");
                     if (count($skippedLines) > 0) {
                         \Log::info("Sample skipped lines: " . json_encode($skippedLines));
@@ -832,7 +832,7 @@ class ChunkedUploadController extends Controller
 
                     // Skip header
                     $header = fgetcsv($handle);
-                    
+
                     while (($data = fgetcsv($handle)) !== false) {
                         if (count($data) >= 2) {
                             try {
@@ -919,7 +919,7 @@ class ChunkedUploadController extends Controller
         try {
             // Remove null bytes and other control characters
             $value = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', trim((string) $value));
-            
+
             if (empty($value)) {
                 return null;
             }

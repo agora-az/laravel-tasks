@@ -31,7 +31,7 @@ class ProcessImportJob implements ShouldQueue
             'importId' => $importId,
             'tempDir' => $tempDir,
         ]);
-        
+
         $this->filePath = $filePath;
         $this->importType = $importType;
         $this->originalFilename = $originalFilename;
@@ -64,7 +64,7 @@ class ProcessImportJob implements ShouldQueue
                 \Log::error("Import record not found", ['import_id' => $this->importId]);
                 return;
             }
-            
+
             \Log::info("Import record found", ['import_id' => $this->importId, 'status' => $import->status]);
 
             if (!file_exists($this->filePath)) {
@@ -74,7 +74,7 @@ class ProcessImportJob implements ShouldQueue
                     'dir_exists' => is_dir(dirname($this->filePath)),
                     'files_in_dir' => file_exists(dirname($this->filePath)) ? implode(', ', array_slice(glob(dirname($this->filePath) . '/*'), 0, 10)) : 'dir not found',
                 ]);
-                
+
                 $import->update([
                     'status' => 'failed',
                     'error_details' => "File not found: {$this->filePath}",
@@ -112,7 +112,6 @@ class ProcessImportJob implements ShouldQueue
                 'error_count' => $result['errors'] ?? 0,
                 'import_completed_at' => now(),
             ]);
-
         } catch (\Exception $e) {
             \Log::error("Error in ProcessImportJob", [
                 'error' => $e->getMessage(),
@@ -158,7 +157,7 @@ class ProcessImportJob implements ShouldQueue
     private function processVieFundFile()
     {
         \Log::info("processVieFundFile started", ['path' => $this->filePath, 'import_id' => $this->importId]);
-        
+
         $handle = fopen($this->filePath, 'r');
         if (!$handle) {
             \Log::error("Could not open file for reading", ['path' => $this->filePath]);
@@ -173,9 +172,9 @@ class ProcessImportJob implements ShouldQueue
             fclose($handle);
             throw new \Exception('Could not read CSV header');
         }
-        
+
         \Log::info("CSV header read", ['column_count' => count($header)]);
-        
+
         $normalizeHeader = fn($value) => preg_replace(
             '/[^a-z0-9]/',
             '',
@@ -394,10 +393,10 @@ class ProcessImportJob implements ShouldQueue
     private function processBankFile()
     {
         \Log::info("processBankFile started", ['path' => $this->filePath, 'import_id' => $this->importId]);
-        
+
         $fileSize = filesize($this->filePath);
         $fileExt = pathinfo($this->filePath, PATHINFO_EXTENSION);
-        
+
         \Log::info("Processing bank file", ['size' => $fileSize, 'extension' => $fileExt]);
 
         $imported = 0;
@@ -414,7 +413,7 @@ class ProcessImportJob implements ShouldQueue
                     $parser = new Parser();
                     $pdf = $parser->parseFile($this->filePath);
                     $text = $pdf->getText();
-                    
+
                     \Log::info("PDF text extracted", ['length' => strlen($text)]);
 
                     $records = $this->parseBankStatementText($text);
@@ -431,7 +430,7 @@ class ProcessImportJob implements ShouldQueue
 
                             if (!isset($existingHashes[$record_hash])) {
                                 $existingHashes[$record_hash] = true;
-                                
+
                                 $existing = BankTransaction::where('record_hash', $record_hash)->exists();
                                 if ($existing) {
                                     $duplicateCount++;
@@ -470,7 +469,7 @@ class ProcessImportJob implements ShouldQueue
                     }
 
                     $header = fgetcsv($handle);
-                    
+
                     while (($data = fgetcsv($handle)) !== false) {
                         if (count($data) >= 2) {
                             try {
