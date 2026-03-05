@@ -228,9 +228,12 @@ class ReconciliationController extends Controller
                     $aggregatedCriteria = [];
                     foreach ($allRulesMap as $rule => $matchedValues) {
                         $allMatched = count($matchedValues) === $group->count() && !in_array(false, $matchedValues, true);
+                        $matchedCount = array_sum($matchedValues); // Count how many transactions matched
                         $aggregatedCriteria[] = [
                             'rule' => $rule,
                             'matched' => $allMatched,
+                            'matched_count' => $matchedCount,
+                            'total_count' => count($matchedValues),
                         ];
                     }
                 }
@@ -709,12 +712,19 @@ class ReconciliationController extends Controller
             ->where('right_type', $match->right_type)
             ->min('id');
 
+        // Count how many matches exist for this Fundserv
+        $matchCount = DB::table('reconciliation_matches')
+            ->where('right_id', $match->right_id)
+            ->where('right_type', $match->right_type)
+            ->count();
+
         $isParent = ($match->match_id == $parentId);
 
         return response()->json([
             'match' => $match,
             'confidence' => $match->confidence,
             'is_parent' => $isParent,
+            'match_count' => $matchCount,
             'criteria' => $criteria,
             'viefund' => (object) [
                 'id' => $match->viefund_id,
