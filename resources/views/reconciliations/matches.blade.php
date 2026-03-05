@@ -46,6 +46,11 @@
                 <div style="font-weight: bold; color: #2d3748;"><span id="progress-session">-</span></div>
             </div>
         </div>
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 8px;">
+            <button onclick="resetMatchingSession()" style="background: #e53e3e; color: white; border: none; padding: 8px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s; font-size: 14px;" onmouseover="this.style.backgroundColor='#c53030'" onmouseout="this.style.backgroundColor='#e53e3e'">
+                Reset Matching Session
+            </button>
+        </div>
     </div>
 
     @if(session('success'))
@@ -506,6 +511,52 @@
             if (data.current_pass) {
                 document.getElementById('progress-current-pass').textContent = data.current_pass;
             }
+        }
+
+        function resetMatchingSession() {
+            if (!currentSessionId) {
+                alert('No active session to reset');
+                return;
+            }
+
+            if (!confirm('Are you sure you want to reset the matching session? This will stop the current process and mark it as interrupted.')) {
+                return;
+            }
+
+            const resetButton = event.target;
+            resetButton.disabled = true;
+            resetButton.style.opacity = '0.6';
+            resetButton.textContent = 'Resetting...';
+
+            fetch(`/api/matching-sessions/${currentSessionId}/reset`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    clearInterval(pollingInterval);
+                    disableButtons(false);
+                    document.getElementById('matching-progress-section').style.display = 'none';
+                    alert('Matching session has been reset. You can start a new session.');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    alert('Error resetting session: ' + (data.error || 'Unknown error'));
+                    resetButton.disabled = false;
+                    resetButton.style.opacity = '1';
+                    resetButton.textContent = 'Reset Matching Session';
+                }
+            })
+            .catch(error => {
+                console.error('Error resetting session:', error);
+                alert('Error resetting session: ' + error.message);
+                resetButton.disabled = false;
+                resetButton.style.opacity = '1';
+                resetButton.textContent = 'Reset Matching Session';
+            });
         }
 
         function pollMatchingStatus() {

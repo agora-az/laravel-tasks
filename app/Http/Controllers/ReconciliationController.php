@@ -476,6 +476,62 @@ class ReconciliationController extends Controller
     }
 
     /**
+     * Reset a matching session by stopping its process and marking it as failed.
+     */
+    public function resetMatchingSession($sessionId)
+    {
+        $session = MatchingSession::find($sessionId);
+
+        if (!$session) {
+            return response()->json(['error' => 'Session not found'], 404);
+        }
+
+        if (!in_array($session->status, ['processing', 'pending'])) {
+            return response()->json(['error' => 'Can only reset sessions that are processing or pending'], 400);
+        }
+
+        try {
+            // Kill any background PHP processes related to this session
+            // Look for processes running reconcile:match-viefund-async with this session ID
+            $sessionIdArg = escapeshellarg('--session=' . $session->id);
+            
+            // Use pkill to find and kill processes by pattern
+            $killCommand = sprintf(
+                "pkill -f %s 2>/dev/null || true",
+                escapeshellarg("reconcile:match-viefund-async.*session=" . $session->id)
+            );
+            
+            Log::info('Killing process for session ' . $session->id . ': ' . $killCommand);
+            exec($killCommand);
+
+            // Update the session as failed with user interruption message
+            $session->update([
+                'status' => 'failed',
+                'error_message' => 'Interrupted by user',
+                'completed_at' => now(),
+            ]);
+
+            Log::info('Session ' . $session->id . ' reset by user');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Matching session has been reset successfully',
+                'session' => [
+                    'id' => $session->id,
+                    'status' => $session->status,
+                    'error_message' => $session->error_message,
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Error resetting matching session: ' . $e->getMessage());
+            
+            return response()->json([
+                'error' => 'Failed to reset session: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Delete all reconciliation matches.
      */
     public function deleteMatches()
