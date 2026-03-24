@@ -236,7 +236,7 @@
                                     @endphp
                                     {!! $ruleLabel !!}
                                     @if($group['is_multi'])
-                                        <span style="margin-left: 6px; background: #805ad5; color: #fff; padding: 2px 6px; border-radius: 10px; font-size: 10px;">Multi</span>
+                                        <span style="background: #805ad5; color: #fff; padding: 2px 6px; border-radius: 10px; font-size: 10px; text-decoration: none;">Multi</span>
                                     @endif
                                 </td>
                                 <td style="padding: 12px; text-align: right; color: #2d3748; font-family: monospace;">
@@ -281,8 +281,7 @@
                                             </div>
                                         </div>
                                     @elseif($first->match_rule === 'viefund_to_fundserv_criteria_based')
-                                        <div><strong>VieFund Fund WO:</strong> {{ $first->viefund_fund_wo_number ?? '-' }}</div>
-                                        <div><strong>Fundserv Order ID:</strong> {{ $first->fundserv_order_id ?? '-' }}</div>
+                                        <div><strong>Wire Order #:</strong> {{ $first->fundserv_order_id ?? $first->viefund_fund_wo_number ?? '-' }}</div>
                                         <div><strong>Fundserv Settlement Date:</strong> {{ $first->fundserv_settlement_date ?? '-' }}</div>
                                         @if($group['count'] > 1)
                                             <div><strong>Transactions:</strong> {{ $group['count'] }}</div>
@@ -330,7 +329,7 @@
 
                             @foreach($group['items'] as $match)
                                 <tr class="group-row {{ $groupId }}" data-match-id="{{ $match->id }}" style="border-bottom: 1px solid #e2e8f0; border-top: 1px solid #cbd5e0; border-left: 3px solid #3182ce; display: none; background: #e8eef7; transition: background-color 0.2s ease; box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.backgroundColor='#d1ddf0'" onmouseout="this.style.backgroundColor='#e8eef7'">
-                                    <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center;">
+                                    <td style="padding: 12px; color: #2d3748; font-size: 12px; max-width: 110px; white-space: normal; text-align: center; vertical-align: middle;">
                                         @php
                                             $ruleLabel = match($match->match_rule) {
                                                 'viefund_to_fundserv_criteria_based' => 'VieFund to Fundserv',
@@ -341,8 +340,17 @@
                                                 'bank_to_viefund_amount_date' => 'Bank to VieFund',
                                                 default => str_replace('_', ' ', ucwords($match->match_rule, '_')),
                                             };
+                                            // Calculate position in group (1-based index)
+                                            $itemIndex = 0;
+                                            foreach ($group['items'] as $idx => $item) {
+                                                if ($item->id === $match->id) {
+                                                    $itemIndex = $idx + 1;
+                                                    break;
+                                                }
+                                            }
                                         @endphp
-                                        {{ $ruleLabel }}
+                                        <div>{{ $ruleLabel }}</div>
+                                        <span style="border: 2px solid #805ad5; color: #805ad5; background: #ffffff; padding: 2px 6px; border-radius: 10px; font-size: 10px; white-space: nowrap; text-decoration: none;">{{ $itemIndex }} of {{ $group['count'] }}</span>
                                     </td>
                                     <td style="padding: 12px; text-align: right; color: #2d3748; font-family: monospace;">
                                         {{ $match->viefund_amount !== null ? number_format($match->viefund_amount, 2) : '-' }}
@@ -359,29 +367,16 @@
                                     <td style="padding: 12px; text-align: center;">
                                         @php
                                             $confidence = (float) ($match->confidence ?? 0);
-                                            if ($confidence >= 0.9) {
-                                                $barBg = '#c6f6d5';
-                                                $barFill = '#2f855a';
-                                            } elseif ($confidence >= 0.75) {
-                                                $barBg = '#9ae6b4';
-                                                $barFill = '#2f855a';
-                                            } elseif ($confidence >= 0.6) {
-                                                $barBg = '#68d391';
-                                                $barFill = '#276749';
-                                            } elseif ($confidence >= 0.4) {
-                                                $barBg = '#48bb78';
-                                                $barFill = '#22543d';
-                                            } else {
-                                                $barBg = '#38a169';
-                                                $barFill = '#1c4532';
-                                            }
                                             $pctText = number_format($confidence * 100, 1) . '%';
+                                            $barWidth = $confidence * 100;
                                         @endphp
-                                        <div style="font-family: monospace; font-size: 12px; font-weight: 600; color: #2d3748; margin-bottom: 6px;">
-                                            {{ $pctText }}
-                                        </div>
-                                        <div style="height: 8px; width: 96px; margin: 0 auto; background: {{ $barBg }}; border-radius: 999px; overflow: hidden;">
-                                            <div style="height: 100%; width: {{ $pctText }}; background: {{ $barFill }};"></div>
+                                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                                            <div style="font-family: monospace; font-size: 12px; font-weight: 600; color: #2d3748;">
+                                                {{ $pctText }}
+                                            </div>
+                                            <div style="width: 96px; height: 16px; background: #f7fafc; border: 2px solid #cbd5e0; border-radius: 4px; overflow: hidden; position: relative;">
+                                                <div style="height: 100%; width: {{ $barWidth }}%; background: #48bb78; transition: width 0.3s ease;"></div>
+                                            </div>
                                         </div>
                                     </td>
                                     <td style="padding: 12px; color: #4a5568; font-size: 12px;">
@@ -400,9 +395,9 @@
                                         @else
                                             <!-- Match Criteria -->
                                             @if($match->match_rule === 'viefund_to_fundserv_criteria_based')
-                                                <div><strong>VieFund Fund WO:</strong> {{ $match->viefund_fund_wo_number ?? '-' }}</div>
-                                                <div><strong>Fundserv Order ID:</strong> {{ $match->fundserv_order_id ?? '-' }}</div>
+                                                <div><strong>Wire Order #:</strong> {{ $match->fundserv_order_id ?? $match->viefund_fund_wo_number ?? '-' }}</div>
                                                 <div><strong>Fundserv Settlement Date:</strong> {{ $match->fundserv_settlement_date ?? '-' }}</div>
+                                                <div><strong>VieFund Trx ID:</strong> {{ $match->viefund_trx_id ?? '-' }}</div>
                                                 @if(!empty($match->criteria_array))
                                                     <div style="margin-top: 8px; font-size: 11px;">
                                                         <strong>Criteria Met:</strong>
@@ -894,24 +889,29 @@
                     content.innerHTML = html;
                 } else {
                     // Show transaction comparison criteria (existing logic)
-                    // Create comparison table
+                    // Create comparison table with 4 columns: VieFund label | VieFund value | Fundserv label | Fundserv value
                     let html = `
                         <div style="margin-bottom: 12px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                 <h3 style="margin: 0; font-size: 18px; font-weight: 600; color: #2d3748;">Match Details</h3>
                                 <div style="font-size: 12px; color: #718096;"><span style="background: #f0fff4; padding: 2px 6px; border-radius: 3px; margin-left: 8px;">Green = Matched Field</span><span style="background: #fef3c7; padding: 2px 6px; border-radius: 3px; margin-left: 8px;">Yellow = No Match</span></div>
                             </div>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-                    `;
-
-                    // VieFund side
-                    html += `<div>
-                        <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #2f855a; padding-bottom: 8px; border-bottom: 2px solid #c6f6d5;">VieFund Transaction</h4>
-                        <table style="width: 100%; font-size: 13px;">
+                            <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="border-bottom: 2px solid #e2e8f0;">
+                                        <th style="padding: 8px; text-align: left; font-weight: 600; color: #2d3748; width: 22.5%;">VieFund Field</th>
+                                        <th style="padding: 8px; text-align: left; font-weight: 600; color: #2f855a; width: 27.5%; background: #f7fafc;">VieFund Value</th>
+                                        <th style="padding: 8px; text-align: left; font-weight: 600; color: #2d3748; width: 22.5%; border-left: 3px solid #cbd5e0;">Fundserv Field</th>
+                                        <th style="padding: 8px; text-align: left; font-weight: 600; color: #3182ce; width: 27.5%; background: #f7fafc;">Fundserv Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
                     `;
 
                     // Criterion fields in order, then non-criterion
                     const viefundFields = [
+                        // VieFund Trx ID field
+                        ['VieFund Trx ID', data.viefund.trx_id],
                         // Criterion fields (in matching order)
                         ['Fund WO Number', data.viefund.fund_wo_number],
                         ['Settlement Date', data.viefund.settlement_date],
@@ -919,100 +919,101 @@
                         ['Fund Trx Amount', data.viefund.fund_trx_amount],
                     ];
 
-                    viefundFields.forEach(([label, value, special]) => {
-                        const bgColor = getCellBackground(label);
-                        html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                            <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                            <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
-                        </tr>`;
-                    });
+                    const fundservFields = [
+                        // Empty entry for alignment with VieFund Trx ID
+                        ['', ''],
+                        ['Order ID', data.fundserv.order_id],
+                        ['Settlement Date', data.fundserv.settlement_date],
+                        ['Tx Type', data.fundserv.tx_type],
+                        ['Actual Amount', formatValue(data.fundserv.actual_amount)],
+                    ];
 
-                    // Fund Code - shown twice on VieFund side to align with Code + Fund ID on Fundserv
+                    // Build criterion rows
+                    for (let i = 0; i < viefundFields.length; i++) {
+                        const [vieLabel, vieValue] = viefundFields[i];
+                        const [fundLabel, fundValue] = fundservFields[i];
+                        const vieBgColor = getCellBackground(vieLabel);
+                        const fundBgColor = getCellBackground(fundLabel);
+                        
+                        // Determine hover colors
+                        const vieHoverColor = vieBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                        const fundHoverColor = fundBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                        
+                        html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                            <td style="padding: 4px 6px; font-weight: 500; color: #4a5568;">${vieLabel}:</td>
+                            <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${vieBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${vieHoverColor}'" onmouseout="this.style.backgroundColor='${vieBgColor}'">${vieValue || '-'}</td>
+                            <td style="padding: 4px 6px; font-weight: 500; color: #4a5568; border-left: 3px solid #cbd5e0;">${fundLabel}:</td>
+                            <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${fundHoverColor}'" onmouseout="this.style.backgroundColor='${fundBgColor}'">${fundValue || '-'}</td>
+                        </tr>`;
+                    }
+
+                    // Fund Code - shown as 2 rows to align with Code + Fund ID on Fundserv
                     const viefundFundCodeBgColor = getCellBackground('Fund Code');
                     const fundCode = data.viefund.fund_code || '';
+                    const fundCodeBgColor = getCellBackground('Code');
+                    
+                    const vieFundCodeHoverColor = viefundFundCodeBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                    const fundCodeHoverColor = fundCodeBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                    
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund Code:</td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;"><strong>${fundCode.substring(0, 3) || '-'}</strong>${fundCode.substring(3) || ''}</td>
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568;">Fund Code:</td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${vieFundCodeHoverColor}'" onmouseout="this.style.backgroundColor='${viefundFundCodeBgColor}'"><strong>${fundCode.substring(0, 3) || '-'}</strong>${fundCode.substring(3) || ''}</td>
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568; border-left: 3px solid #cbd5e0;">Code:</td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${fundCodeHoverColor}'" onmouseout="this.style.backgroundColor='${fundCodeBgColor}'">${data.fundserv.code || '-'}</td>
                     </tr>`;
+                    
                     html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;"></td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px;">${fundCode.substring(0, 3) || ''}<strong>${fundCode.substring(3) || '-'}</strong></td>
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568;"></td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${viefundFundCodeBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${vieFundCodeHoverColor}'" onmouseout="this.style.backgroundColor='${viefundFundCodeBgColor}'">${fundCode.substring(0, 3) || ''}<strong>${fundCode.substring(3) || '-'}</strong></td>
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568; border-left: 3px solid #cbd5e0;">Fund ID:</td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${fundCodeHoverColor}'" onmouseout="this.style.backgroundColor='${fundCodeBgColor}'">${data.fundserv.fund_id || '-'}</td>
                     </tr>`;
 
-                    // Continue with remaining fields
-                    const viefundRemainingFields = [
-                        ['Fund Source ID', formatValue(data.viefund.fund_source_id)],
-                        // Non-criterion fields
+                    // Source ID criterion
+                    const sourceIdVieBgColor = getCellBackground('Fund Source ID');
+                    const sourceIdFundBgColor = getCellBackground('Source Identifier');
+                    
+                    const sourceIdVieHoverColor = sourceIdVieBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                    const sourceIdFundHoverColor = sourceIdFundBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                    
+                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568;">Fund Source ID:</td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${sourceIdVieBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${sourceIdVieHoverColor}'" onmouseout="this.style.backgroundColor='${sourceIdVieBgColor}'">${formatValue(data.viefund.fund_source_id) || '-'}</td>
+                        <td style="padding: 4px 6px; font-weight: 500; color: #4a5568; border-left: 3px solid #cbd5e0;">Source Identifier:</td>
+                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${sourceIdFundBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${sourceIdFundHoverColor}'" onmouseout="this.style.backgroundColor='${sourceIdFundBgColor}'">${formatValue(data.fundserv.source_identifier) || '-'}</td>
+                    </tr>`;
+
+                    // Non-criterion fields
+                    const viefundNonCriteriaFields = [
                         ['Trade Date', data.viefund.trade_date],
                         ['Account ID', data.viefund.account_id],
                         ['Client Name', data.viefund.client_name],
                     ];
 
-                viefundRemainingFields.forEach(([label, value]) => {
-                    const bgColor = getCellBackground(label);
-                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
-                    </tr>`;
-                });
+                    const fundservNonCriteriaFields = [
+                        ['Trade Date', data.fundserv.trade_date],
+                        ['Dealer Account ID', data.fundserv.dealer_account_id],
+                        ['Company', data.fundserv.company],
+                    ];
 
-                html += `</table></div>`;
+                    for (let i = 0; i < viefundNonCriteriaFields.length; i++) {
+                        const [vieLabel, vieValue] = viefundNonCriteriaFields[i];
+                        const [fundLabel, fundValue] = fundservNonCriteriaFields[i];
+                        const vieBgColor = getCellBackground(vieLabel);
+                        const fundBgColor = getCellBackground(fundLabel);
+                        
+                        const vieHoverColor = vieBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                        const fundHoverColor = fundBgColor === '#f0fff4' ? '#d4efdf' : '#fde0d0';
+                        
+                        html += `<tr style="border-bottom: 1px solid #e2e8f0;">
+                            <td style="padding: 4px 6px; font-weight: 500; color: #4a5568;">${vieLabel}:</td>
+                            <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${vieBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${vieHoverColor}'" onmouseout="this.style.backgroundColor='${vieBgColor}'">${vieValue || '-'}</td>
+                            <td style="padding: 4px 6px; font-weight: 500; color: #4a5568; border-left: 3px solid #cbd5e0;">${fundLabel}:</td>
+                            <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundBgColor}; border-radius: 4px; transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='${fundHoverColor}'" onmouseout="this.style.backgroundColor='${fundBgColor}'">${fundValue || '-'}</td>
+                        </tr>`;
+                    }
 
-                // Fundserv side
-                html += `<div>
-                    <h4 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 600; color: #3182ce; padding-bottom: 8px; border-bottom: 2px solid #90cdf4;">Fundserv Transaction</h4>
-                    <table style="width: 100%; font-size: 13px;">
-                `;
-
-                // Build fundserv table with aligned criterion fields
-                const fundservCriteriaRows = [
-                    ['Order ID', data.fundserv.order_id],
-                    ['Settlement Date', data.fundserv.settlement_date],
-                    ['Tx Type', data.fundserv.tx_type],
-                    ['Actual Amount', formatValue(data.fundserv.actual_amount)],
-                ];
-
-                fundservCriteriaRows.forEach(([label, value]) => {
-                    const bgColor = getCellBackground(label);
-                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${bgColor}; border-radius: 4px;">${value || '-'}</td>
-                    </tr>`;
-                });
-
-                // Fund Code criterion - Fund Code maps to Code + Fund ID (2 rows)
-                const fundCodeBgColor = getCellBackground('Code');
-
-                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">Code:</td>
-                    <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px;">${data.fundserv.code || '-'}</td>
-                </tr>`;
-                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">Fund ID:</td>
-                    <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${fundCodeBgColor}; border-radius: 4px;">${data.fundserv.fund_id || '-'}</td>
-                </tr>`;
-
-                // Source ID criterion
-                const sourceIdBgColor = getCellBackground('Source Identifier');
-                html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">Source Identifier:</td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: ${sourceIdBgColor}; border-radius: 4px;">${formatValue(data.fundserv.source_identifier) || '-'}</td>
-                </tr>`;
-                
-                const fundservNonCriteriaFields = [
-                    ['Trade Date', data.fundserv.trade_date],
-                    ['Dealer Account ID', data.fundserv.dealer_account_id],
-                    ['Company', data.fundserv.company],
-                ];
-
-                fundservNonCriteriaFields.forEach(([label, value]) => {
-                    html += `<tr style="border-bottom: 1px solid #e2e8f0;">
-                        <td style="padding: 4px 0; font-weight: 500; color: #4a5568; width: 45%;">${label}:</td>
-                        <td style="padding: 4px 6px; color: #2d3748; font-family: monospace; word-break: break-all; background: transparent; border-radius: 4px;">${value || '-'}</td>
-                    </tr>`;
-                    });
-
-                    html += `</table></div></div></div>`;
+                    html += `</tbody></table></div>`;
 
                     content.innerHTML = html;
                 }

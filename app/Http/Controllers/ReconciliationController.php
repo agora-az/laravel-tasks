@@ -127,6 +127,37 @@ class ReconciliationController extends Controller
             ->distinct('left_id')
             ->count('left_id');
 
+        // Step 1: Get distinct fundserv IDs with pagination (limit by groups, not individual matches)
+        $perPage = 50;
+        $page = (int) $request->query('page', 1);
+        
+        $fundservIdQuery = DB::table('reconciliation_matches as rm')
+            ->leftJoin('viefund_transactions as v_left', function ($join) {
+                $join->on('rm.left_id', '=', 'v_left.id')
+                    ->where('rm.left_type', '=', 'viefund');
+            })
+            ->leftJoin('fundserv_transactions as f_right', function ($join) {
+                $join->on('rm.right_id', '=', 'f_right.id')
+                    ->where('rm.right_type', '=', 'fundserv');
+            });
+
+        // Apply reconciliation filter at database level
+        if ($reconciliationFilter === 'hide_reconciled') {
+            $fundservIdQuery->whereNull('rm.reconcile_type');
+        } elseif ($reconciliationFilter === 'show_reconciled') {
+            $fundservIdQuery->whereNotNull('rm.reconcile_type');
+        }
+
+        // Get distinct fundserv IDs for pagination
+        $fundservIdsPaginated = $fundservIdQuery
+            ->distinct('rm.right_id')
+            ->select('rm.right_id')
+            ->orderBy('rm.right_id', $direction)
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        $fundservIds = $fundservIdsPaginated->pluck('right_id')->toArray();
+
+        // Step 2: Load all matches for these fundserv IDs
         $matches = DB::table('reconciliation_matches as rm')
             ->leftJoin('viefund_transactions as v_left', function ($join) {
                 $join->on('rm.left_id', '=', 'v_left.id')
@@ -152,6 +183,7 @@ class ReconciliationController extends Controller
                 'rm.reconcile_date',
                 'rm.reconcile_notes',
                 'rm.created_at',
+                'v_left.trx_id as viefund_trx_id',
                 'v_left.fund_wo_number as viefund_fund_wo_number',
                 'v_left.fund_trx_amount as viefund_amount',
                 'v_left.settlement_date as viefund_settlement_date',
@@ -160,6 +192,7 @@ class ReconciliationController extends Controller
                 'f_right.actual_amount as fundserv_actual_amount',
                 'f_right.settlement_date as fundserv_settlement_date',
             ])
+            ->whereIn('rm.right_id', $fundservIds)
             ->orderBy('rm.id')
             ->get();
 
@@ -189,8 +222,10 @@ class ReconciliationController extends Controller
                 return "fundserv|{$match->right_id}";
             })
             ->map(function ($group, $key) {
-                // Sort group by ID ascending so first item is the parent (lowest ID)
-                $group = $group->sortBy('id')->values();
+                // Sort group by VieFund Trx ID ascending (for consistent child record ordering)
+                $group = $group->sortBy(function ($item) {
+                    return (int) ($item->viefund_trx_id ?? 0);
+                })->values();
                 $first = $group->first();
                 $viefundTotal = $group->sum(function ($item) {
                     return (float) ($item->viefund_amount ?? 0);
@@ -207,7 +242,7 @@ class ReconciliationController extends Controller
                     return (float) ($item->confidence ?? 0);
                 });
 
-                // Calculate aggregated criteria (met only if ALL items have it met)
+                // Calculate aggregated criteria (met only if ALL items have it met, except amount which uses aggregated totals)
                 $aggregatedCriteria = null;
                 if (!empty($first->criteria_array)) {
                     // Get all unique criteria rules from all items
@@ -224,18 +259,42 @@ class ReconciliationController extends Controller
                         }
                     }
 
-                    // Build aggregated criteria array: a criterion is met only if ALL items have it met
+                    // Build aggregated criteria array
                     $aggregatedCriteria = [];
+                    $matchedCriteriaCount = 0;
+                    $totalCriteriaCount = count($allRulesMap);
+                    
                     foreach ($allRulesMap as $rule => $matchedValues) {
-                        $allMatched = count($matchedValues) === $group->count() && !in_array(false, $matchedValues, true);
-                        $matchedCount = array_sum($matchedValues); // Count how many transactions matched
+                        // Special handling for 'amount' criterion: use aggregated totals, not individual matches
+                        if ($rule === 'amount') {
+                            // Amount is matched if aggregated diff is essentially zero (within 0.01 for floating point precision)
+                            $criterionMatched = $diff !== null && abs($diff) < 0.01;
+                            $matchedCount = $criterionMatched ? count($matchedValues) : 0;
+                        } else {
+                            // For other criteria: matched only if ALL items have it met
+                            $criterionMatched = count($matchedValues) === $group->count() && !in_array(false, $matchedValues, true);
+                            $matchedCount = array_sum($matchedValues);
+                        }
+                        
+                        if ($criterionMatched) {
+                            $matchedCriteriaCount++;
+                        }
+                        
                         $aggregatedCriteria[] = [
                             'rule' => $rule,
-                            'matched' => $allMatched,
+                            'matched' => $criterionMatched,
                             'matched_count' => $matchedCount,
                             'total_count' => count($matchedValues),
                         ];
                     }
+                    
+                    // Recalculate aggregated confidence based on corrected criteria (only for parent/first record)
+                    // Confidence = number of matched criteria / total criteria
+                    if ($totalCriteriaCount > 0 && $group->count() > 1) {
+                        // Multi-transaction group: recalculate confidence based on aggregated criteria
+                        $aggregatedConfidence = $matchedCriteriaCount / $totalCriteriaCount;
+                    }
+                    // For single transactions, keep the original confidence
                 }
 
                 return [
@@ -301,27 +360,22 @@ class ReconciliationController extends Controller
             })->values();
         }
 
-        // Filter grouped matches by reconciliation status
+        // Filter grouped matches by reconciliation status (already done at DB level, but apply again for consistency)
         if ($reconciliationFilter === 'hide_reconciled') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                // Hide matches that have been reconciled (where reconcile_type is not null)
                 return empty($group['first']->reconcile_type);
             })->values();
         } elseif ($reconciliationFilter === 'show_reconciled') {
             $groupedMatches = $groupedMatches->filter(function ($group) {
-                // Show only matches that have been reconciled (where reconcile_type is not null)
                 return !empty($group['first']->reconcile_type);
             })->values();
         }
         // 'show_all' doesn't need filtering
 
-        $perPage = 50;
-        $page = (int) $request->query('page', 1);
-        $pagedGroups = $groupedMatches->forPage($page, $perPage)->values();
-
+        // Use the paginator from fundserv IDs pagination, but with grouped matches
         $matchesPaginator = new LengthAwarePaginator(
-            $pagedGroups,
-            $groupedMatches->count(),
+            $groupedMatches->values(),
+            $fundservIdsPaginated->total(),
             $perPage,
             $page,
             [
@@ -329,6 +383,7 @@ class ReconciliationController extends Controller
                 'query' => $request->query(),
             ]
         );
+        $pagedGroups = $groupedMatches->values();
 
         return view('reconciliations.matches', compact(
             'matchesPaginator',
