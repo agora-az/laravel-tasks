@@ -38,6 +38,8 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/api/matches/{matchId}/reconcile', [ReconciliationController::class, 'reconcileMatch'])->name('api.matches.reconcile');
     Route::post('/api/matches/{matchId}/reconcile-group', [ReconciliationController::class, 'reconcileMatchGroup'])->name('api.matches.reconcile-group');
     Route::post('/api/matches/{matchId}/clear-reconciliation', [ReconciliationController::class, 'clearReconciliation'])->name('api.matches.clear-reconciliation');
+    Route::get('/api/search-fields', [ReconciliationController::class, 'getSearchFields'])->name('api.search.fields');
+    Route::post('/api/search-transactions', [ReconciliationController::class, 'searchTransactions'])->name('api.search.transactions');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');

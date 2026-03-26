@@ -82,7 +82,7 @@ class ReconciliationController extends Controller
     {
         Log::info('Matches page loaded');
         $sort = $request->query('sort', 'matched_at');
-        $direction = strtolower($request->query('direction', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $direction = strtolower($request->query('direction', 'asc')) === 'asc' ? 'asc' : 'desc';
         $sortable = ['viefund', 'fundserv', 'bank', 'difference', 'confidence', 'matched_at'];
 
         if (!in_array($sort, $sortable, true)) {
@@ -90,15 +90,12 @@ class ReconciliationController extends Controller
         }
 
         // Get reconciliation filter from query parameters
-        // Default: hide_reconciled (hide reconciled matches)
-        // Options: show_all, hide_reconciled, show_reconciled
         $reconciliationFilter = $request->query('reconciliation_filter', 'hide_reconciled');
         if (!in_array($reconciliationFilter, ['show_all', 'hide_reconciled', 'show_reconciled'])) {
             $reconciliationFilter = 'hide_reconciled';
         }
 
         // Get criterion filters from query parameters
-        // Format: criteria_order_id=matched, criteria_settlement_date=unmatched, etc.
         $criteriaFilters = [];
         $availableCriteria = ['order_id', 'settlement_date', 'transaction_type', 'amount', 'fund_code', 'source_id'];
         foreach ($availableCriteria as $criterion) {
@@ -107,6 +104,12 @@ class ReconciliationController extends Controller
                 $criteriaFilters[$criterion] = $filterValue;
             }
         }
+
+        // Get search filters from query parameters
+        $searchTable = $request->query('search_table');
+        $searchField = $request->query('search_field');
+        $searchValue = $request->query('search_value');
+
         $totalMatches = DB::table('reconciliation_matches')->count();
         $fundservTotal = DB::table('fundserv_transactions')->count();
         $viefundTotal = DB::table('viefund_transactions')->count();
@@ -127,37 +130,86 @@ class ReconciliationController extends Controller
             ->distinct('left_id')
             ->count('left_id');
 
-        // Step 1: Get distinct fundserv IDs with pagination (limit by groups, not individual matches)
+        // Step 1: Determine which transaction IDs match the search criteria
+        $searchConstraintIds = null;
+        $searchConstraintType = null; // 'left_id', 'right_id', or 'bank_transaction_id'
+        
+        if ($searchTable && $searchField && $searchValue) {
+            if ($searchTable === 'viefund') {
+                $searchConstraintIds = VieFundTransaction::where($searchField, 'LIKE', '%' . $searchValue . '%')
+                    ->pluck('id')
+                    ->toArray();
+                $searchConstraintType = 'left_id';
+            } elseif ($searchTable === 'fundserv') {
+                $searchConstraintIds = DB::table('fundserv_transactions')
+                    ->where($searchField, 'LIKE', '%' . $searchValue . '%')
+                    ->pluck('id')
+                    ->toArray();
+                $searchConstraintType = 'right_id';
+            } elseif ($searchTable === 'bank') {
+                $searchConstraintIds = DB::table('bank_transactions')
+                    ->where($searchField, 'LIKE', '%' . $searchValue . '%')
+                    ->pluck('id')
+                    ->toArray();
+                $searchConstraintType = 'bank_transaction_id';
+            }
+        }
+
+        // Step 2: Get distinct VieFund fund_wo_number groups with pagination
         $perPage = 50;
         $page = (int) $request->query('page', 1);
         
-        $fundservIdQuery = DB::table('reconciliation_matches as rm')
-            ->leftJoin('viefund_transactions as v_left', function ($join) {
-                $join->on('rm.left_id', '=', 'v_left.id')
-                    ->where('rm.left_type', '=', 'viefund');
-            })
-            ->leftJoin('fundserv_transactions as f_right', function ($join) {
-                $join->on('rm.right_id', '=', 'f_right.id')
-                    ->where('rm.right_type', '=', 'fundserv');
-            });
+        // Query fund_wo_numbers directly from viefund_transactions when searching VieFund
+        // This ensures we get ALL fund_wo_numbers from matching viefund transactions, not just those with matches
+        if ($searchConstraintType === 'left_id' && $searchConstraintIds) {
+            // Get distinct fund_wo_numbers from the matching viefund transactions
+            $fundWoPaginated = DB::table('viefund_transactions')
+                ->whereIn('id', $searchConstraintIds)
+                ->distinct('fund_wo_number')
+                ->select('fund_wo_number')
+                ->orderBy('fund_wo_number', $direction)
+                ->paginate($perPage, ['*'], 'page', $page);
+        } else {
+            // For searches on other transaction types, use the original logic
+            $fundWoQuery = DB::table('reconciliation_matches as rm')
+                ->leftJoin('viefund_transactions as v_left', function ($join) {
+                    $join->on('rm.left_id', '=', 'v_left.id')
+                        ->where('rm.left_type', '=', 'viefund');
+                })
+                ->leftJoin('fundserv_transactions as f_right', function ($join) {
+                    $join->on('rm.right_id', '=', 'f_right.id')
+                        ->where('rm.right_type', '=', 'fundserv');
+                });
 
-        // Apply reconciliation filter at database level
-        if ($reconciliationFilter === 'hide_reconciled') {
-            $fundservIdQuery->whereNull('rm.reconcile_type');
-        } elseif ($reconciliationFilter === 'show_reconciled') {
-            $fundservIdQuery->whereNotNull('rm.reconcile_type');
+            // Apply search constraint
+            if ($searchConstraintIds && !empty($searchConstraintIds)) {
+                if ($searchConstraintType === 'right_id') {
+                    $fundWoQuery->whereIn('rm.right_id', $searchConstraintIds);
+                } elseif ($searchConstraintType === 'bank_transaction_id') {
+                    $fundWoQuery->whereIn('rm.bank_transaction_id', $searchConstraintIds);
+                }
+            }
+
+            // Apply reconciliation filter at database level
+            if ($reconciliationFilter === 'hide_reconciled') {
+                $fundWoQuery->whereNull('rm.reconcile_type');
+            } elseif ($reconciliationFilter === 'show_reconciled') {
+                $fundWoQuery->whereNotNull('rm.reconcile_type');
+            }
+
+            // Get distinct fund_wo_number groups for pagination
+            $fundWoPaginated = $fundWoQuery
+                ->distinct('v_left.fund_wo_number')
+                ->select('v_left.fund_wo_number')
+                ->orderBy('v_left.fund_wo_number', $direction)
+                ->paginate($perPage, ['*'], 'page', $page);
         }
 
-        // Get distinct fundserv IDs for pagination
-        $fundservIdsPaginated = $fundservIdQuery
-            ->distinct('rm.right_id')
-            ->select('rm.right_id')
-            ->orderBy('rm.right_id', $direction)
-            ->paginate($perPage, ['*'], 'page', $page);
+        $fundWoNumbers = $fundWoPaginated->pluck('fund_wo_number')->toArray();
 
-        $fundservIds = $fundservIdsPaginated->pluck('right_id')->toArray();
-
-        // Step 2: Load all matches for these fundserv IDs
+        // Step 3: Load all matches for these fund_wo_number groups
+        // IMPORTANT: We use $fundWoNumbers (derived from search constraints) to determine which groups to show,
+        // but we GET ALL reconciliation_matches for those groups, not just the ones matching the search criteria
         $matches = DB::table('reconciliation_matches as rm')
             ->leftJoin('viefund_transactions as v_left', function ($join) {
                 $join->on('rm.left_id', '=', 'v_left.id')
@@ -167,6 +219,19 @@ class ReconciliationController extends Controller
                 $join->on('rm.right_id', '=', 'f_right.id')
                     ->where('rm.right_type', '=', 'fundserv');
             })
+            ->where('rm.left_type', '=', 'viefund');  // Only viefund matches
+
+        // Filter by reconciliation status
+        if ($reconciliationFilter === 'hide_reconciled') {
+            $matches->whereNull('rm.reconcile_type');
+        } elseif ($reconciliationFilter === 'show_reconciled') {
+            $matches->whereNotNull('rm.reconcile_type');
+        }
+
+        // Filter to only the fund_wo_numbers from this page (this is the only filter from search)
+        $matches->whereIn('v_left.fund_wo_number', $fundWoNumbers);
+
+        $matches = $matches
             ->select([
                 'rm.id',
                 'rm.match_rule',
@@ -192,8 +257,8 @@ class ReconciliationController extends Controller
                 'f_right.actual_amount as fundserv_actual_amount',
                 'f_right.settlement_date as fundserv_settlement_date',
             ])
-            ->whereIn('rm.right_id', $fundservIds)
-            ->orderBy('rm.id')
+            ->orderBy('v_left.fund_wo_number', $direction)
+            ->orderBy('v_left.trx_id', 'asc')
             ->get();
 
         $matches = $matches->map(function ($row) {
@@ -218,8 +283,8 @@ class ReconciliationController extends Controller
 
         $groupedMatches = $matches
             ->groupBy(function ($match) {
-                // Group by fundserv transaction ID
-                return "fundserv|{$match->right_id}";
+                // Group by fund_wo_number (to match pagination strategy)
+                return $match->viefund_fund_wo_number;
             })
             ->map(function ($group, $key) {
                 // Sort group by VieFund Trx ID ascending (for consistent child record ordering)
@@ -372,10 +437,10 @@ class ReconciliationController extends Controller
         }
         // 'show_all' doesn't need filtering
 
-        // Use the paginator from fundserv IDs pagination, but with grouped matches
+        // Use the paginator from fund_wo_number pagination, but with grouped matches
         $matchesPaginator = new LengthAwarePaginator(
             $groupedMatches->values(),
-            $fundservIdsPaginated->total(),
+            $fundWoPaginated->total(),
             $perPage,
             $page,
             [
@@ -946,6 +1011,122 @@ class ReconciliationController extends Controller
             return response()->json(['success' => true, 'message' => 'Reconciliation cleared successfully']);
         } catch (\Exception $e) {
             Log::error('Error clearing reconciliation: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Get available search fields for each transaction table
+     */
+    public function getSearchFields()
+    {
+        return response()->json([
+            'viefund' => [
+                'trx_id' => 'Transaction ID',
+                'client_name' => 'Client Name',
+                'account_id' => 'Account ID',
+                'source_id' => 'Source ID',
+                'fund_code' => 'Fund Code',
+                'fund_wo_number' => 'Fund WO Number',
+                'status' => 'Status',
+                'plan_description' => 'Plan Description',
+            ],
+            'fundserv' => [
+                'order_id' => 'Order ID',
+                'dealer_account_id' => 'Dealer Account ID',
+                'source_identifier' => 'Source Identifier',
+                'fund_id' => 'Fund ID',
+                'code' => 'Code',
+                'company' => 'Company',
+                'src' => 'Source',
+            ],
+            'bank' => [
+                'account_number' => 'Account Number',
+                'description' => 'Description',
+                'type' => 'Type',
+                'currency' => 'Currency',
+            ],
+        ]);
+    }
+
+    /**
+     * Search transactions and return matching reconciliation match IDs
+     */
+    public function searchTransactions(Request $request)
+    {
+        $validated = $request->validate([
+            'field' => 'required|string',
+            'value' => 'required|string',
+            'table' => 'required|in:viefund,fundserv,bank',
+        ]);
+
+        try {
+            $field = $validated['field'];
+            $value = $validated['value'];
+            $table = $validated['table'];
+
+            $matchIds = [];
+
+            // Search based on transaction table
+            if ($table === 'viefund') {
+                // Find VieFund transactions matching the search
+                $transactionIds = VieFundTransaction::where($field, 'LIKE', '%' . $value . '%')
+                    ->pluck('id')
+                    ->toArray();
+                
+                if (empty($transactionIds)) {
+                    return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
+                }
+
+                // Get all reconciliation_matches where left_id is in these transaction IDs
+                $matchIds = DB::table('reconciliation_matches')
+                    ->whereIn('left_id', $transactionIds)
+                    ->pluck('id')
+                    ->toArray();
+
+            } elseif ($table === 'fundserv') {
+                // Find Fundserv transactions matching the search
+                $transactionIds = DB::table('fundserv_transactions')
+                    ->where($field, 'LIKE', '%' . $value . '%')
+                    ->pluck('id')
+                    ->toArray();
+                
+                if (empty($transactionIds)) {
+                    return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
+                }
+
+                // Get all reconciliation_matches where right_id is in these transaction IDs
+                $matchIds = DB::table('reconciliation_matches')
+                    ->whereIn('right_id', $transactionIds)
+                    ->pluck('id')
+                    ->toArray();
+
+            } elseif ($table === 'bank') {
+                // Find Bank transactions matching the search
+                $transactionIds = DB::table('bank_transactions')
+                    ->where($field, 'LIKE', '%' . $value . '%')
+                    ->pluck('id')
+                    ->toArray();
+                
+                if (empty($transactionIds)) {
+                    return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
+                }
+
+                // Get all reconciliation_matches where bank_transaction_id is in these transaction IDs
+                $matchIds = DB::table('reconciliation_matches')
+                    ->whereIn('bank_transaction_id', $transactionIds)
+                    ->pluck('id')
+                    ->toArray();
+            }
+
+            if (empty($matchIds)) {
+                return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No matching records found']);
+            }
+
+            return response()->json(['success' => true, 'matchIds' => $matchIds, 'count' => count($matchIds)]);
+
+        } catch (\Exception $e) {
+            Log::error('Search error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }

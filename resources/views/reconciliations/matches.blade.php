@@ -161,6 +161,38 @@
                     </div>
                 </div>
             </div>
+
+        <!-- Search Section -->
+        <div style="padding: 16px; border-bottom: 1px solid #e2e8f0; background: #f9fafb;">
+            <div style="font-weight: 600; color: #2d3748; margin-bottom: 12px; font-size: 14px;">Search Transactions:</div>
+            <div style="display: flex; gap: 12px; align-items: flex-end;">
+                <div style="flex: 0 0 200px;">
+                    <label style="font-size: 12px; color: #4a5568; font-weight: 500; display: block; margin-bottom: 4px;">Transaction Table</label>
+                    <select id="search-table-select" onchange="populateSearchFields()" style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer; width: 100%;">
+                        <option value="">Select Table...</option>
+                        <option value="viefund">VieFund Transactions</option>
+                        <option value="fundserv">Fundserv Transactions</option>
+                        <option value="bank">Bank Transactions</option>
+                    </select>
+                </div>
+                <div style="flex: 0 0 200px;">
+                    <label style="font-size: 12px; color: #4a5568; font-weight: 500; display: block; margin-bottom: 4px;">Search Field</label>
+                    <select id="search-field-select" style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; cursor: pointer; width: 100%; display: none;">
+                        <option value="">Select Field...</option>
+                    </select>
+                </div>
+                <div style="flex: 1;">
+                    <label style="font-size: 12px; color: #4a5568; font-weight: 500; display: block; margin-bottom: 4px;">Search Value</label>
+                    <input type="text" id="search-value-input" placeholder="Enter search value..." style="padding: 6px 8px; border: 1px solid #cbd5e0; border-radius: 4px; background: white; color: #2d3748; font-size: 13px; width: 100%;">
+                </div>
+                <button onclick="performSearch()" style="background: #3182ce; color: white; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s; font-size: 13px; white-space: nowrap;" onmouseover="this.style.backgroundColor='#2c5aa0'" onmouseout="this.style.backgroundColor='#3182ce'">
+                    Find
+                </button>
+                <button onclick="clearSearch()" style="background: #cbd5e0; color: #2d3748; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 600; cursor: pointer; transition: background 0.2s; font-size: 13px; white-space: nowrap;" onmouseover="this.style.backgroundColor='#a0aec0'" onmouseout="this.style.backgroundColor='#cbd5e0'">
+                    Reset
+                </button>
+            </div>
+            <div id="search-results-info" style="margin-top: 12px; font-size: 13px; color: #4a5568; display: none;"></div>
         </div>
 
         <!-- Results Summary Row -->
@@ -1369,5 +1401,134 @@
                 }
             });
         });
+        
+        // Search functionality
+        let searchFields = {};
+
+        // Populate search fields dynamically
+        function populateSearchFields() {
+            const table = document.getElementById('search-table-select').value;
+            const fieldSelect = document.getElementById('search-field-select');
+            
+            if (!table) {
+                fieldSelect.style.display = 'none';
+                fieldSelect.innerHTML = '<option value="">Select Field...</option>';
+                return;
+            }
+
+            // Fetch available fields for selected table
+            fetch('/api/search-fields')
+                .then(response => response.json())
+                .then(data => {
+                    searchFields = data;
+                    const fields = data[table] || {};
+                    
+                    fieldSelect.innerHTML = '<option value="">Select Field...</option>';
+                    Object.entries(fields).forEach(([key, label]) => {
+                        const option = document.createElement('option');
+                        option.value = key;
+                        option.textContent = label;
+                        fieldSelect.appendChild(option);
+                    });
+                    
+                    fieldSelect.style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error fetching search fields:', error);
+                    fieldSelect.style.display = 'none';
+                });
+        }
+
+        // Perform search
+        function performSearch() {
+            const table = document.getElementById('search-table-select').value;
+            const field = document.getElementById('search-field-select').value;
+            const value = document.getElementById('search-value-input').value.trim();
+
+            if (!table || !field || !value) {
+                alert('Please select a table, field, and enter a search value');
+                return;
+            }
+
+            // Build URL with search parameters
+            const params = new URLSearchParams(window.location.search);
+            params.set('search_table', table);
+            params.set('search_field', field);
+            params.set('search_value', value);
+            params.set('page', '1'); // Reset to first page for new search
+            
+            // Redirect to filtered page
+            window.location.search = params.toString();
+        }
+
+        // Clear search
+        function clearSearch() {
+            const params = new URLSearchParams(window.location.search);
+            params.delete('search_table');
+            params.delete('search_field');
+            params.delete('search_value');
+            params.set('page', '1');
+            
+            // Clear input fields
+            document.getElementById('search-table-select').value = '';
+            document.getElementById('search-field-select').value = '';
+            document.getElementById('search-field-select').style.display = 'none';
+            document.getElementById('search-value-input').value = '';
+            document.getElementById('search-results-info').style.display = 'none';
+            
+            // Redirect to clear search
+            window.location.search = params.toString();
+        }
+
+        // Allow Enter key to trigger search
+        document.getElementById('search-value-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // Initialize search fields if they're in URL parameters
+        function initializeSearch() {
+            const params = new URLSearchParams(window.location.search);
+            const searchTable = params.get('search_table');
+            const searchField = params.get('search_field');
+            const searchValue = params.get('search_value');
+
+            if (searchTable && searchField && searchValue) {
+                document.getElementById('search-table-select').value = searchTable;
+                document.getElementById('search-value-input').value = searchValue;
+                
+                // Populate fields for the table
+                fetch('/api/search-fields')
+                    .then(response => response.json())
+                    .then(data => {
+                        const fieldSelect = document.getElementById('search-field-select');
+                        const fields = data[searchTable] || {};
+                        
+                        fieldSelect.innerHTML = '<option value="">Select Field...</option>';
+                        Object.entries(fields).forEach(([key, label]) => {
+                            const option = document.createElement('option');
+                            option.value = key;
+                            option.textContent = label;
+                            fieldSelect.appendChild(option);
+                        });
+                        
+                        fieldSelect.value = searchField;
+                        fieldSelect.style.display = 'block';
+                        
+                        // Show search info
+                        const infoDiv = document.getElementById('search-results-info');
+                        infoDiv.style.display = 'block';
+                        infoDiv.style.color = '#4a5568';
+                        infoDiv.style.background = '#e8f4f8';
+                        infoDiv.style.padding = '8px 12px';
+                        infoDiv.style.borderRadius = '4px';
+                        infoDiv.innerHTML = `Searching: <strong>${fields[searchField] || searchField}</strong> = <strong>"${searchValue}"</strong> in <strong>${searchTable}</strong>`;
+                    });
+            }
+        }
+
+        // Initialize on page load
+        initializeSearch();
     </script>
 @endsection
