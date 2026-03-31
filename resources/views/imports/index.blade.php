@@ -67,39 +67,6 @@
 
     <h2 style="margin-bottom: 20px;">Import Transaction Data</h2>
 
-    <!-- Quick Links to View Data -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-        <a href="{{ route('imports.transactions', ['type' => 'viefund']) }}" class="card" style="text-decoration: none; color: inherit; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h3 style="margin-bottom: 5px; color: #2d3748;">View VieFund Data</h3>
-                    <p style="color: #718096; font-size: 14px;">Browse imported VieFund transactions</p>
-                </div>
-                <div style="font-size: 32px;">📊</div>
-            </div>
-        </a>
-        
-        <a href="{{ route('imports.transactions', ['type' => 'fundserv']) }}" class="card" style="text-decoration: none; color: inherit; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h3 style="margin-bottom: 5px; color: #2d3748;">View Fundserv Data</h3>
-                    <p style="color: #718096; font-size: 14px;">Browse imported Fundserv transactions</p>
-                </div>
-                <div style="font-size: 32px;">📈</div>
-            </div>
-        </a>
-        
-        <a href="{{ route('imports.transactions', ['type' => 'bank']) }}" class="card" style="text-decoration: none; color: inherit; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <h3 style="margin-bottom: 5px; color: #2d3748;">View Bank Data</h3>
-                    <p style="color: #718096; font-size: 14px;">Browse imported bank statement transactions</p>
-                </div>
-                <div style="font-size: 32px;">🏦</div>
-            </div>
-        </a>
-    </div>
-
     <!-- Unified Import Form -->
     <div class="card">
         <h3 style="margin-bottom: 15px; color: #2d3748;">Upload Transaction Data</h3>
@@ -116,6 +83,8 @@
                 <option value="viefund">VieFund - Cash Position Data</option>
                 <option value="fundserv">Fundserv - Transaction Data</option>
                 <option value="bank">Bank Statements</option>
+                <option value="account-fees">Account Fees - Fee/Tax Data</option>
+                <option value="advisory-fees">Advisory Fees - Advisory Account Activity</option>
             </select>
         </div>
 
@@ -189,15 +158,8 @@
                     console.log('Upload success, response:', response);
                     
                     if (response && response.success) {
-                        // Only show overlay on final import results (has 'imported' field)
-                        // Intermediate chunk uploads have 'chunkIndex' field instead
-                        if (response.hasOwnProperty('imported')) {
-                            console.log('Import completed:', response);
-                            showUploadOverlay(response.imported || 0, response.duplicates || 0, response.errors || 0);
-                        } else {
-                            // Intermediate chunk receipt
-                            console.log('Chunk received:', response);
-                        }
+                        console.log('Import completed:', response);
+                        showUploadOverlay(response.imported || 0, response.duplicates || 0, response.errors || 0);
                     }
                 });
 
@@ -260,6 +222,18 @@
                 formatInfo.style.borderColor = '#f6ad55';
                 formatText.style.color = '#7c2d12';
                 formatText.textContent = 'Upload a bank statement PDF (e.g., CIBC account statement) with Transaction details section.';
+            } else if (type === 'account-fees') {
+                formatInfo.style.display = 'block';
+                formatInfo.style.background = '#f3e8ff';
+                formatInfo.style.borderColor = '#a78bfa';
+                formatText.style.color = '#553c9a';
+                formatText.textContent = 'Rep Code, Client Name, Plan Description, Account Description, Transaction Type, Wire Number, Trade Date, Settlement Date, Amount, Order Status, Trust Status';
+            } else if (type === 'advisory-fees') {
+                formatInfo.style.display = 'block';
+                formatInfo.style.background = '#fef3c7';
+                formatInfo.style.borderColor = '#f59e0b';
+                formatText.style.color = '#78350f';
+                formatText.textContent = 'Rep Code, First Name, Last Name, Full Name, Plan ID, Plan Info, Transaction Type, Fund Code, Fund ID, Fund Description, Description, Trust Status, Effective Date, Settlement Date, Amount, Currency';
             } else {
                 formatInfo.style.display = 'none';
             }

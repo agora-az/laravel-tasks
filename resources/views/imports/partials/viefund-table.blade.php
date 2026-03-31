@@ -5,7 +5,7 @@
 @endif
 
 <!-- Summary Card -->
-<div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white;">
+<div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #38a169 0%, #234e52 100%); color: white;">
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: center;">
         <div>
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ number_format($totalRecords) }}</div>
@@ -62,12 +62,11 @@
                         <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Rep Code</th>
                         <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Account ID</th>
                         <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
+                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Fund WO#</th>
                         <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
                         <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Settlement Date</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Processing Date</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Status</th>
-                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Available CAD</th>
-                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Balance CAD</th>
+                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
+                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Balance</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -81,19 +80,15 @@
                             data-trx-type="{{ $transaction->trx_type }}"
                             data-trade-date="{{ $transaction->trade_date }}"
                             data-settlement-date="{{ $transaction->settlement_date }}"
-                            data-processing-date="{{ $transaction->processing_date }}"
+                            data-fund-wo-number="{{ $transaction->fund_wo_number }}"
                             data-source-id="{{ $transaction->source_id }}"
-                            data-status="{{ $transaction->status }}"
                             data-amount="{{ $transaction->amount }}"
                             data-balance="{{ $transaction->balance }}"
                             data-fund-code="{{ $transaction->fund_code }}"
                             data-fund-trx-type="{{ $transaction->fund_trx_type }}"
                             data-fund-trx-amount="{{ $transaction->fund_trx_amount }}"
                             data-fund-settlement-source="{{ $transaction->fund_settlement_source }}"
-                            data-fund-wo-number="{{ $transaction->fund_wo_number }}"
                             data-fund-source-id="{{ $transaction->fund_source_id }}"
-                            data-available-cad="{{ $transaction->available_cad }}"
-                            data-balance-cad="{{ $transaction->balance_cad }}"
                             data-currency="{{ $transaction->currency }}"
                             data-plan-description="{{ $transaction->plan_description }}"
                             data-institution="{{ $transaction->institution }}">
@@ -101,15 +96,14 @@
                             <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->rep_code }}</td>
                             <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->account_id }}</td>
                             <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->trx_type ?? '-' }}</td>
+                            <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->fund_wo_number ?? '-' }}</td>
                             <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->trade_date ?? '-' }}</td>
                             <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->settlement_date ?? '-' }}</td>
-                            <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->processing_date ?? '-' }}</td>
-                            <td style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $transaction->status ?? '-' }}</td>
                             <td style="padding: 12px; text-align: right; color: #2d3748; font-weight: 500; font-family: monospace;">
-                                ${{ number_format($transaction->available_cad, 2) }}
+                                ${{ number_format($transaction->amount, 2) }}
                             </td>
                             <td style="padding: 12px; text-align: right; color: #2d3748; font-weight: 500; font-family: monospace;">
-                                ${{ number_format($transaction->balance_cad, 2) }}
+                                ${{ number_format($transaction->balance, 2) }}
                             </td>
                         </tr>
                     @endforeach

@@ -1,18 +1,18 @@
 <!-- Summary Cards -->
 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px;">
-    <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white;">
+    <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white;">
         <div style="text-align: center;">
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ number_format($totalRecords) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Total Records</div>
         </div>
     </div>
-    <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white;">
+    <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white;">
         <div style="text-align: center;">
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactions->total()) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Total Transactions</div>
         </div>
     </div>
-    <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white;">
+    <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white;">
         <div style="text-align: center;">
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ $transactions->currentPage() }}/{{ $transactions->lastPage() }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Current Page</div>

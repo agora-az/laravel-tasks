@@ -6,22 +6,30 @@
     <h2 style="margin-bottom: 30px;">Dashboard</h2>
 
     <!-- Summary Cards -->
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 40px;">
+    <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 20px; margin-bottom: 40px;">
         <div class="card" style="background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
             <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($totalTransactions) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Total Transactions</div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
+        <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5282 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
             <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($fundservTotal) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Fundserv Transactions</div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
+        <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #234e52 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
             <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($viefundTotal) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">VieFund Transactions</div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #dd6b20 0%, #c05621 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
+        <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
             <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($bankTotal) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Bank Transactions</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #805ad5 0%, #553c9a 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
+            <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($accountFeesTotal) }}</div>
+            <div style="font-size: 14px; opacity: 0.9;">Account Fees</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #d69e2e 0%, #7d6608 100%); color: white; padding: 25px; text-align: center; border-radius: 8px;">
+            <div style="font-size: 28px; font-weight: bold; margin-bottom: 8px;">{{ number_format($advisoryFeesTotal) }}</div>
+            <div style="font-size: 14px; opacity: 0.9;">Advisory Fees</div>
         </div>
     </div>
 

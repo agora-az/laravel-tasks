@@ -69,14 +69,14 @@
     </div>
 
     <!-- Summary Cards -->
-    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px; margin-bottom: 20px;">
-        <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white;">
+    <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 20px; margin-bottom: 20px;">
+        <div class="card" style="background: linear-gradient(135deg, #5a7585 0%, #345262 100%); color: white;">
             <div style="text-align: center;">
                 <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ $imports->total() }}</div>
                 <div style="font-size: 14px; opacity: 0.9;">Total Import Attempts</div>
             </div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white;">
+        <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #234e52 100%); color: white;">
             <div style="text-align: center;">
                 <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
                     {{ \App\Models\Import::where('type', 'viefund')->where('status', 'completed')->count() }}
@@ -84,7 +84,7 @@
                 <div style="font-size: 14px; opacity: 0.9;">Successful VieFund Imports</div>
             </div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white;">
+        <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5282 100%); color: white;">
             <div style="text-align: center;">
                 <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
                     {{ \App\Models\Import::where('type', 'fundserv')->where('status', 'completed')->count() }}
@@ -92,7 +92,7 @@
                 <div style="font-size: 14px; opacity: 0.9;">Successful Fundserv Imports</div>
             </div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #805ad5 0%, #6b46c1 100%); color: white;">
+        <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white;">
             <div style="text-align: center;">
                 <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
                     {{ \App\Models\Import::where('type', 'bank')->where('status', 'completed')->count() }}
@@ -100,7 +100,23 @@
                 <div style="font-size: 14px; opacity: 0.9;">Successful Bank Imports</div>
             </div>
         </div>
-        <div class="card" style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white;">
+        <div class="card" style="background: linear-gradient(135deg, #805ad5 0%, #553c9a 100%); color: white;">
+            <div style="text-align: center;">
+                <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
+                    {{ \App\Models\Import::where('type', 'account-fees')->where('status', 'completed')->count() }}
+                </div>
+                <div style="font-size: 14px; opacity: 0.9;">Successful Account Fees Imports</div>
+            </div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #d69e2e 0%, #7d6608 100%); color: white;">
+            <div style="text-align: center;">
+                <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
+                    {{ \App\Models\Import::where('type', 'advisory-fees')->where('status', 'completed')->count() }}
+                </div>
+                <div style="font-size: 14px; opacity: 0.9;">Successful Advisory Fees Imports</div>
+            </div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #e53e3e 0%, #7d1b1b 100%); color: white;">
             <div style="text-align: center;">
                 <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
                     {{ \App\Models\Import::where('status', 'failed')->count() }}
@@ -136,8 +152,8 @@
                                     {{ $import->created_at->format('Y-m-d H:i:s') }}
                                 </td>
                                 <td style="padding: 12px;">
-                                    <span style="background: {{ $import->type == 'viefund' ? '#e6fffa' : ($import->type == 'fundserv' ? '#ebf8ff' : '#faf5ff') }}; 
-                                                 color: {{ $import->type == 'viefund' ? '#234e52' : ($import->type == 'fundserv' ? '#2c5282' : '#553c9a') }}; 
+                                    <span style="background: {{ $import->type == 'viefund' ? '#e6fffa' : ($import->type == 'fundserv' ? '#ebf8ff' : ($import->type == 'bank' ? '#fffaf0' : ($import->type == 'account-fees' ? '#faf5ff' : '#fef5e7'))) }}; 
+                                                 color: {{ $import->type == 'viefund' ? '#234e52' : ($import->type == 'fundserv' ? '#2c5282' : ($import->type == 'bank' ? '#7c2d12' : ($import->type == 'account-fees' ? '#553c9a' : '#7d6608'))) }}; 
                                                  padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase;">
                                         {{ $import->type }}
                                     </span>

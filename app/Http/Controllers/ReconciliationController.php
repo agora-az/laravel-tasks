@@ -674,7 +674,9 @@ class ReconciliationController extends Controller
         $fundservTotal = DB::table('fundserv_transactions')->count();
         $viefundTotal = DB::table('viefund_transactions')->count();
         $bankTotal = DB::table('bank_transactions')->count();
-        $totalTransactions = $fundservTotal + $viefundTotal + $bankTotal;
+        $accountFeesTotal = DB::table('account_fee_transactions')->count();
+        $advisoryFeesTotal = DB::table('advisory_fee_transactions')->count();
+        $totalTransactions = $fundservTotal + $viefundTotal + $bankTotal + $accountFeesTotal + $advisoryFeesTotal;
 
         // Get matched counts
         $fundservMatched = DB::table('reconciliation_matches')
@@ -730,6 +732,8 @@ class ReconciliationController extends Controller
             'fundservTotal',
             'viefundTotal',
             'bankTotal',
+            'accountFeesTotal',
+            'advisoryFeesTotal',
             'totalTransactions',
             'fundservMatched',
             'viefundMatched',

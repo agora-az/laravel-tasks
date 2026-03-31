@@ -8,6 +8,8 @@ use Illuminate\Queue\SerializesModels;
 use App\Models\VieFundTransaction;
 use App\Models\FundservTransaction;
 use App\Models\BankTransaction;
+use App\Models\AccountFeeTransaction;
+use App\Models\AdvisoryFeeTransaction;
 use App\Models\Import;
 use Smalot\PdfParser\Parser;
 use Carbon\Carbon;
@@ -95,6 +97,10 @@ class ProcessImportJob implements ShouldQueue
                 $result = $this->processFundservFile();
             } elseif ($this->importType === 'bank') {
                 $result = $this->processBankFile();
+            } elseif ($this->importType === 'account-fees') {
+                $result = $this->processAccountFeesFile();
+            } elseif ($this->importType === 'advisory-fees') {
+                $result = $this->processAdvisoryFeesFile();
             } else {
                 throw new \Exception('Invalid import type: ' . $this->importType);
             }
@@ -163,6 +169,9 @@ class ProcessImportJob implements ShouldQueue
             \Log::error("Could not open file for reading", ['path' => $this->filePath]);
             throw new \Exception('Could not open file');
         }
+
+        // Apply UTF-8 encoding stream filter
+        stream_filter_append($handle, 'convert.iconv.ISO-8859-1/UTF-8');
 
         \Log::info("File opened successfully");
 
@@ -298,6 +307,9 @@ class ProcessImportJob implements ShouldQueue
         if (!$handle) {
             throw new \Exception('Could not open file');
         }
+
+        // Apply UTF-8 encoding stream filter
+        stream_filter_append($handle, 'convert.iconv.ISO-8859-1/UTF-8');
 
         $header = fgetcsv($handle);
         $normalizeHeader = fn($value) => preg_replace(
@@ -468,6 +480,9 @@ class ProcessImportJob implements ShouldQueue
                         throw new \Exception('Could not open file');
                     }
 
+                    // Apply UTF-8 encoding stream filter
+                    stream_filter_append($handle, 'convert.iconv.ISO-8859-1/UTF-8');
+
                     $header = fgetcsv($handle);
 
                     while (($data = fgetcsv($handle)) !== false) {
@@ -517,6 +532,274 @@ class ProcessImportJob implements ShouldQueue
             \Log::error("Error in bank processing", ['error' => $e->getMessage()]);
             throw $e;
         }
+    }
+
+    private function processAccountFeesFile()
+    {
+        \Log::info("processAccountFeesFile started", ['import_id' => $this->importId]);
+
+        $handle = fopen($this->filePath, 'r');
+        if (!$handle) {
+            throw new \Exception('Could not open file');
+        }
+
+        // Apply UTF-8 encoding stream filter
+        stream_filter_append($handle, 'convert.iconv.ISO-8859-1/UTF-8');
+
+        $header = fgetcsv($handle);
+        if (!$header) {
+            fclose($handle);
+            throw new \Exception('Could not read CSV header');
+        }
+
+        $normalizeHeader = fn($value) => preg_replace('/[^a-z0-9]/', '', strtolower(trim((string) $value)));
+
+        $headerMap = [];
+        foreach ($header as $index => $label) {
+            $headerMap[$normalizeHeader($label)] = $index;
+        }
+
+        \Log::info("Account fees CSV headers", ['count' => count($headerMap), 'headers' => array_keys($headerMap)]);
+
+        $imported = 0;
+        $duplicates = 0;
+        $errors = [];
+        $batch = [];
+        $batchSize = 10; // Reduced from 25 to conserve memory
+        $batchHashes = []; // Track hashes within this batch
+        $lineNumber = 1;
+
+        while (($data = fgetcsv($handle)) !== false) {
+            $lineNumber++;
+
+            $nonEmpty = array_filter($data, fn($v) => trim((string) $v) !== '');
+            if (empty($nonEmpty)) {
+                continue;
+            }
+
+            try {
+                $getValue = fn(string $key) => $data[$headerMap[$key] ?? null] ?? null;
+
+                $recordData = [
+                    'rep_code' => $this->cleanString($getValue('repcode')),
+                    'client_name' => $this->cleanString($getValue('clientname')),
+                    'plan_description' => $this->cleanString($getValue('plandescription')),
+                    'account_description' => $this->cleanString($getValue('accountdescription')),
+                    'transaction_type' => $this->cleanString($getValue('transactiontype')),
+                    'wire_number' => $this->cleanString($getValue('wirenumber')),
+                    'trade_date' => $this->parseDate($getValue('tradedate')),
+                    'settlement_date' => $this->parseDate($getValue('settlementdate')),
+                    'amount' => $this->parseAmount($getValue('amount') ?? '0'),
+                    'order_status' => $this->cleanString($getValue('orderstatus')),
+                    'trust_status' => $this->cleanString($getValue('truststatus')),
+                    'user_id' => auth()->id(),
+                    'import_id' => $this->importId,
+                ];
+
+                $hashData = $recordData;
+                unset($hashData['import_id']);
+                // Include filename and row number to make duplicates within a file distinguishable
+                $hashInput = json_encode([
+                    'filename' => $this->originalFilename,
+                    'row_number' => $lineNumber,
+                    'data' => $hashData,
+                ]);
+                $record_hash = hash('sha256', $hashInput);
+
+                // Check both DB and within-batch for duplicates
+                if (!AccountFeeTransaction::where('record_hash', $record_hash)->exists() && !isset($batchHashes[$record_hash])) {
+                    $recordData['record_hash'] = $record_hash;
+                    $batch[] = $recordData;
+                    $batchHashes[$record_hash] = true; // Mark as seen in this batch
+
+                    if (count($batch) >= $batchSize) {
+                        try {
+                            AccountFeeTransaction::insert($batch);
+                            $imported += count($batch);
+                        } catch (\Exception $insertError) {
+                            \Log::error("Batch insert failed", ['error' => $insertError->getMessage(), 'batch_size' => count($batch)]);
+                            $errors[] = "Batch error: " . $insertError->getMessage();
+                        }
+                        $batch = [];
+                        $batchHashes = [];
+                    }
+                } else {
+                    $duplicates++;
+                }
+
+                if (($lineNumber - 1) % 50000 === 0 && $lineNumber > 1) {
+                    \Log::info("Account fees progress", ['lines_read' => $lineNumber, 'imported' => $imported, 'duplicates' => $duplicates]);
+                }
+            } catch (\Exception $e) {
+                $errors[] = "Line {$lineNumber}: " . $e->getMessage();
+                if (count($errors) <= 5) {
+                    \Log::error("Account fees import error", ['line' => $lineNumber, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+
+        if (!empty($batch)) {
+            try {
+                AccountFeeTransaction::insert($batch);
+                $imported += count($batch);
+            } catch (\Exception $insertError) {
+                \Log::error("Final batch insert failed", ['error' => $insertError->getMessage(), 'batch_size' => count($batch)]);
+                $errors[] = "Final batch error: " . $insertError->getMessage();
+            }
+        }
+
+        fclose($handle);
+
+        if (!empty($errors)) {
+            \Log::error("Account fees import completed with errors", ['errors_count' => count($errors), 'first_errors' => array_slice($errors, 0, 10)]);
+        }
+
+        \Log::info("Account fees import completed", ['imported' => $imported, 'duplicates' => $duplicates, 'errors' => count($errors)]);
+
+        return [
+            'imported' => $imported,
+            'duplicates' => $duplicates,
+            'errors' => count($errors),
+        ];
+    }
+
+    private function processAdvisoryFeesFile()
+    {
+        \Log::info("processAdvisoryFeesFile started", ['import_id' => $this->importId]);
+
+        $handle = fopen($this->filePath, 'r');
+        if (!$handle) {
+            throw new \Exception('Could not open file');
+        }
+
+        // Apply UTF-8 encoding stream filter
+        stream_filter_append($handle, 'convert.iconv.ISO-8859-1/UTF-8');
+
+        $header = fgetcsv($handle);
+        if (!$header) {
+            fclose($handle);
+            throw new \Exception('Could not read CSV header');
+        }
+
+        $normalizeHeader = fn($value) => preg_replace('/[^a-z0-9]/', '', strtolower(trim((string) $value)));
+
+        $headerMap = [];
+        foreach ($header as $index => $label) {
+            $headerMap[$normalizeHeader($label)] = $index;
+        }
+
+        \Log::info("Advisory fees CSV headers", ['count' => count($headerMap), 'headers' => array_keys($headerMap)]);
+
+        $imported = 0;
+        $duplicates = 0;
+        $errors = [];
+        $batch = [];
+        $batchSize = 10; // Reduced from 25 to conserve memory
+        $batchHashes = []; // Track hashes within this batch
+        $lineNumber = 1;
+
+        while (($data = fgetcsv($handle)) !== false) {
+            $lineNumber++;
+
+            $nonEmpty = array_filter($data, fn($v) => trim((string) $v) !== '');
+            if (empty($nonEmpty)) {
+                continue;
+            }
+
+            try {
+                $getValue = fn(string $key) => $data[$headerMap[$key] ?? null] ?? null;
+
+                $firstName = $this->cleanString($getValue('firstname'));
+                $lastName = $this->cleanString($getValue('lastname'));
+                $fullName = trim(($firstName ?? '') . ' ' . ($lastName ?? ''));
+
+                $recordData = [
+                    'rep_code' => $this->cleanString($getValue('repcode')),
+                    'first_name' => $firstName,
+                    'last_name' => $lastName,
+                    'full_name' => $fullName ?: null,
+                    'plan_id' => $this->cleanString($getValue('planid')),
+                    'plan_info' => $this->cleanString($getValue('planinfo')),
+                    'transaction_type' => $this->cleanString($getValue('type')),
+                    'fund_code' => $this->cleanString($getValue('fundcode')),
+                    'fund_id' => $this->cleanString($getValue('fundid')),
+                    'fund_description' => $this->cleanString($getValue('description')),
+                    'description' => $this->cleanString($getValue('description')),
+                    'trust_status' => $this->cleanString($getValue('truststatus')),
+                    'effective_date' => $this->parseDate($getValue('effectivedate')),
+                    'settlement_date' => $this->parseDate($getValue('settlementdate')),
+                    'amount' => $this->parseAmount($getValue('amount') ?? '0'),
+                    'currency' => $this->cleanString($getValue('currency')),
+                    'created_user_id' => auth()->id(),
+                    'last_modified_user_id' => auth()->id(),
+                    'import_id' => $this->importId,
+                ];
+
+                $hashData = $recordData;
+                unset($hashData['import_id']);
+                // Include filename and row number to make duplicates within a file distinguishable
+                $hashInput = json_encode([
+                    'filename' => $this->originalFilename,
+                    'row_number' => $lineNumber,
+                    'data' => $hashData,
+                ]);
+                $record_hash = hash('sha256', $hashInput);
+
+                // Check both DB and within-batch for duplicates
+                if (!AdvisoryFeeTransaction::where('record_hash', $record_hash)->exists() && !isset($batchHashes[$record_hash])) {
+                    $recordData['record_hash'] = $record_hash;
+                    $batch[] = $recordData;
+                    $batchHashes[$record_hash] = true; // Mark as seen in this batch
+
+                    if (count($batch) >= $batchSize) {
+                        try {
+                            AdvisoryFeeTransaction::insert($batch);
+                            $imported += count($batch);
+                        } catch (\Exception $insertError) {
+                            \Log::error("Advisory batch insert failed", ['error' => $insertError->getMessage(), 'batch_size' => count($batch)]);
+                            $errors[] = "Batch error: " . $insertError->getMessage();
+                        }
+                        $batch = [];
+                        $batchHashes = [];
+                    }
+                } else {
+                    $duplicates++;
+                }
+
+                if (($lineNumber - 1) % 50000 === 0 && $lineNumber > 1) {
+                    \Log::info("Advisory fees progress", ['lines_read' => $lineNumber, 'imported' => $imported, 'duplicates' => $duplicates]);
+                }
+            } catch (\Exception $e) {
+                $errors[] = "Line {$lineNumber}: " . $e->getMessage();
+                if (count($errors) <= 5) {
+                    \Log::error("Advisory fees import error", ['line' => $lineNumber, 'error' => $e->getMessage()]);
+                }
+            }
+        }
+
+        if (!empty($batch)) {
+            try {
+                AdvisoryFeeTransaction::insert($batch);
+                $imported += count($batch);
+            } catch (\Exception $insertError) {
+                \Log::error("Advisory final batch insert failed", ['error' => $insertError->getMessage(), 'batch_size' => count($batch)]);
+                $errors[] = "Final batch error: " . $insertError->getMessage();
+            }
+        }
+
+        fclose($handle);
+
+        if (!empty($errors)) {
+            \Log::error("Advisory fees import completed with errors", ['errors_count' => count($errors), 'first_errors' => array_slice($errors, 0, 10)]);
+        }
+
+        \Log::info("Advisory fees import completed", ['imported' => $imported, 'duplicates' => $duplicates, 'errors' => count($errors)]);
+
+        return [
+            'imported' => $imported,
+            'duplicates' => $duplicates,
+            'errors' => count($errors),
+        ];
     }
 
     private function parseBankStatementText(string $text): array

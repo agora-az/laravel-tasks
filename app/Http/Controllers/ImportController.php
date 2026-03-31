@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 use App\Models\VieFundTransaction;
 use App\Models\FundservTransaction;
 use App\Models\BankTransaction;
+use App\Models\AccountFeeTransaction;
+use App\Models\AdvisoryFeeTransaction;
 use App\Models\Import;
 use Smalot\PdfParser\Parser;
 
@@ -19,7 +21,7 @@ class ImportController extends Controller
     public function transactions(Request $request, $type = 'viefund')
     {
         // Validate type
-        if (!in_array($type, ['viefund', 'fundserv', 'bank'])) {
+        if (!in_array($type, ['viefund', 'fundserv', 'bank', 'account-fees', 'advisory-fees'])) {
             $type = 'viefund';
         }
 
@@ -43,8 +45,17 @@ class ImportController extends Controller
             
             if ($request->has('search')) {
                 $search = $request->search;
-                $query->where(function($q) use ($search) {
-                    $q->where('company', 'like', "%{$search}%")
+                // Check if search term is a date in format YYYY-MM-DD
+                $isDateFormat = preg_match('/^\d{4}-\d{2}-\d{2}$/', $search);
+                
+                $query->where(function($q) use ($search, $isDateFormat) {
+                    if ($isDateFormat) {
+                        // Search date fields
+                        $q->where('settlement_date', 'like', "%{$search}%")
+                          ->orWhere('trade_date', 'like', "%{$search}%");
+                    }
+                    // Always search standard fields
+                    $q->orWhere('company', 'like', "%{$search}%")
                       ->orWhere('order_id', 'like', "%{$search}%")
                       ->orWhere('dealer_account_id', 'like', "%{$search}%")
                       ->orWhere('fund_id', 'like', "%{$search}%");
@@ -53,7 +64,7 @@ class ImportController extends Controller
             
             $totalRecords = FundservTransaction::count();
             $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
-        } else { // bank
+        } elseif ($type === 'bank') {
             $query = BankTransaction::query();
 
             if ($request->has('search')) {
@@ -66,6 +77,36 @@ class ImportController extends Controller
 
             $totalRecords = BankTransaction::count();
             $transactions = $query->orderBy('txn_date', 'desc')->paginate(50);
+        } elseif ($type === 'account-fees') {
+            $query = AccountFeeTransaction::query();
+
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function($q) use ($search) {
+                    $q->where('client_name', 'like', "%{$search}%")
+                      ->orWhere('rep_code', 'like', "%{$search}%")
+                      ->orWhere('transaction_type', 'like', "%{$search}%")
+                      ->orWhere('plan_description', 'like', "%{$search}%");
+                });
+            }
+
+            $totalRecords = AccountFeeTransaction::count();
+            $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
+        } else { // advisory-fees
+            $query = AdvisoryFeeTransaction::query();
+
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function($q) use ($search) {
+                    $q->where('full_name', 'like', "%{$search}%")
+                      ->orWhere('rep_code', 'like', "%{$search}%")
+                      ->orWhere('transaction_type', 'like', "%{$search}%")
+                      ->orWhere('plan_info', 'like', "%{$search}%");
+                });
+            }
+
+            $totalRecords = AdvisoryFeeTransaction::count();
+            $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
         }
 
         return view('imports.transactions', compact('transactions', 'totalRecords', 'type'));
@@ -74,7 +115,7 @@ class ImportController extends Controller
     public function upload(Request $request)
     {
         $request->validate([
-            'import_type' => 'required|in:viefund,fundserv,bank',
+            'import_type' => 'required|in:viefund,fundserv,bank,account-fees,advisory-fees',
             'csv_file' => 'required|file|mimes:csv,txt,pdf|max:102400',
         ]);
 
@@ -87,6 +128,10 @@ class ImportController extends Controller
             return $this->fundservUpload($request);
         } elseif ($type === 'bank') {
             return $this->bankUpload($request);
+        } elseif ($type === 'account-fees') {
+            return $this->accountFeesUpload($request);
+        } elseif ($type === 'advisory-fees') {
+            return $this->advisoryFeesUpload($request);
         }
 
         return redirect()->route('imports.index')

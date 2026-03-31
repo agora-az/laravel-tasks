@@ -4,10 +4,11 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Queue;
 use App\Models\VieFundTransaction;
 use App\Models\FundservTransaction;
 use App\Models\BankTransaction;
+use App\Models\AccountFeeTransaction;
+use App\Models\AdvisoryFeeTransaction;
 use App\Models\Import;
 use App\Jobs\ProcessImportJob;
 use Smalot\PdfParser\Parser;
@@ -55,7 +56,7 @@ class ChunkedUploadController extends Controller
 
             $request->validate([
                 'file' => 'required|file',
-                'importType' => 'required|in:viefund,fundserv,bank',
+                'importType' => 'required|in:viefund,fundserv,bank,account-fees,advisory-fees',
                 'originalFilename' => 'required|string',
             ]);
 
@@ -236,30 +237,30 @@ class ChunkedUploadController extends Controller
                 'importType' => $importType,
             ]);
 
-            // Execute processing job synchronously (no queue worker available on Azure)
-            // The job's handle() method will:
-            // - Set 30-minute time limit
-            // - Process the file
-            // - Update Import record with results
-            // - Clean up temp directory in finally block
-            $job = new ProcessImportJob($finalFilePath, $importType, $originalFilename, $import->id, $tempDir);
-            $job->handle();
-
-            \Log::info('ProcessImportJob executed successfully', [
-                'import_id' => $import->id,
-            ]);
-
-            // Refresh import record to get updated counts
-            $import->refresh();
-
-            return response()->json([
+            // Return response immediately so Dropzone doesn't retry
+            // Process the file after the response is sent using register_shutdown_function
+            $response = response()->json([
                 'success' => true,
-                'message' => 'File processing completed',
+                'message' => 'File uploaded and processing started',
                 'import_id' => $import->id,
-                'imported' => $import->imported_count ?? 0,
-                'duplicates' => $import->duplicate_count ?? 0,
-                'errors' => $import->error_count ?? 0,
             ]);
+
+            // Use register_shutdown_function to process job after response is sent
+            // This prevents Dropzone from timing out and retrying chunks
+            register_shutdown_function(function () use ($finalFilePath, $importType, $originalFilename, $import, $tempDir) {
+                try {
+                    $job = new ProcessImportJob($finalFilePath, $importType, $originalFilename, $import->id, $tempDir);
+                    $job->handle();
+                    
+                    \Log::info('ProcessImportJob executed successfully', [
+                        'import_id' => $import->id,
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('Error in background ProcessImportJob: ' . $e->getMessage());
+                }
+            });
+
+            return $response;
         } catch (\Exception $e) {
             \Log::error('Error in mergeChunks: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
             $this->cleanupTempDirectory("{$storagePath}/{$uploadDir}");

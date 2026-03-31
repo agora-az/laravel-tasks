@@ -5,7 +5,7 @@
 @endif
 
 <!-- Summary Card -->
-<div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white;">
+<div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #3182ce 0%, #2c5282 100%); color: white;">
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: center;">
         <div>
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ number_format($totalRecords) }}</div>
@@ -32,7 +32,7 @@
 <div class="card" style="margin-bottom: 20px;">
     <div style="display: flex; gap: 10px;">
         <form action="{{ route('imports.transactions', ['type' => 'fundserv']) }}" method="GET" style="flex: 1; display: flex; gap: 10px;">
-            <input type="text" name="search" placeholder="Search by company, order ID, dealer account, fund ID..."
+            <input type="text" name="search" placeholder="Search by company, order ID, dealer account, fund ID, or date (YYYY-MM-DD)..."
                    value="{{ request('search') }}"
                    style="flex: 1; padding: 10px; border: 1px solid #cbd5e0; border-radius: 4px;">
             <button type="submit" class="btn" style="padding: 10px 30px;">Search</button>
