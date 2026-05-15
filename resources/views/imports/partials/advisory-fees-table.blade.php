@@ -4,6 +4,64 @@
     </div>
 @endif
 
+<!-- Transaction Type Cards -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
+    <!-- VieFund Card -->
+    <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #234e52 100%); color: white; padding: 20px;">
+        <div style="text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 8px;">📊</div>
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactionCounts['viefund'] ?? 0) }}</div>
+            <div style="font-size: 13px; opacity: 0.9;">VieFund</div>
+        </div>
+    </div>
+
+    <!-- Fundserv Card -->
+    <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5282 100%); color: white; padding: 20px;">
+        <div style="text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 8px;">📈</div>
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactionCounts['fundserv'] ?? 0) }}</div>
+            <div style="font-size: 13px; opacity: 0.9;">Fundserv</div>
+        </div>
+    </div>
+
+    <!-- Bank Card -->
+    <div class="card" style="background: linear-gradient(135deg, #d97706 0%, #7c2d12 100%); color: white; padding: 20px;">
+        <div style="text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 8px;">🏦</div>
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactionCounts['bank'] ?? 0) }}</div>
+            <div style="font-size: 13px; opacity: 0.9;">Bank</div>
+        </div>
+    </div>
+
+    <!-- Account Fees Card -->
+    <div class="card" style="background: linear-gradient(135deg, #805ad5 0%, #553c9a 100%); color: white; padding: 20px;">
+        <div style="text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 8px;">💰</div>
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactionCounts['account-fees'] ?? 0) }}</div>
+            <div style="font-size: 13px; opacity: 0.9;">Account Fees</div>
+        </div>
+    </div>
+
+    <!-- Advisory Fees Card -->
+    <div class="card" style="background: linear-gradient(135deg, #d69e2e 0%, #7d6608 100%); color: white; padding: 20px;">
+        <div style="text-align: center;">
+            <div style="font-size: 28px; margin-bottom: 8px;">📋</div>
+            <div style="font-size: 24px; font-weight: bold; margin-bottom: 5px;">{{ number_format($transactionCounts['advisory-fees'] ?? 0) }}</div>
+            <div style="font-size: 13px; opacity: 0.9;">Advisory Fees</div>
+        </div>
+    </div>
+</div>
+
+<!-- Trigger Matching Button -->
+<div style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
+    <form method="POST" action="{{ route('reconciliations.matches.find') }}" style="display: inline;">
+        @csrf
+        <button type="submit" class="btn" style="padding: 12px 24px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s;">
+            ⚡ Run Matching Process
+        </button>
+    </form>
+</div>
+
 <!-- Summary Card -->
 <div class="card" style="margin-bottom: 20px; background: linear-gradient(135deg, #d69e2e 0%, #7d6608 100%); color: white;">
     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; text-align: center;">

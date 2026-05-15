@@ -50,6 +50,11 @@ Route::middleware('auth.check')->group(function () {
         Route::post('/matches/find', [ReconciliationController::class, 'runMatches'])->name('reconciliations.matches.find');
         Route::delete('/matches', [ReconciliationController::class, 'deleteMatches'])->name('reconciliations.matches.delete');
         Route::get('/matching-status/{sessionId}', [ReconciliationController::class, 'getMatchingStatus'])->name('reconciliations.matching.status');
+        
+        // Fee matching routes
+        Route::post('/fees/match', [ReconciliationController::class, 'runFeeMatching'])->name('reconciliations.fees.match');
+        Route::get('/fees/results', [ReconciliationController::class, 'feeMatchingResults'])->name('reconciliations.fee-matching-results');
+        
         Route::get('/create', [ReconciliationController::class, 'create'])->name('reconciliations.create');
         Route::post('/', [ReconciliationController::class, 'store'])->name('reconciliations.store');
         Route::get('/{id}', [ReconciliationController::class, 'show'])->name('reconciliations.show');

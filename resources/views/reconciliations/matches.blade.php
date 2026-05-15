@@ -66,7 +66,7 @@
     @endif
 
     <!-- Summary Cards -->
-    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 12px;">
+    <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 20px; margin-bottom: 12px;">
         <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">{{ number_format($totalMatches) }}</div>
             <div style="font-size: 14px; opacity: 0.9;">Total Matches</div>
@@ -88,6 +88,18 @@
                 {{ $bankTotal > 0 ? number_format(($bankMatched / $bankTotal) * 100, 1) : '0.0' }}%
             </div>
             <div style="font-size: 14px; opacity: 0.9;">Bank Matched ({{ number_format($bankMatched) }}/{{ number_format($bankTotal) }})</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #805ad5 0%, #553c9a 100%); color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
+                {{ $accountFeesTotal > 0 ? number_format(($accountFeesMatched / $accountFeesTotal) * 100, 1) : '0.0' }}%
+            </div>
+            <div style="font-size: 14px; opacity: 0.9;">Account Fees ({{ number_format($accountFeesMatched) }}/{{ number_format($accountFeesTotal) }})</div>
+        </div>
+        <div class="card" style="background: linear-gradient(135deg, #d69e2e 0%, #7d6608 100%); color: white; text-align: center;">
+            <div style="font-size: 32px; font-weight: bold; margin-bottom: 5px;">
+                {{ $advisoryFeesTotal > 0 ? number_format(($advisoryFeesMatched / $advisoryFeesTotal) * 100, 1) : '0.0' }}%
+            </div>
+            <div style="font-size: 14px; opacity: 0.9;">Advisory Fees ({{ number_format($advisoryFeesMatched) }}/{{ number_format($advisoryFeesTotal) }})</div>
         </div>
     </div>
 

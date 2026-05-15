@@ -9,6 +9,7 @@ use App\Models\MatchingSession;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\Reconciliation\VieFundFundservMatcher;
+use App\Services\Reconciliation\FeeTransactionMatcher;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class ReconciliationController extends Controller
@@ -114,6 +115,8 @@ class ReconciliationController extends Controller
         $fundservTotal = DB::table('fundserv_transactions')->count();
         $viefundTotal = DB::table('viefund_transactions')->count();
         $bankTotal = DB::table('bank_transactions')->count();
+        $accountFeesTotal = DB::table('account_fee_transactions')->count();
+        $advisoryFeesTotal = DB::table('advisory_fee_transactions')->count();
 
         $fundservMatched = DB::table('reconciliation_matches')
             ->where('right_type', 'fundserv')
@@ -127,6 +130,16 @@ class ReconciliationController extends Controller
 
         $bankMatched = DB::table('reconciliation_matches')
             ->where('left_type', 'bank')
+            ->distinct('left_id')
+            ->count('left_id');
+
+        $accountFeesMatched = DB::table('reconciliation_matches')
+            ->where('left_type', 'account-fee')
+            ->distinct('left_id')
+            ->count('left_id');
+
+        $advisoryFeesMatched = DB::table('reconciliation_matches')
+            ->where('left_type', 'advisory-fee')
             ->distinct('left_id')
             ->count('left_id');
 
@@ -457,9 +470,13 @@ class ReconciliationController extends Controller
             'fundservTotal',
             'viefundTotal',
             'bankTotal',
+            'accountFeesTotal',
+            'advisoryFeesTotal',
             'fundservMatched',
             'viefundMatched',
             'bankMatched',
+            'accountFeesMatched',
+            'advisoryFeesMatched',
             'sort',
             'direction',
             'criteriaFilters',
@@ -1133,5 +1150,41 @@ class ReconciliationController extends Controller
             Log::error('Search error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * Run fee transaction matching
+     */
+    public function runFeeMatching()
+    {
+        try {
+            $matcher = new FeeTransactionMatcher();
+            $result = $matcher->matchFeesToFees(false);
+
+            return redirect()->route('reconciliations.fee-matching-results')
+                ->with('success', "Fee matching completed! {$result['matched_count']} matches found.");
+        } catch (\Exception $e) {
+            Log::error('Fee matching error: ' . $e->getMessage());
+            return redirect()->back()
+                ->withErrors('error', 'An error occurred during fee matching: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Display fee matching results and unmatched fees
+     */
+    public function feeMatchingResults()
+    {
+        $matcher = new FeeTransactionMatcher();
+        $summary = $matcher->getMatchSummary();
+        
+        $unmatchedAccountFees = $matcher->getUnmatchedAccountFees()->paginate(50);
+        $unmatchedAdvisoryFees = $matcher->getUnmatchedAdvisoryFees()->paginate(50);
+
+        return view('reconciliations.fee-matching-results', compact(
+            'summary',
+            'unmatchedAccountFees',
+            'unmatchedAdvisoryFees'
+        ));
     }
 }

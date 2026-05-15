@@ -109,7 +109,16 @@ class ImportController extends Controller
             $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
         }
 
-        return view('imports.transactions', compact('transactions', 'totalRecords', 'type'));
+        // Get counts for all transaction types for the dashboard cards
+        $transactionCounts = [
+            'viefund' => VieFundTransaction::count(),
+            'fundserv' => FundservTransaction::count(),
+            'bank' => BankTransaction::count(),
+            'account-fees' => AccountFeeTransaction::count(),
+            'advisory-fees' => AdvisoryFeeTransaction::count(),
+        ];
+
+        return view('imports.transactions', compact('transactions', 'totalRecords', 'type', 'transactionCounts'));
     }
 
     public function upload(Request $request)

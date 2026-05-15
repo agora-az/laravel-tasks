@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\MatchingSession;
 use App\Models\VieFundTransaction;
 use App\Services\Reconciliation\VieFundFundservMatcher;
+use App\Services\Reconciliation\FeeTransactionMatcher;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
@@ -23,7 +24,7 @@ class MatchVieFundAsync extends Command
      *
      * @var string
      */
-    protected $description = 'Match VieFund to Fundserv transactions asynchronously with progress tracking';
+    protected $description = 'Run integrated matching (VieFund/Fundserv + Fees) asynchronously with progress tracking';
 
     /**
      * Execute the console command.
@@ -49,6 +50,20 @@ class MatchVieFundAsync extends Command
 
             $matcher = app(VieFundFundservMatcher::class);
             $matchedCount = $matcher->matchAllWithProgressTracking($session);
+            Log::info("MatchVieFundAsync: VieFund matching completed with {$matchedCount} matches");
+
+            // Now run fee matching
+            Log::info("MatchVieFundAsync: Starting fee matching for session {$sessionId}");
+            $this->info("Running fee matching...");
+            
+            $feeMatcher = app(FeeTransactionMatcher::class);
+            $feeResults = $feeMatcher->matchFeesToFees(false);
+            $feeMatchCount = $feeResults['matched_count'] ?? 0;
+            
+            Log::info("MatchVieFundAsync: Fee matching completed", $feeResults);
+            $this->info("Fee matching completed! Created {$feeMatchCount} fee matches.");
+
+            $totalMatches = $matchedCount + $feeMatchCount;
 
             // Auto-reconcile parent matches with 100% aggregated confidence
             // Get all groups and their aggregated confidence
@@ -85,12 +100,12 @@ class MatchVieFundAsync extends Command
             // Mark session as completed
             $session->update([
                 'status' => 'completed',
-                'matched_count' => $matchedCount,
+                'matched_count' => $totalMatches,
                 'completed_at' => now(),
             ]);
 
-            Log::info("MatchVieFundAsync: Completed for session {$sessionId}. Created {$matchedCount} matches.");
-            $this->info("Matching completed! Created {$matchedCount} matches.");
+            Log::info("MatchVieFundAsync: Completed for session {$sessionId}. Created {$totalMatches} total matches ({$matchedCount} VieFund, {$feeMatchCount} fees).");
+            $this->info("Matching completed! Created {$totalMatches} total matches ({$matchedCount} VieFund, {$feeMatchCount} fees).");
 
             return 0;
         } catch (\Exception $e) {
