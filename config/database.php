@@ -64,6 +64,20 @@ return [
             'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
+        'viefund_sqlsrv' => [
+            'driver' => 'sqlsrv',
+            'host' => env('VIEFUND_DB_HOST', 'localhost'),
+            'port' => env('VIEFUND_DB_PORT', 1433),
+            'database' => env('VIEFUND_DB_DATABASE', ''),
+            'username' => env('VIEFUND_DB_USERNAME', ''),
+            'password' => env('VIEFUND_DB_PASSWORD', ''),
+            'charset' => env('VIEFUND_DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'encrypt' => env('VIEFUND_DB_ENCRYPT', 'yes'),
+            'trust_server_certificate' => env('VIEFUND_DB_TRUST_SERVER_CERTIFICATE', 'false'),
+        ],
+
     ],
 
     'migrations' => 'migrations',
