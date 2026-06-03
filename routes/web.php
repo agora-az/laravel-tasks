@@ -5,6 +5,7 @@ use App\Http\Controllers\ReconciliationController;
 use App\Http\Controllers\ImportController;
 use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\RemoteVieFundController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -30,6 +31,13 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 // Protected routes - require authentication
 Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
+
+    // Remote VieFund live data
+    Route::get('/remote-viefund', [RemoteVieFundController::class, 'index'])->name('remote-viefund.index');
+    Route::post('/remote-viefund/sync', [RemoteVieFundController::class, 'sync'])->name('remote-viefund.sync');
+    Route::get('/remote-viefund/sync-status', [RemoteVieFundController::class, 'syncStatus'])->name('remote-viefund.sync-status');
+    Route::get('/remote-viefund/customers', [RemoteVieFundController::class, 'customers'])->name('remote-viefund.customers');
+    Route::get('/remote-viefund/plan-accounts', [RemoteVieFundController::class, 'planAccounts'])->name('remote-viefund.plan-accounts');
 
     // API routes
     Route::get('/api/matching-sessions/active', [ReconciliationController::class, 'getActiveMatchingSession'])->name('api.matching.active');
@@ -73,6 +81,7 @@ Route::middleware('auth.check')->group(function () {
 
         // Legacy transaction routes (kept for backwards compatibility with truncate)
         Route::get('/viefund/transactions', [ImportController::class, 'vieFundTransactions'])->name('imports.viefund.transactions');
+        Route::get('/viefund/export', [ImportController::class, 'exportVieFundCsv'])->name('imports.viefund.export');
         Route::get('/fundserv/transactions', [ImportController::class, 'fundservTransactions'])->name('imports.fundserv.transactions');
         Route::get('/bank/transactions', [ImportController::class, 'bankTransactions'])->name('imports.bank.transactions');
         Route::delete('/viefund/transactions/{id}', [ImportController::class, 'deleteVieFund'])->name('imports.viefund.delete');

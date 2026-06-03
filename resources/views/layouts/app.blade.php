@@ -20,6 +20,7 @@
                     <a href="/imports">Import</a>
                     <a href="/imports/history">Import History</a>
                     <a href="/imports/transactions">Transaction Data</a>
+                    <a href="/remote-viefund">Remote VieFund</a>
                     <a href="/reconciliations/matches">Reconciliation</a>
                     <a href="/reconciliations">Reports</a>
                     <form method="POST" action="{{ route('logout') }}" style="margin: 0;">

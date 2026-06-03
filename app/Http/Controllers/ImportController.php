@@ -10,6 +10,7 @@ use App\Models\AccountFeeTransaction;
 use App\Models\AdvisoryFeeTransaction;
 use App\Models\Import;
 use Smalot\PdfParser\Parser;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ImportController extends Controller
 {
@@ -27,16 +28,8 @@ class ImportController extends Controller
 
         if ($type === 'viefund') {
             $query = VieFundTransaction::query();
-            
-            if ($request->has('search')) {
-                $search = $request->search;
-                $query->where(function($q) use ($search) {
-                    $q->where('client_name', 'like', "%{$search}%")
-                      ->orWhere('rep_code', 'like', "%{$search}%")
-                      ->orWhere('account_id', 'like', "%{$search}%")
-                      ->orWhere('plan_description', 'like', "%{$search}%");
-                });
-            }
+
+            $this->applyVieFundSearch($query, trim((string) $request->query('search', '')));
             
             $totalRecords = VieFundTransaction::count();
             $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
@@ -928,17 +921,8 @@ class ImportController extends Controller
     public function vieFundTransactions(Request $request)
     {
         $query = VieFundTransaction::query();
-        
-        // Search functionality
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where(function($q) use ($search) {
-                $q->where('client_name', 'like', "%{$search}%")
-                  ->orWhere('rep_code', 'like', "%{$search}%")
-                  ->orWhere('account_id', 'like', "%{$search}%")
-                  ->orWhere('plan_description', 'like', "%{$search}%");
-            });
-        }
+
+        $this->applyVieFundSearch($query, trim((string) $request->query('search', '')));
         
         $transactions = $query->orderBy('created_at', 'desc')->paginate(50);
         $totalRecords = VieFundTransaction::count();
@@ -1021,6 +1005,85 @@ class ImportController extends Controller
 
         return redirect()->route('imports.bank.transactions')->with('success', 'All bank transactions deleted.');
     }
+
+    public function exportVieFundCsv(Request $request): StreamedResponse
+    {
+        $filename = 'viefund-transactions-' . now()->format('Ymd-His') . '.csv';
+        $search = trim((string) $request->query('search', ''));
+
+        $headers = [
+            'Client Name',
+            'Plan Description',
+            'Account ID',
+            'Created Date',
+            'Trade Date',
+            'Processing Date',
+            'Status',
+            'Balance',
+            'Fund Trx Type',
+            'Fund Settlement Source',
+            'Fund SourceID',
+            'Balance CAD',
+            'Rep Code',
+            'Institution',
+            'Trx ID',
+            'Txn Type',
+            'Settlement Date',
+            'Source ID',
+            'Amount',
+            'Fund Code',
+            'Fund Trx Amount',
+            'Fund WO#',
+            'Available CAD',
+            'Currency',
+        ];
+
+        return response()->streamDownload(function () use ($headers, $search) {
+            $handle = fopen('php://output', 'w');
+            fputcsv($handle, $headers);
+
+            $query = VieFundTransaction::query();
+
+            $this->applyVieFundSearch($query, $search);
+
+            $query
+                ->orderBy('id')
+                ->chunkById(1000, function ($transactions) use ($handle) {
+                    foreach ($transactions as $transaction) {
+                        fputcsv($handle, [
+                            $transaction->client_name,
+                            $transaction->plan_description,
+                            $transaction->account_id,
+                            $this->formatCsvDate($transaction->created_date, 'Y-m-d H:i:s'),
+                            $this->formatCsvDate($transaction->trade_date, 'Y-m-d'),
+                            $this->formatCsvDate($transaction->processing_date, 'Y-m-d'),
+                            $transaction->status,
+                            $transaction->balance,
+                            $transaction->fund_trx_type,
+                            $transaction->fund_settlement_source,
+                            $transaction->fund_source_id,
+                            $transaction->balance_cad,
+                            $transaction->rep_code,
+                            $transaction->institution,
+                            $transaction->trx_id,
+                            $transaction->trx_type,
+                            $this->formatCsvDate($transaction->settlement_date, 'Y-m-d'),
+                            $transaction->source_id,
+                            $transaction->amount,
+                            $transaction->fund_code,
+                            $transaction->fund_trx_amount,
+                            $transaction->fund_wo_number,
+                            $transaction->available_cad,
+                            $transaction->currency,
+                        ]);
+                    }
+                });
+
+            fclose($handle);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
+    }
     
     public function history()
     {
@@ -1028,6 +1091,23 @@ class ImportController extends Controller
         
         return view('imports.history', compact('imports'));
     }
+
+        private function formatCsvDate(mixed $value, string $format): string
+        {
+            if (empty($value)) {
+                return '';
+            }
+
+            if ($value instanceof \DateTimeInterface) {
+                return $value->format($format);
+            }
+
+            try {
+                return \Carbon\Carbon::parse((string) $value)->format($format);
+            } catch (\Throwable $e) {
+                return (string) $value;
+            }
+        }
     
     public function deleteImport($id)
     {
@@ -1051,5 +1131,19 @@ class ImportController extends Controller
             $transactions = BankTransaction::where('import_id', $id)->paginate(50);
             return view('imports.view-import', compact('import', 'transactions'));
         }
+    }
+
+    private function applyVieFundSearch($query, string $search): void
+    {
+        if ($search === '') {
+            return;
+        }
+
+        $query->where(function ($q) use ($search) {
+            $q->where('client_name', 'like', "%{$search}%")
+                ->orWhere('rep_code', 'like', "%{$search}%")
+                ->orWhere('account_id', 'like', "%{$search}%")
+                ->orWhere('plan_description', 'like', "%{$search}%");
+        });
     }
 }

@@ -80,8 +80,10 @@
                             data-trx-type="{{ $transaction->trx_type }}"
                             data-trade-date="{{ $transaction->trade_date }}"
                             data-settlement-date="{{ $transaction->settlement_date }}"
+                            data-processing-date="{{ $transaction->processing_date }}"
                             data-fund-wo-number="{{ $transaction->fund_wo_number }}"
                             data-source-id="{{ $transaction->source_id }}"
+                            data-status="{{ $transaction->status }}"
                             data-amount="{{ $transaction->amount }}"
                             data-balance="{{ $transaction->balance }}"
                             data-fund-code="{{ $transaction->fund_code }}"
@@ -89,6 +91,8 @@
                             data-fund-trx-amount="{{ $transaction->fund_trx_amount }}"
                             data-fund-settlement-source="{{ $transaction->fund_settlement_source }}"
                             data-fund-source-id="{{ $transaction->fund_source_id }}"
+                            data-available-cad="{{ $transaction->available_cad }}"
+                            data-balance-cad="{{ $transaction->balance_cad }}"
                             data-currency="{{ $transaction->currency }}"
                             data-plan-description="{{ $transaction->plan_description }}"
                             data-institution="{{ $transaction->institution }}">
@@ -133,9 +137,9 @@
         <div style="padding: 20px; max-height: 70vh; overflow: auto;">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div style="display: grid; grid-template-columns: 160px 1fr; row-gap: 8px; column-gap: 12px;">
-                    <div style="font-weight: 600; color: #2d3748;">Client Name</div><div data-field="client-name"></div>
+                    <div style="font-weight: 600; color: #2d3748;">Client / Customer Name</div><div data-field="client-name"></div>
                     <div style="font-weight: 600; color: #2d3748;">Plan Description</div><div data-field="plan-description"></div>
-                    <div style="font-weight: 600; color: #2d3748;">Account ID</div><div data-field="account-id"></div>
+                    <div style="font-weight: 600; color: #2d3748;">Account ID / Customer ID</div><div data-field="account-id"></div>
                     <div style="font-weight: 600; color: #2d3748;">Created Date</div><div data-field="created-date"></div>
                     <div style="font-weight: 600; color: #2d3748;">Trade Date</div><div data-field="trade-date"></div>
                     <div style="font-weight: 600; color: #2d3748;">Processing Date</div><div data-field="processing-date"></div>
@@ -182,11 +186,37 @@
             }
         };
 
+        const fieldToDataset = {
+            'client-name': 'clientName',
+            'plan-description': 'planDescription',
+            'account-id': 'accountId',
+            'created-date': 'createdDate',
+            'trade-date': 'tradeDate',
+            'processing-date': 'processingDate',
+            'status': 'status',
+            'balance': 'balance',
+            'fund-trx-type': 'fundTrxType',
+            'fund-settlement-source': 'fundSettlementSource',
+            'fund-source-id': 'fundSourceId',
+            'balance-cad': 'balanceCad',
+            'rep-code': 'repCode',
+            'institution': 'institution',
+            'trx-id': 'trxId',
+            'trx-type': 'trxType',
+            'settlement-date': 'settlementDate',
+            'source-id': 'sourceId',
+            'amount': 'amount',
+            'fund-code': 'fundCode',
+            'fund-trx-amount': 'fundTrxAmount',
+            'fund-wo-number': 'fundWoNumber',
+            'available-cad': 'availableCad',
+            'currency': 'currency',
+        };
+
         rows.forEach((row) => {
             row.addEventListener('click', () => {
-                Object.keys(row.dataset).forEach((key) => {
-                    const field = key.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
-                    setField(field, row.dataset[key]);
+                Object.entries(fieldToDataset).forEach(([field, datasetKey]) => {
+                    setField(field, row.dataset[datasetKey]);
                 });
                 modal.style.display = 'flex';
             });

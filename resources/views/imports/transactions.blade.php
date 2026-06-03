@@ -5,9 +5,16 @@
 @section('content')
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
         <h2 style="margin: 0;">💹 Transaction Data</h2>
-        <a href="{{ route('imports.index') }}" class="btn" style="background: #718096; padding: 10px 20px; text-decoration: none;">
-            ← Back to Import
-        </a>
+        <div style="display: flex; gap: 10px;">
+            @if($type === 'viefund')
+                <a href="{{ route('imports.viefund.export', ['search' => request('search')]) }}" class="btn" style="background: #2b6cb0; padding: 10px 20px; text-decoration: none;">
+                    Export CSV
+                </a>
+            @endif
+            <a href="{{ route('imports.index') }}" class="btn" style="background: #718096; padding: 10px 20px; text-decoration: none;">
+                ← Back to Import
+            </a>
+        </div>
     </div>
 
     <!-- Tabs -->
