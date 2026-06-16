@@ -27,6 +27,8 @@ return [
             // 'Reinvested Distribution',
             // 'Rebalancing redemption',
             // 'Rebalancing purchase',
+            // 'External Transfer-out',
+            // 'External Transfer-in'
         ],
 
         'cash_trx_type' => [
@@ -34,5 +36,15 @@ return [
         ],
 
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Hide Zero-Amount Transactions
+    |--------------------------------------------------------------------------
+    | When true, rows where the transaction amount is exactly $0.00 are
+    | excluded from the Remote VieFund transactions view.
+    */
+
+    'hide_zero_amount' => true,
 
 ];

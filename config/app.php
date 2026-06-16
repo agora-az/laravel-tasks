@@ -22,4 +22,9 @@ return [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
+
+    // Comma-separated list of nav item keys to hide.
+    // Available keys: transaction_data, reconciliation, reports
+    // Example: NAV_HIDE=transaction_data,reconciliation,reports
+    'nav_hide' => array_filter(array_map('trim', explode(',', env('NAV_HIDE', '')))),
 ];

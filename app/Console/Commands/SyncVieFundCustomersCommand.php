@@ -37,7 +37,7 @@ class SyncVieFundCustomersCommand extends Command
             ->select('ID', 'FirstName', 'LastName')
             ->orderBy('ID')
             ->chunk($chunk, function ($rows) use ($now, &$syncedCustomers) {
-                $upsert = $rows->map(fn ($r) => [
+                $upsert = $rows->map(fn($r) => [
                     'viefund_customer_id' => $r->ID,
                     'first_name'          => $r->FirstName,
                     'last_name'           => $r->LastName,
@@ -67,7 +67,7 @@ class SyncVieFundCustomersCommand extends Command
             ->select('ID', 'iClientID', 'DealerAccountID')
             ->orderBy('ID')
             ->chunk($chunk, function ($rows) use ($now, &$syncedPlans) {
-                $upsert = $rows->map(fn ($r) => [
+                $upsert = $rows->map(fn($r) => [
                     'viefund_plan_id'        => $r->ID,
                     'viefund_customer_id'    => $r->iClientID,
                     'plan_dealer_account_id' => $r->DealerAccountID,
@@ -242,6 +242,16 @@ class SyncVieFundCustomersCommand extends Command
         if (file_exists($lockFile)) {
             @unlink($lockFile);
         }
+
+        // Bust the dashboard stats cache so the next load reflects fresh data
+        \Illuminate\Support\Facades\Cache::forget('viefund_dashboard_stats');
+        // Also bust the sync watermark cache
+        \Illuminate\Support\Facades\Cache::forget('viefund_remote_max_id');
+        // Bust all cached calculated balances (keys prefixed viefund_calc_balances_)
+        foreach (\Illuminate\Support\Facades\Cache::get('viefund_calc_balance_keys', []) as $key) {
+            \Illuminate\Support\Facades\Cache::forget($key);
+        }
+        \Illuminate\Support\Facades\Cache::forget('viefund_calc_balance_keys');
 
         return self::SUCCESS;
     }

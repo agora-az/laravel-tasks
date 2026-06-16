@@ -24,4 +24,22 @@ interface VieFundRemoteRepositoryInterface
     public function searchPlanAccounts(string $search): array;
 
     public function fetchDistinctTrxTypes(array $filters = []): array;
+
+    public function exportTransactions(?string $search = null, array $filters = []): Collection;
+
+    public function getLatestBalance(array $filters = []): ?float;
+
+    public function getCalculatedBalance(array $filters = []): ?float;
+
+    public function getCalculatedBalancesByPlan(array $filters = []): array;
+
+    public function getPageStartBalance(array $filters = [], int $page = 1, int $perPage = 50, ?string $search = null): float;
+
+    public function getPageStartBalancesByPlan(array $filters = [], int $page = 1, int $perPage = 50, ?string $search = null): array;
+
+    public function getPlanAccountSnapshot(string $accountId): ?object;
+
+    public function getDashboardStats(): array;
+
+    public function fetchMatchingPlanAccounts(?string $search, array $filters): array;
 }

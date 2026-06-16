@@ -34,10 +34,12 @@ Route::middleware('auth.check')->group(function () {
 
     // Remote VieFund live data
     Route::get('/remote-viefund', [RemoteVieFundController::class, 'index'])->name('remote-viefund.index');
+    Route::get('/remote-viefund/export', [RemoteVieFundController::class, 'export'])->name('remote-viefund.export');
     Route::post('/remote-viefund/sync', [RemoteVieFundController::class, 'sync'])->name('remote-viefund.sync');
     Route::get('/remote-viefund/sync-status', [RemoteVieFundController::class, 'syncStatus'])->name('remote-viefund.sync-status');
     Route::get('/remote-viefund/customers', [RemoteVieFundController::class, 'customers'])->name('remote-viefund.customers');
     Route::get('/remote-viefund/plan-accounts', [RemoteVieFundController::class, 'planAccounts'])->name('remote-viefund.plan-accounts');
+    Route::get('/remote-viefund/plan-account-snapshot', [RemoteVieFundController::class, 'planAccountSnapshot'])->name('remote-viefund.plan-account-snapshot');
 
     // API routes
     Route::get('/api/matching-sessions/active', [ReconciliationController::class, 'getActiveMatchingSession'])->name('api.matching.active');
@@ -58,11 +60,11 @@ Route::middleware('auth.check')->group(function () {
         Route::post('/matches/find', [ReconciliationController::class, 'runMatches'])->name('reconciliations.matches.find');
         Route::delete('/matches', [ReconciliationController::class, 'deleteMatches'])->name('reconciliations.matches.delete');
         Route::get('/matching-status/{sessionId}', [ReconciliationController::class, 'getMatchingStatus'])->name('reconciliations.matching.status');
-        
+
         // Fee matching routes
         Route::post('/fees/match', [ReconciliationController::class, 'runFeeMatching'])->name('reconciliations.fees.match');
         Route::get('/fees/results', [ReconciliationController::class, 'feeMatchingResults'])->name('reconciliations.fee-matching-results');
-        
+
         Route::get('/create', [ReconciliationController::class, 'create'])->name('reconciliations.create');
         Route::post('/', [ReconciliationController::class, 'store'])->name('reconciliations.store');
         Route::get('/{id}', [ReconciliationController::class, 'show'])->name('reconciliations.show');

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Services\Reconciliation\VieFundFundservMatcher;
 use App\Services\Reconciliation\FeeTransactionMatcher;
+use App\Services\VieFund\VieFundRemoteService;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class ReconciliationController extends Controller
@@ -683,86 +684,21 @@ class ReconciliationController extends Controller
     }
 
     /**
-     * Display the dashboard with reconciliation statistics.
+     * Display the dashboard with remote VieFund statistics.
      */
     public function dashboard()
     {
-        // Get totals
-        $fundservTotal = DB::table('fundserv_transactions')->count();
-        $viefundTotal = DB::table('viefund_transactions')->count();
-        $bankTotal = DB::table('bank_transactions')->count();
-        $accountFeesTotal = DB::table('account_fee_transactions')->count();
-        $advisoryFeesTotal = DB::table('advisory_fee_transactions')->count();
-        $totalTransactions = $fundservTotal + $viefundTotal + $bankTotal + $accountFeesTotal + $advisoryFeesTotal;
-
-        // Get matched counts
-        $fundservMatched = DB::table('reconciliation_matches')
-            ->where('right_type', 'fundserv')
-            ->distinct('right_id')
-            ->count('right_id');
-
-        $viefundMatched = DB::table('reconciliation_matches')
-            ->where('left_type', 'viefund')
-            ->distinct('left_id')
-            ->count('left_id');
-
-        $bankMatched = DB::table('reconciliation_matches')
-            ->where('left_type', 'bank')
-            ->distinct('left_id')
-            ->count('left_id');
-
-        $totalMatches = DB::table('reconciliation_matches')->count();
-
-        // Get match confidence distribution
-        $confidenceData = DB::table('reconciliation_matches')
-            ->select(DB::raw('FLOOR(confidence * 10) * 10 as confidence_range'), DB::raw('count(*) as count'))
-            ->groupBy('confidence_range')
-            ->orderBy('confidence_range')
-            ->get();
-
-        // Get matches by rule
-        $matchesByRule = DB::table('reconciliation_matches')
-            ->select('match_rule', DB::raw('count(*) as count'))
-            ->groupBy('match_rule')
-            ->get()
-            ->map(function ($item) {
-                $item->display_label = VieFundFundservMatcher::getRuleLabel($item->match_rule);
-                return $item;
+        $stats = null;
+        $connectionError = null;
+        try {
+            $stats = \Illuminate\Support\Facades\Cache::remember('viefund_dashboard_stats', 86400, function () {
+                return app(VieFundRemoteService::class)->getDashboardStats();
             });
+        } catch (\Exception $e) {
+            $connectionError = $e->getMessage();
+        }
 
-        // Get recent matches
-        $recentMatches = DB::table('reconciliation_matches')
-            ->latest('created_at')
-            ->limit(5)
-            ->get()
-            ->map(function ($item) {
-                $item->display_label = VieFundFundservMatcher::getRuleLabel($item->match_rule);
-                return $item;
-            });
-
-        // Calculate percentages
-        $fundservMatchPercentage = $fundservTotal > 0 ? round(($fundservMatched / $fundservTotal) * 100, 1) : 0;
-        $viefundMatchPercentage = $viefundTotal > 0 ? round(($viefundMatched / $viefundTotal) * 100, 1) : 0;
-        $bankMatchPercentage = $bankTotal > 0 ? round(($bankMatched / $bankTotal) * 100, 1) : 0;
-
-        return view('reconciliations.dashboard', compact(
-            'fundservTotal',
-            'viefundTotal',
-            'bankTotal',
-            'accountFeesTotal',
-            'advisoryFeesTotal',
-            'totalTransactions',
-            'fundservMatched',
-            'viefundMatched',
-            'bankMatched',
-            'totalMatches',
-            'fundservMatchPercentage',
-            'viefundMatchPercentage',
-            'bankMatchPercentage',
-            'confidenceData',
-            'matchesByRule',
-            'recentMatches'
-        ));
+        return view('reconciliations.dashboard', compact('stats', 'connectionError'));
     }
 
     /**

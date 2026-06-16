@@ -19,10 +19,16 @@
                     <a href="/dashboard">Dashboard</a>
                     <a href="/imports">Import</a>
                     <a href="/imports/history">Import History</a>
+                    @if(!in_array('transaction_data', config('app.nav_hide')))
                     <a href="/imports/transactions">Transaction Data</a>
+                    @endif
                     <a href="/remote-viefund">Remote VieFund</a>
+                    @if(!in_array('reconciliation', config('app.nav_hide')))
                     <a href="/reconciliations/matches">Reconciliation</a>
+                    @endif
+                    @if(!in_array('reports', config('app.nav_hide')))
                     <a href="/reconciliations">Reports</a>
+                    @endif
                     <form method="POST" action="{{ route('logout') }}" style="margin: 0;">
                         @csrf
                         <button type="submit" style="background: none; border: none; color: #3182ce; cursor: pointer; font-size: 14px; text-decoration: none;">Logout</button>
