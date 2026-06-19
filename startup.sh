@@ -24,6 +24,9 @@ mkdir -p storage/logs
 # Fix permissions
 chmod -R 755 storage bootstrap/cache
 
+# Run database migrations
+php artisan migrate --force || true
+
 # Cache Laravel config/routes/views (ignore errors if DB not ready)
 php artisan config:cache || true
 php artisan route:cache || true
