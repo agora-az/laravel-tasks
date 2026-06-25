@@ -95,9 +95,32 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
-        $fundCount  = (clone $fundBase)->distinct()->count('l.iTrxID');
-        $trustCount = (clone $trustBase)->count();
-        $total      = $fundCount + $trustCount;
+        $offset = ($page - 1) * $perPage;
+
+        // Fetch fund and trust group keys with sort info separately, then merge and
+        // paginate in PHP. This avoids a raw UNION ALL SQL string whose parameter
+        // binding order can be mishandled by certain pdo_sqlsrv driver versions,
+        // which caused the remote server to return far fewer rows than expected.
+        $allFundUnits = (clone $fundBase)
+            ->select([
+                DB::raw('l.iTrxID AS group_key'),
+                DB::raw("'fund' AS source_type"),
+                DB::raw('MIN(t.dtCreated) AS sort_date'),
+                DB::raw('MAX(p.DealerAccountID) AS plan_account_id'),
+            ])
+            ->groupBy('l.iTrxID')
+            ->get();
+
+        $allTrustUnits = (clone $trustBase)
+            ->select([
+                DB::raw('tr.ID AS group_key'),
+                DB::raw("'trust' AS source_type"),
+                DB::raw('tr.dtCreated AS sort_date'),
+                DB::raw('p.DealerAccountID AS plan_account_id'),
+            ])
+            ->get();
+
+        $total = $allFundUnits->count() + $allTrustUnits->count();
 
         if ($total === 0) {
             return new LengthAwarePaginator(collect(), 0, $perPage, $page, [
@@ -106,44 +129,18 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ]);
         }
 
-        // Build combined page-unit list via raw UNION (fund trx groups + trust rows)
-        $fundGroupsQ = (clone $fundBase)
-            ->select([
-                DB::raw('l.iTrxID AS group_key'),
-                DB::raw("'fund' AS source_type"),
-                DB::raw('MIN(t.dtCreated) AS sort_date'),
-                DB::raw('MAX(p.DealerAccountID) AS plan_account_id'),
+        $pageUnits = $allFundUnits->concat($allTrustUnits)
+            ->sortBy(fn($u) => [
+                (string) ($u->plan_account_id ?? ''),
+                (string) ($u->sort_date ?? '9999-12-31'),
+                (int) $u->group_key,
             ])
-            ->groupBy('l.iTrxID');
-
-        $trustGroupsQ = (clone $trustBase)
-            ->select([
-                DB::raw('tr.ID AS group_key'),
-                DB::raw("'trust' AS source_type"),
-                DB::raw('tr.dtCreated AS sort_date'),
-                DB::raw('p.DealerAccountID AS plan_account_id'),
-            ]);
-
-        $offset       = ($page - 1) * $perPage;
-        $pageUnitsSql =
-            "SELECT group_key, source_type FROM ("
-            . "({$fundGroupsQ->toSql()}) UNION ALL ({$trustGroupsQ->toSql()})"
-            . ") AS combined"
-            . " ORDER BY ISNULL(plan_account_id, '') ASC, ISNULL(sort_date, '9999-12-31') ASC, group_key ASC"
-            . " OFFSET {$offset} ROWS FETCH NEXT {$perPage} ROWS ONLY";
-
-        $pageUnits = collect(
-            DB::connection(self::CONNECTION)->select(
-                $pageUnitsSql,
-                array_merge($fundGroupsQ->getBindings(), $trustGroupsQ->getBindings())
-            )
-        );
+            ->values()
+            ->skip($offset)
+            ->take($perPage);
 
         $fundIds  = $pageUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
         $trustIds = $pageUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
-
-        // Legacy (kept for fund-only path compatibility)
-        $pageIds = collect($fundIds);
 
         $items = collect();
 
@@ -508,37 +505,37 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
-        $fundGroupsQ = (clone $fundBase)
+        $prevCount = ($page - 1) * $perPage;
+
+        // Same PHP-level merge approach as fetchTransactions to avoid raw UNION SQL
+        // driver compatibility issues.
+        $allFundUnits = (clone $fundBase)
             ->select([
                 DB::raw('l.iTrxID AS group_key'),
                 DB::raw("'fund' AS source_type"),
                 DB::raw('MIN(t.dtCreated) AS sort_date'),
                 DB::raw('MAX(p.DealerAccountID) AS plan_account_id'),
             ])
-            ->groupBy('l.iTrxID');
+            ->groupBy('l.iTrxID')
+            ->get();
 
-        $trustGroupsQ = (clone $trustBase)
+        $allTrustUnits = (clone $trustBase)
             ->select([
                 DB::raw('tr.ID AS group_key'),
                 DB::raw("'trust' AS source_type"),
                 DB::raw('tr.dtCreated AS sort_date'),
                 DB::raw('p.DealerAccountID AS plan_account_id'),
-            ]);
+            ])
+            ->get();
 
-        $prevCount    = ($page - 1) * $perPage;
-        $prevUnitsSql =
-            "SELECT group_key, source_type FROM ("
-            . "({$fundGroupsQ->toSql()}) UNION ALL ({$trustGroupsQ->toSql()})"
-            . ") AS combined"
-            . " ORDER BY ISNULL(plan_account_id, '') ASC, ISNULL(sort_date, '9999-12-31') ASC, group_key ASC"
-            . " OFFSET 0 ROWS FETCH NEXT {$prevCount} ROWS ONLY";
-
-        $prevUnits = collect(
-            DB::connection(self::CONNECTION)->select(
-                $prevUnitsSql,
-                array_merge($fundGroupsQ->getBindings(), $trustGroupsQ->getBindings())
-            )
-        );
+        $prevUnits = $allFundUnits->concat($allTrustUnits)
+            ->sortBy(fn($u) => [
+                (string) ($u->plan_account_id ?? ''),
+                (string) ($u->sort_date ?? '9999-12-31'),
+                (int) $u->group_key,
+            ])
+            ->values()
+            ->take($prevCount);
 
         $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
         $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
@@ -632,37 +629,37 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
-        $fundGroupsQ = (clone $fundBase)
+        $prevCount = ($page - 1) * $perPage;
+
+        // Same PHP-level merge approach as fetchTransactions to avoid raw UNION SQL
+        // driver compatibility issues.
+        $allFundUnits = (clone $fundBase)
             ->select([
                 DB::raw('l.iTrxID AS group_key'),
                 DB::raw("'fund' AS source_type"),
                 DB::raw('MIN(t.dtCreated) AS sort_date'),
                 DB::raw('MAX(p.DealerAccountID) AS plan_account_id'),
             ])
-            ->groupBy('l.iTrxID');
+            ->groupBy('l.iTrxID')
+            ->get();
 
-        $trustGroupsQ = (clone $trustBase)
+        $allTrustUnits = (clone $trustBase)
             ->select([
                 DB::raw('tr.ID AS group_key'),
                 DB::raw("'trust' AS source_type"),
                 DB::raw('tr.dtCreated AS sort_date'),
                 DB::raw('p.DealerAccountID AS plan_account_id'),
-            ]);
+            ])
+            ->get();
 
-        $prevCount    = ($page - 1) * $perPage;
-        $prevUnitsSql =
-            "SELECT group_key, source_type FROM ("
-            . "({$fundGroupsQ->toSql()}) UNION ALL ({$trustGroupsQ->toSql()})"
-            . ") AS combined"
-            . " ORDER BY ISNULL(plan_account_id, '') ASC, ISNULL(sort_date, '9999-12-31') ASC, group_key ASC"
-            . " OFFSET 0 ROWS FETCH NEXT {$prevCount} ROWS ONLY";
-
-        $prevUnits = collect(
-            DB::connection(self::CONNECTION)->select(
-                $prevUnitsSql,
-                array_merge($fundGroupsQ->getBindings(), $trustGroupsQ->getBindings())
-            )
-        );
+        $prevUnits = $allFundUnits->concat($allTrustUnits)
+            ->sortBy(fn($u) => [
+                (string) ($u->plan_account_id ?? ''),
+                (string) ($u->sort_date ?? '9999-12-31'),
+                (int) $u->group_key,
+            ])
+            ->values()
+            ->take($prevCount);
 
         $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
         $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
