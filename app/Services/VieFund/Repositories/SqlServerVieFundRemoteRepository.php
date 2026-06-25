@@ -6,6 +6,7 @@ use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
 class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterface
@@ -122,6 +123,20 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
         $total = $allFundUnits->count() + $allTrustUnits->count();
 
+        if (config('app.debug')) {
+            Log::debug('[VieFund fetchTransactions]', [
+                'filters'           => $filters,
+                'search'            => $search,
+                'page'              => $page,
+                'per_page'          => $perPage,
+                'fund_units_count'  => $allFundUnits->count(),
+                'trust_units_count' => $allTrustUnits->count(),
+                'total'             => $total,
+                'fund_sql'          => (clone $fundBase)->groupBy('l.iTrxID')->toSql(),
+                'trust_sql'         => (clone $trustBase)->toSql(),
+            ]);
+        }
+
         if ($total === 0) {
             return new LengthAwarePaginator(collect(), 0, $perPage, $page, [
                 'path'  => LengthAwarePaginator::resolveCurrentPath(),
@@ -141,6 +156,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
         $fundIds  = $pageUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
         $trustIds = $pageUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
+
+        if (config('app.debug')) {
+            Log::debug('[VieFund fetchTransactions] page units', [
+                'page_units_count' => $pageUnits->count(),
+                'fund_ids'         => $fundIds,
+                'trust_ids'        => $trustIds,
+            ]);
+        }
 
         $items = collect();
 
@@ -181,6 +204,13 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         })->values();
 
         $items = $items->sortBy([['plan_dealer_account_id', 'asc'], ['created_date', 'asc'], ['trx_id', 'asc']])->values();
+
+        if (config('app.debug')) {
+            Log::debug('[VieFund fetchTransactions] result', [
+                'items_count' => $items->count(),
+                'total'       => $total,
+            ]);
+        }
 
         return new LengthAwarePaginator($items, $total, $perPage, $page, [
             'path'  => LengthAwarePaginator::resolveCurrentPath(),
