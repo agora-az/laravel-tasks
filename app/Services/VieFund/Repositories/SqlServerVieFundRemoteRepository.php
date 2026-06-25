@@ -52,9 +52,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
             ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
             ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
+            ->leftJoin("{$schema}.UB_Def_TrxOrderStatus as os", 'os.ID', '=', 't.iOrderStatus')
             ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
             ->leftJoin("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
-            ->leftJoin("{$schema}.UB_Def_TrxType as ctt", 'ctt.ID', '=', 'ct.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustTypeX as ctt", 'ctt.ID', '=', 'ct.Type')
             // Trust-link: when a UB_TrustTrx row has iTrxID pointing to this fund
             // transaction, pull its extra columns (Notes, mAmountUsed, mAmountLeft, etc.)
             // so they merge into this fund row instead of appearing as a separate row.
@@ -896,10 +897,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('l.DealerRepCode AS rep_code'),
             DB::raw('p.DealerAccountID AS plan_dealer_account_id'),
             DB::raw('ISNULL(tt.NameEN, CAST(l.iType AS NVARCHAR)) AS trx_type'),
-            DB::raw('ISNULL(ctt.NameEN, CAST(ct.iType AS NVARCHAR)) AS cash_trx_type'),
+            DB::raw('ISNULL(ctt.NameEN, CAST(ct.Type AS NVARCHAR)) AS cash_trx_type'),
             DB::raw('l.OrderID AS fund_wo_number'),
             DB::raw('t.dtCreated AS created_date'),
             DB::raw('l.dtTrade AS trade_date'),
+            DB::raw('ct.dtCreated AS cash_created_date'),
+            DB::raw('ct.dtTrade AS cash_trade_date'),
             DB::raw('ct.dtProcessing AS processing_date'),
             DB::raw('ct.dtSettlement AS settlement_date'),
             DB::raw('ct.mAmount AS amount'),
@@ -910,6 +913,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('trlink.Notes AS notes'),
             DB::raw('trlink.mAmountCredit AS amount_credit'),
             DB::raw('trlink.mAmountDebit AS amount_debit'),
+            DB::raw('os.NameEN AS order_status'),
             DB::raw("'fund' AS row_source"),
         ];
     }
@@ -927,6 +931,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('NULL AS fund_wo_number'),
             DB::raw('tr.dtCreated AS created_date'),
             DB::raw('NULL AS trade_date'),
+            DB::raw('NULL AS cash_created_date'),
+            DB::raw('NULL AS cash_trade_date'),
             DB::raw('NULL AS processing_date'),
             DB::raw('NULL AS settlement_date'),
             DB::raw('tr.mAmount AS amount'),
@@ -943,6 +949,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('tr.Notes AS notes'),
             DB::raw('tr.mAmountCredit AS amount_credit'),
             DB::raw('tr.mAmountDebit AS amount_debit'),
+            DB::raw('NULL AS order_status'),
             DB::raw("'trust' AS row_source"),
         ];
     }

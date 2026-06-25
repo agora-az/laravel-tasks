@@ -860,6 +860,7 @@
                                 <th data-col="rep-code" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Rep Code</th>
                                 <th data-col="plan-account-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Plan Account ID</th>
                                 <th data-col="trx-type" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
+                                <th data-col="order-status" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
                                 <th data-col="notes" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
                                 <th data-col="created-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
                                 <th data-col="trade-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
@@ -885,6 +886,8 @@
                                     data-fund-wo-number="{{ $txn->fund_wo_number }}"
                                     data-created-date="{{ $txn->created_date ? date('m/d/Y H:i', strtotime($txn->created_date)) : '' }}"
                                     data-trade-date="{{ $txn->trade_date ? date('m/d/Y H:i', strtotime($txn->trade_date)) : '' }}"
+                                    data-cash-created-date="{{ $txn->cash_created_date ? date('m/d/Y H:i', strtotime($txn->cash_created_date)) : '' }}"
+                                    data-cash-trade-date="{{ $txn->cash_trade_date ? date('m/d/Y H:i', strtotime($txn->cash_trade_date)) : '' }}"
                                     data-amount="{{ $txn->amount }}"
                                     data-balance="{{ $txn->balance }}"
                                     data-row-source="{{ $txn->row_source ?? 'fund' }}"
@@ -900,6 +903,7 @@
                                     <td data-col="rep-code" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->rep_code ?? '-' }}</td>
                                     <td data-col="plan-account-id" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->plan_dealer_account_id ?? '-' }}</td>
                                     <td data-col="trx-type" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->trx_type ?? '-' }}@if($txn->cash_trx_type)<em style="color:#718096;"> &mdash; {{ $txn->cash_trx_type }}</em>@endif</td>
+                                    <td data-col="order-status" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ $txn->order_status ?? '-' }}</td>
                                     <td data-col="notes" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes ?? '' }}">{{ $txn->notes ?? '-' }}</td>
                                     <td data-col="created-date" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->created_date ? date('m/d/Y H:i', strtotime($txn->created_date)) : '-' }}</td>
                                     <td data-col="trade-date" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->trade_date ? date('m/d/Y H:i', strtotime($txn->trade_date)) : '-' }}</td>
@@ -962,7 +966,7 @@
 
                     {{-- Summary --}}
                     <span style="color:#718096;white-space:nowrap;">
-                        Showing {{ number_format($transactions->firstItem()) }}–{{ number_format($transactions->lastItem()) }} of {{ number_format($transactions->total()) }} transactions
+                        Showing {{ number_format($transactions->firstItem()) }}–{{ number_format(min($transactions->lastItem(), $transactions->total())) }} of {{ number_format($transactions->total()) }} transactions
                     </span>
 
                     {{-- Page buttons --}}
@@ -1280,7 +1284,6 @@ const sharedCols = [
                                     ['client-name',    'clientName'],
                                     ['rep-code',        'repCode'],
                                     ['plan-account-id', 'planDealerAccountId'],
-                                    ['trx-type',        'trxType'],
                                     ['created-date',    'createdDate'],
                                     ['trade-date',      'tradeDate'],
                                 ];
@@ -1291,9 +1294,10 @@ const sharedCols = [
                             child.style.borderLeft = '3px solid #c6f6d5';
                             child.style.backgroundColor = '#f7fff9';
 
-                            // Indent indicator in place of the Txn ID
+                            // Show cash trx ID alongside the indent indicator
                             child.querySelector('[data-col="trx-id"]').innerHTML =
-                                '<span style="padding-left:24px;color:#68d391;font-size:13px;">↳</span>';
+                                `<span style="color:#68d391;font-size:13px;padding-right:6px;">↳</span>` +
+                                `<span style="font-family:monospace;font-size:11px;color:#718096;">${child.dataset.cashTrxId || ''}</span>`;
 
                             // Dim fields that match parent (works regardless of column visibility)
                             sharedCols.forEach(([colName, dataKey]) => {
@@ -1302,6 +1306,46 @@ const sharedCols = [
                                     dimCell(cell);
                                 }
                             });
+
+                            // Created Date: use ct.dtCreated for each child row
+                            const createdDateCell = child.querySelector('[data-col="created-date"]');
+                            if (createdDateCell) {
+                                const cashCreatedDate = child.dataset.cashCreatedDate;
+                                if (cashCreatedDate) {
+                                    createdDateCell.textContent = cashCreatedDate;
+                                    createdDateCell.style.color = '#4a5568';
+                                } else {
+                                    dimCell(createdDateCell);
+                                }
+                            }
+
+                            // Trade date: use the cash trx's own dtTrade (ct.dtTrade) so each
+                            // child shows its individual value rather than the shared fund trade date.
+                            const tradeDateCell = child.querySelector('[data-col="trade-date"]');
+                            if (tradeDateCell) {
+                                const cashTradeDate = child.dataset.cashTradeDate;
+                                if (cashTradeDate) {
+                                    tradeDateCell.textContent = cashTradeDate;
+                                    tradeDateCell.style.color = '#4a5568';
+                                } else {
+                                    dimCell(tradeDateCell);
+                                }
+                            }
+
+                            // For the Txn Type cell on child rows, show the cash transaction
+                            // type (from UB_Def_TrxOrderStatus via ct.iType) instead of the
+                            // shared fund-level type which would just be dimmed.
+                            const trxTypeCell = child.querySelector('[data-col="trx-type"]');
+                            if (trxTypeCell) {
+                                const cashType = child.dataset.cashTrxType;
+                                if (cashType) {
+                                    trxTypeCell.textContent = cashType;
+                                    trxTypeCell.style.fontStyle = 'italic';
+                                    trxTypeCell.style.color = '#718096';
+                                } else {
+                                    dimCell(trxTypeCell);
+                                }
+                            }
 
                             // Detail rows open the modal on click
                             child.style.cursor = 'pointer';
