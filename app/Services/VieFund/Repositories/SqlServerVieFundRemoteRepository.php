@@ -154,8 +154,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->skip($offset)
             ->take($perPage);
 
-        $fundIds  = $pageUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
-        $trustIds = $pageUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
+        $fundIds  = $pageUnits->where('source_type', 'fund')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
+        $trustIds = $pageUnits->where('source_type', 'trust')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
 
         if (config('app.debug')) {
             Log::debug('[VieFund fetchTransactions] page units', [
@@ -513,7 +513,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         // Get all distinct iTrxIDs for this scope
         $fundBase = $this->buildBaseQuery($schema);
         $this->applyContextFilters($fundBase, $filters);
-        $trxIds = $fundBase->distinct()->pluck('l.iTrxID')->map('intval')->toArray();
+        $trxIds = $fundBase->distinct()->pluck('l.iTrxID')->map(fn($v) => (int) $v)->toArray();
         $fundSum = $this->sumFundAmountsForIds($schema, $trxIds, $filters);
 
         $trustBase = $this->buildTrustBaseQuery($schema);
@@ -567,8 +567,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->values()
             ->take($prevCount);
 
-        $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
-        $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
+        $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
+        $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
 
         $sum = 0.0;
         if (!empty($prevFundIds)) {
@@ -691,8 +691,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->values()
             ->take($prevCount);
 
-        $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map('intval')->toArray();
-        $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map('intval')->toArray();
+        $prevFundIds  = $prevUnits->where('source_type', 'fund')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
+        $prevTrustIds = $prevUnits->where('source_type', 'trust')->pluck('group_key')->map(fn($v) => (int) $v)->toArray();
 
         $result = [];
         if (!empty($prevFundIds)) {
