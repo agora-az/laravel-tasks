@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Reconciliation;
+use App\Models\BankStatementEntry;
 use App\Models\VieFundTransaction;
 use App\Models\MatchingSession;
 use Illuminate\Support\Facades\DB;
@@ -690,6 +691,24 @@ class ReconciliationController extends Controller
     {
         $stats = null;
         $connectionError = null;
+        $bankStats = [
+            'entry_count' => 0,
+            'source_file_count' => 0,
+            'latest_value_date' => null,
+            'analyzed_count' => 0,
+        ];
+
+        try {
+            $bankStats['entry_count'] = BankStatementEntry::count();
+            $bankStats['source_file_count'] = (int) BankStatementEntry::distinct('source_file')->count('source_file');
+            $bankStats['latest_value_date'] = BankStatementEntry::max('value_date');
+            $bankStats['analyzed_count'] = (int) DB::table('bank_statement_entry_analyses')
+                ->where('parser_version', '=', 'v2')
+                ->count();
+        } catch (\Exception $e) {
+            Log::warning('Failed to load bank dashboard metrics: ' . $e->getMessage());
+        }
+
         try {
             $stats = \Illuminate\Support\Facades\Cache::remember('viefund_dashboard_stats', 86400, function () {
                 return app(VieFundRemoteService::class)->getDashboardStats();
@@ -698,7 +717,7 @@ class ReconciliationController extends Controller
             $connectionError = $e->getMessage();
         }
 
-        return view('reconciliations.dashboard', compact('stats', 'connectionError'));
+        return view('reconciliations.dashboard', compact('stats', 'connectionError', 'bankStats'));
     }
 
     /**

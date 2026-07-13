@@ -6,6 +6,9 @@ use App\Http\Controllers\ImportController;
 use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RemoteVieFundController;
+use App\Http\Controllers\DailyTotalsComparisonController;
+use App\Http\Controllers\DailyTotalsDrilldownController;
+use App\Http\Controllers\BankStatementEntryController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -53,6 +56,10 @@ Route::middleware('auth.check')->group(function () {
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
+        Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
+        Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
+        Route::get('/daily-totals/{date}/viefund', [DailyTotalsDrilldownController::class, 'viefundDay'])->name('reconciliations.daily-totals.viefund-day');
+        Route::get('/daily-totals/{date}/variance', [DailyTotalsDrilldownController::class, 'varianceDay'])->name('reconciliations.daily-totals.variance-day');
         Route::get('/manage', function () {
             return view('reconciliations.manage');
         })->name('reconciliations.manage');
@@ -96,6 +103,9 @@ Route::middleware('auth.check')->group(function () {
         Route::delete('/history/{id}', [ImportController::class, 'deleteImport'])->name('imports.delete');
         Route::get('/history/{id}/view', [ImportController::class, 'viewImport'])->name('imports.view');
     });
+
+    // Bank statement entries (raw CAMT analysis view)
+    Route::get('/bank-entries', [BankStatementEntryController::class, 'index'])->name('bank-entries.index');
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');

@@ -17,12 +17,12 @@
                 </div>
                 <div style="display: flex; align-items: center; gap: 20px;">
                     <a href="/dashboard">Dashboard</a>
-                    <a href="/imports">Import</a>
-                    <a href="/imports/history">Import History</a>
                     @if(!in_array('transaction_data', config('app.nav_hide')))
                     <a href="/imports/transactions">Transaction Data</a>
                     @endif
+                    <a href="/bank-entries">Bank Entries</a>
                     <a href="/remote-viefund">Remote VieFund</a>
+                    <a href="/reconciliations/daily-totals">Daily Totals</a>
                     @if(!in_array('reconciliation', config('app.nav_hide')))
                     <a href="/reconciliations/matches">Reconciliation</a>
                     @endif

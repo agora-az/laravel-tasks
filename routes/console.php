@@ -2,6 +2,7 @@
 
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Schedule;
 use App\Services\Reconciliation\VieFundFundservMatcher;
 
 Artisan::command('inspire', function () {
@@ -29,3 +30,9 @@ Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', functi
 
     return 0;
 })->purpose('Run reconciliation matching rules');
+
+Schedule::command('viefund:sync-daily-totals --days=90')
+    ->dailyAt('02:00');
+
+Schedule::command('viefund:sync-daily-totals --days=90')
+    ->dailyAt('14:00');

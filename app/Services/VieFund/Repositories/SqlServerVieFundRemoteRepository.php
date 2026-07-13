@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund\Repositories;
 
+use Carbon\CarbonInterface;
 use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -436,6 +437,95 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->values();
     }
 
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $from = $fromDate->toDateString();
+        $to = $toDate->toDateString();
+
+        $excludeZero = config('viefund.hide_zero_amount', false) ? ' AND ct.mAmount <> 0' : '';
+
+        $sql = "
+            SELECT
+                CAST(ct.dtSettlement AS date) AS total_date,
+                COUNT(*) AS transaction_count,
+                SUM(ct.mAmount) AS net_total
+            FROM {$schema}.UB_CashTrx ct
+            WHERE ct.dtSettlement >= ?
+              AND ct.dtSettlement < DATEADD(day, 1, ?)
+              AND ct.dtSettlement IS NOT NULL
+              AND ct.mAmount IS NOT NULL
+              AND ct.iStatus = 6
+              AND ct.iType IN (22, 45)
+              {$excludeZero}
+            GROUP BY CAST(ct.dtSettlement AS date)
+            ORDER BY total_date ASC
+        ";
+
+        return collect(DB::connection(self::CONNECTION)->select($sql, [$from, $to]));
+    }
+
+    public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $dayStart = $date->copy()->startOfDay()->toDateTimeString();
+        $dayEnd = $date->copy()->addDay()->startOfDay()->toDateTimeString();
+
+        $query = $this->buildBaseQuery($schema)
+            ->where('ct.dtSettlement', '>=', $dayStart)
+            ->where('ct.dtSettlement', '<', $dayEnd)
+            ->whereNotNull('ct.dtSettlement')
+            ->whereNotNull('ct.mAmount')
+            ->where('ct.iStatus', '=', 6)
+            ->whereIn('ct.iType', [22, 45])
+            ->select($this->fundSelectColumns())
+            ->orderBy('t.dtCreated', 'asc')
+            ->orderBy('l.iTrxID', 'asc')
+            ->orderBy('ct.ID', 'asc');
+
+        return $query->paginate($perPage, ['*'], 'viefund_page', max(1, $page));
+    }
+
+    public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $dayStart = $date->copy()->startOfDay()->toDateTimeString();
+        $dayEnd = $date->copy()->addDay()->startOfDay()->toDateTimeString();
+
+        $query = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_CashTrx as ct")
+            ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iCashTrxID', '=', 'ct.ID')
+            ->leftJoin("{$schema}.UB_FundTrxLookup as l", 'l.iTrxID', '=', 'fc.iTrxID')
+            ->leftJoin("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
+            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'ct.iType')
+            ->select([
+                DB::raw('ct.ID as cash_trx_id'),
+                DB::raw('ct.dtSettlement as settlement_date'),
+                DB::raw('ct.mAmount as amount'),
+                DB::raw('ct.iType as type_id'),
+                DB::raw('ct.iStatus as status_id'),
+                DB::raw('ISNULL(MIN(tt.NameEN), CAST(ct.iType AS NVARCHAR)) as type_name'),
+                DB::raw("CASE WHEN COUNT(DISTINCT c.ID) > 1 THEN 'Multiple' ELSE MIN(TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) END AS customer_name"),
+            ])
+            ->where('ct.dtSettlement', '>=', $dayStart)
+            ->where('ct.dtSettlement', '<', $dayEnd)
+            ->whereNotNull('ct.dtSettlement')
+            ->whereNotNull('ct.mAmount')
+            ->where('ct.iStatus', '=', 6)
+            ->whereIn('ct.iType', [22, 45]);
+
+        if (config('viefund.hide_zero_amount', false)) {
+            $query->where('ct.mAmount', '<>', 0);
+        }
+
+        return $query
+            ->orderBy('ct.dtSettlement')
+            ->orderBy('ct.ID')
+            ->groupBy('ct.ID', 'ct.dtSettlement', 'ct.mAmount', 'ct.iType', 'ct.iStatus')
+            ->paginate($perPage, ['*'], 'viefund_page', max(1, $page));
+    }
+
     public function countTransactions(): int
     {
         $schema     = env('VIEFUND_DB_SCHEMA', 'dbo');
@@ -633,8 +723,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 ->get();
 
             $result = [];
-            foreach ($fundRows  as $row) { $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total; }
-            foreach ($trustRows as $row) { $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total; }
+            foreach ($fundRows  as $row) {
+                $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total;
+            }
+            foreach ($trustRows as $row) {
+                $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total;
+            }
             return $result;
         });
 
@@ -702,7 +796,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 ->select([DB::raw('p.DealerAccountID AS account_id'), DB::raw('SUM(ct.mAmount) AS total')])
                 ->groupBy('p.DealerAccountID')
                 ->get();
-            foreach ($rows as $row) { $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total; }
+            foreach ($rows as $row) {
+                $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total;
+            }
         }
         if (!empty($prevTrustIds)) {
             $rows = (clone $trustBase)
@@ -710,7 +806,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 ->select([DB::raw('p.DealerAccountID AS account_id'), DB::raw('SUM(tr.mAmount) AS total')])
                 ->groupBy('p.DealerAccountID')
                 ->get();
-            foreach ($rows as $row) { $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total; }
+            foreach ($rows as $row) {
+                $result[$row->account_id] = ($result[$row->account_id] ?? 0.0) + (float) $row->total;
+            }
         }
         return $result;
     }
@@ -808,7 +906,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_Def_TrustType as ttype", 'ttype.ID', '=', 'tr.iType')
             ->leftJoin("{$schema}.UB_Def_TrustDepositType as tdtype", function ($join) {
                 $join->on('tdtype.ID', '=', 'tr.iDepositType')
-                     ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
+                    ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
             })
             // Identify the chronologically first standalone trust row per plan so we
             // can use the deposit amount as the balance instead of the snapshot mAmountLeft.
@@ -828,7 +926,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 ) AS _first_trust"),
                 function ($join) {
                     $join->on('_first_trust.iPlanID', '=', 'tr.iPlanID')
-                         ->on('_first_trust.ID', '=', 'tr.ID');
+                        ->on('_first_trust.ID', '=', 'tr.ID');
                 }
             )
             // Only include standalone trust rows (iTrxID = 0).
@@ -845,9 +943,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->whereRaw("CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')) LIKE ?", ["%{$search}%"])
-                  ->orWhere('tr.Notes', 'like', "%{$search}%")
-                  ->orWhere('ttype.NameEN', 'like', "%{$search}%")
-                  ->orWhere('tdtype.NameEN', 'like', "%{$search}%");
+                    ->orWhere('tr.Notes', 'like', "%{$search}%")
+                    ->orWhere('ttype.NameEN', 'like', "%{$search}%")
+                    ->orWhere('tdtype.NameEN', 'like', "%{$search}%");
             });
         }
         if (!empty($filters['trx_id'])) {
@@ -880,7 +978,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if (!empty($filters['customer_id'])) {
             $query->where(function ($q) use ($filters) {
                 $q->where('tr.iClientID', '=', $filters['customer_id'])
-                  ->orWhere('p.iClientID', '=', $filters['customer_id']);
+                    ->orWhere('p.iClientID', '=', $filters['customer_id']);
             });
         }
         if (!empty($filters['account_id'])) {

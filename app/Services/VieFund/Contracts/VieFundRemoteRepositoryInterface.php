@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund\Contracts;
 
+use Carbon\CarbonInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
@@ -26,6 +27,12 @@ interface VieFundRemoteRepositoryInterface
     public function fetchDistinctTrxTypes(array $filters = []): array;
 
     public function exportTransactions(?string $search = null, array $filters = []): Collection;
+
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection;
+
+    public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator;
+
+    public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator;
 
     public function getLatestBalance(array $filters = []): ?float;
 

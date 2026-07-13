@@ -70,7 +70,10 @@ class RemoteVieFundController extends Controller
             try {
                 $schema    = env('VIEFUND_DB_SCHEMA', 'dbo');
                 $localMax  = (int) (RemoteVieFundCustomerTransaction::max('cash_trx_id') ?? 0);
-                $remoteMax = (int) \Illuminate\Support\Facades\Cache::remember('viefund_remote_max_id', 300, fn() =>
+                $remoteMax = (int) \Illuminate\Support\Facades\Cache::remember(
+                    'viefund_remote_max_id',
+                    300,
+                    fn() =>
                     DB::connection('viefund_sqlsrv')
                         ->table("{$schema}.UB_FundTrxCash as fc")
                         ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')

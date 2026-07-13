@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund;
 
+use Carbon\CarbonInterface;
 use App\Services\VieFund\Repositories\SqlServerVieFundRemoteRepository;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -40,6 +41,21 @@ class VieFundRemoteService
     public function exportTransactions(?string $search = null, array $filters = []): Collection
     {
         return $this->repository->exportTransactions($search, $filters);
+    }
+
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
+    {
+        return $this->repository->fetchDailyNetTotals($fromDate, $toDate);
+    }
+
+    public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
+    {
+        return $this->repository->fetchDailySettlementFundTransactions($date, $perPage, $page);
+    }
+
+    public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
+    {
+        return $this->repository->fetchDailySettlementTransactions($date, $perPage, $page);
     }
 
     public function getLatestBalance(array $filters = []): ?float
