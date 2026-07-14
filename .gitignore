@@ -25,4 +25,4 @@ azure.yaml
 /storage/framework/views/*
 /storage/framework/cache/*
 /storage/logs/*
-/resources/data
+resources/data/viefund_db_schema
