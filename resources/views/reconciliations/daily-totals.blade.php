@@ -11,6 +11,25 @@
     <a href="{{ route('reconciliations.matches') }}" class="btn" style="background: #718096; padding: 10px 20px; text-decoration: none;">← Back to Reconciliation</a>
 </div>
 
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+    <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
+        <div style="font-size: 28px; font-weight: bold;">{{ number_format($summary['days']) }}</div>
+        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Days Compared</div>
+    </div>
+    <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white; text-align: center;">
+        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['bank_total'], 2) }}</div>
+        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Bank Total</div>
+    </div>
+    <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white; text-align: center;">
+        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['viefund_total'], 2) }}</div>
+        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">VieFund Total</div>
+    </div>
+    <div class="card" style="background: linear-gradient(135deg, #d53f8c 0%, #97266d 100%); color: white; text-align: center;">
+        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['variance_total'], 2) }}</div>
+        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Variance</div>
+    </div>
+</div>
+
 <div class="card" style="margin-bottom: 20px;">
     <form method="GET" action="{{ route('reconciliations.daily-totals') }}" style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end;">
         <div>
@@ -38,25 +57,6 @@
     </form>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
-    <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
-        <div style="font-size: 28px; font-weight: bold;">{{ number_format($summary['days']) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Days Compared</div>
-    </div>
-    <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white; text-align: center;">
-        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['bank_total'], 2) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Bank Total</div>
-    </div>
-    <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white; text-align: center;">
-        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['viefund_total'], 2) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">VieFund Total</div>
-    </div>
-    <div class="card" style="background: linear-gradient(135deg, #d53f8c 0%, #97266d 100%); color: white; text-align: center;">
-        <div style="font-size: 24px; font-weight: bold;">{{ '$' . number_format($summary['variance_total'], 2) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Variance</div>
-    </div>
-</div>
-
 <div class="card">
     <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
         <div style="color: #4a5568; font-size: 13px;">
@@ -76,7 +76,7 @@
 
     @if($rows->count())
         <div style="overflow-x: auto;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <table style="width: 100%; border-collapse: collapse;" class="mono-grid">
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
                         @php
@@ -87,30 +87,29 @@
                             ]));
                             $sortArrow = fn(string $field) => $sortField === $field ? ($sortDir === 'asc' ? ' ↑' : ' ↓') : '';
                         @endphp
-                        <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">
                             <a href="{{ $sortUrl('total_date') }}" style="color: inherit; text-decoration: none;">Date{{ $sortArrow('total_date') }}</a>
                         </th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">Bank Count</th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">Bank Count</th>
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">
                             <a href="{{ $sortUrl('bank_net_total') }}" style="color: inherit; text-decoration: none;">Bank Net{{ $sortArrow('bank_net_total') }}</a>
                         </th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">VieFund Count</th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">VieFund Count</th>
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">
                             <a href="{{ $sortUrl('viefund_net_total') }}" style="color: inherit; text-decoration: none;">VieFund Net{{ $sortArrow('viefund_net_total') }}</a>
                         </th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">
                             <a href="{{ $sortUrl('variance') }}" style="color: inherit; text-decoration: none;">Variance{{ $sortArrow('variance') }}</a>
                         </th>
-                        <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">
                             <a href="{{ $sortUrl('discrepancy_pct') }}" style="color: inherit; text-decoration: none;">Discrepancy %{{ $sortArrow('discrepancy_pct') }}</a>
                         </th>
-                        <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">Status</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Status</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach($rows as $row)
                         @php
-                            $isMatch = $row['status'] === 'match';
                             $statusStyles = [
                                 'match' => ['bg' => '#c6f6d5', 'text' => '#22543d', 'label' => 'Match'],
                                 'bank-higher' => ['bg' => '#fed7d7', 'text' => '#742a2a', 'label' => 'Bank higher'],
@@ -118,29 +117,32 @@
                             ];
                             $style = $statusStyles[$row['status']] ?? $statusStyles['match'];
                         @endphp
-                        <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $isMatch ? 'transparent' : '#fffaf0' }};">
-                            <td style="padding: 10px 12px; font-family: monospace; white-space: nowrap;">{{ $row['total_date'] }}</td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace;">{{ number_format($row['bank_transaction_count']) }}</td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace; color: {{ $row['bank_net_total'] < 0 ? '#c53030' : '#2f855a' }};">
+                        <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
+                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                                <span style="display: block;">{{ $row['total_date'] }}</span>
+                                <span style="display: block; opacity: 0.9;">00:00</span>
+                            </td>
+                            <td style="text-align: right;color: #4a5568;">{{ number_format($row['bank_transaction_count']) }}</td>
+                            <td style="text-align: right;font-weight: 500; color: {{ $row['bank_net_total'] < 0 ? '#e53e3e' : '#276749' }};">
                                 <a href="{{ route('reconciliations.daily-totals.bank-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
-                                    {{ '$' . number_format($row['bank_net_total'], 2) }}
+                                    {{ $row['bank_net_total'] < 0 ? '($'.number_format(abs($row['bank_net_total']),2).')' : '$'.number_format($row['bank_net_total'],2) }}
                                 </a>
                             </td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace;">{{ number_format($row['viefund_transaction_count']) }}</td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace; color: {{ $row['viefund_net_total'] < 0 ? '#c53030' : '#2f855a' }};">
+                            <td style="text-align: right;color: #4a5568;">{{ number_format($row['viefund_transaction_count']) }}</td>
+                            <td style="text-align: right;font-weight: 500; color: {{ $row['viefund_net_total'] < 0 ? '#e53e3e' : '#276749' }};">
                                 <a href="{{ route('reconciliations.daily-totals.viefund-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
-                                    {{ '$' . number_format($row['viefund_net_total'], 2) }}
+                                    {{ $row['viefund_net_total'] < 0 ? '($'.number_format(abs($row['viefund_net_total']),2).')' : '$'.number_format($row['viefund_net_total'],2) }}
                                 </a>
                             </td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace; color: {{ abs($row['variance']) < 0.01 ? '#2f855a' : '#c53030' }};">
+                            <td style="text-align: right;font-weight: 500; color: {{ abs($row['variance']) < 0.01 ? '#276749' : '#e53e3e' }};">
                                 <a href="{{ route('reconciliations.daily-totals.variance-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
-                                    {{ '$' . number_format($row['variance'], 2) }}
+                                    {{ $row['variance'] < 0 ? '($'.number_format(abs($row['variance']),2).')' : '$'.number_format($row['variance'],2) }}
                                 </a>
                             </td>
-                            <td style="padding: 10px 12px; text-align: right; font-family: monospace; color: {{ $row['discrepancy_pct'] === null ? '#718096' : '#2d3748' }};">
+                            <td style="text-align: right;color: {{ $row['discrepancy_pct'] === null ? '#718096' : '#4a5568' }};">
                                 {{ $row['discrepancy_pct'] === null ? 'N/A' : number_format($row['discrepancy_pct'], 2) . '%' }}
                             </td>
-                            <td style="padding: 10px 12px;">
+                            <td style="">
                                 <span style="background: {{ $style['bg'] }}; color: {{ $style['text'] }}; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap;">{{ $style['label'] }}</span>
                             </td>
                         </tr>

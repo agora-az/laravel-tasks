@@ -11,20 +11,20 @@
 {{-- Summary Cards --}}
 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
     <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
-        <div style="font-size: 28px; font-weight: bold;">{{ number_format($totals->total_count) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Matching Entries</div>
+        <div class="summary-card-value">{{ number_format($totals->total_count) }}</div>
+        <div class="summary-card-label">Matching Entries</div>
     </div>
     <div class="card" style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; text-align: center;">
-        <div style="font-size: 22px; font-weight: bold;">{{ '$' . number_format($totals->total_debits, 2) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Total Debits</div>
+        <div class="summary-card-value">{{ '$' . number_format($totals->total_debits, 2) }}</div>
+        <div class="summary-card-label">Total Debits</div>
     </div>
     <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white; text-align: center;">
-        <div style="font-size: 22px; font-weight: bold;">{{ '$' . number_format($totals->total_credits, 2) }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Total Credits</div>
+        <div class="summary-card-value">{{ '$' . number_format($totals->total_credits, 2) }}</div>
+        <div class="summary-card-label">Total Credits</div>
     </div>
     <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white; text-align: center;">
-        <div style="font-size: 28px; font-weight: bold;">{{ $entries->currentPage() }} / {{ $entries->lastPage() }}</div>
-        <div style="font-size: 13px; opacity: 0.9; margin-top: 4px;">Page</div>
+        <div class="summary-card-value">{{ $entries->currentPage() }} / {{ $entries->lastPage() }}</div>
+        <div class="summary-card-label">Page</div>
     </div>
 </div>
 
@@ -93,7 +93,7 @@
 <div class="card">
 @if($entries->count())
     <div style="overflow-x: auto;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <table style="width: 100%; border-collapse: collapse;" class="mono-grid">
             <thead>
                 <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
                     @php
@@ -103,25 +103,25 @@
                         $arrow = fn($col) => $sort === $col ? ($dir === 'asc' ? ' ↑' : ' ↓') : '';
                         $sortUrl = fn($col) => route('bank-entries.index', array_merge(request()->except(['sort','sort_dir','page']), ['sort' => $col, 'sort_dir' => $flip($col)]));
                     @endphp
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">
                         <a href="{{ $sortUrl('value_date') }}" style="color: inherit; text-decoration: none;">Date{{ $arrow('value_date') }}</a>
                     </th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">
                         <a href="{{ $sortUrl('inferred_channel') }}" style="color: inherit; text-decoration: none;">Channel{{ $arrow('inferred_channel') }}</a>
                     </th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">Dir</th>
-                    <th style="padding: 10px 12px; text-align: right; color: #2d3748; font-weight: 600;">
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">Dir</th>
+                    <th style="text-align: right; font-weight: 600; color: #2d3748;">
                         <a href="{{ $sortUrl('amount') }}" style="color: inherit; text-decoration: none;">Amount{{ $arrow('amount') }}</a>
                     </th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">
                         <a href="{{ $sortUrl('memo_type') }}" style="color: inherit; text-decoration: none;">Memo Type{{ $arrow('memo_type') }}</a>
                     </th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">
                         <a href="{{ $sortUrl('counterparty') }}" style="color: inherit; text-decoration: none;">Counterparty{{ $arrow('counterparty') }}</a>
                     </th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">Settlement #</th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">Wire Ref</th>
-                    <th style="padding: 10px 12px; text-align: left; color: #2d3748; font-weight: 600;">Source File</th>
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement #</th>
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">Wire Ref</th>
+                    <th style="text-align: left; font-weight: 600; color: #2d3748;">Source File</th>
                 </tr>
             </thead>
             <tbody>
@@ -142,44 +142,37 @@
                     $ch = $entry->inferred_channel ?? 'other';
                     $chStyle = $channelColors[$ch] ?? ['bg' => '#f7fafc', 'text' => '#4a5568'];
                 @endphp
-                <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 10px 12px; font-family: monospace; white-space: nowrap; color: #2d3748;">
-                        {{ $entry->value_date }}
+                <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
+                    <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                        <span style="display: block;">{{ $entry->value_date }}</span>
+                        <span style="display: block; opacity: 0.9;">00:00</span>
                     </td>
-                    <td style="padding: 10px 12px;">
+                    <td style="">
                         @if($entry->inferred_channel)
-                            <span style="background: {{ $chStyle['bg'] }}; color: {{ $chStyle['text'] }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap;">
+                            <span style="background: {{ $chStyle['bg'] }}; color: {{ $chStyle['text'] }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; font-family: monospace;">
                                 {{ strtoupper($entry->inferred_channel) }}
                             </span>
                         @else
                             <span style="color: #a0aec0;">—</span>
                         @endif
                     </td>
-                    <td style="padding: 10px 12px;">
-                        <span style="background: {{ $isCredit ? '#c6f6d5' : '#fed7d7' }}; color: {{ $isCredit ? '#22543d' : '#742a2a' }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
+                    <td style="">
+                        <span style="background: {{ $isCredit ? '#c6f6d5' : '#fed7d7' }}; color: {{ $isCredit ? '#22543d' : '#742a2a' }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: monospace;">
                             {{ $entry->credit_debit_indicator }}
                         </span>
                     </td>
-                    <td style="padding: 10px 12px; text-align: right; font-family: monospace; font-weight: 600; color: {{ $isCredit ? '#2f855a' : '#c53030' }}; white-space: nowrap;">
-                        ${{ number_format($entry->amount, 2) }}
+                    <td style="text-align: right;font-weight: 500; color: {{ $isCredit ? '#276749' : '#e53e3e' }}; white-space: nowrap;">
+                        @if($isCredit)
+                            ${{ number_format($entry->amount, 2) }}
+                        @else
+                            (${{ number_format($entry->amount, 2) }})
+                        @endif
                     </td>
-                    <td style="padding: 10px 12px; color: #4a5568; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                        title="{{ $entry->memo_type }}">
-                        {{ $entry->memo_type ?? '—' }}
-                    </td>
-                    <td style="padding: 10px 12px; color: #4a5568; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                        title="{{ $entry->counterparty }}">
-                        {{ $entry->counterparty ?? '—' }}
-                    </td>
-                    <td style="padding: 10px 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">
-                        {{ $entry->settlement_number ?? '—' }}
-                    </td>
-                    <td style="padding: 10px 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">
-                        {{ $entry->wire_payment_reference ?? '—' }}
-                    </td>
-                    <td style="padding: 10px 12px; color: #718096; font-size: 11px; white-space: nowrap;">
-                        {{ $entry->source_file }}
-                    </td>
+                    <td style="color: #4a5568; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $entry->memo_type }}">{{ $entry->memo_type ?? '—' }}</td>
+                    <td style="color: #4a5568; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $entry->counterparty }}">{{ $entry->counterparty ?? '—' }}</td>
+                    <td style="color: #4a5568; white-space: nowrap;">{{ $entry->settlement_number ?? '—' }}</td>
+                    <td style="color: #4a5568; white-space: nowrap;">{{ $entry->wire_payment_reference ?? '—' }}</td>
+                    <td style="color: #4a5568; white-space: nowrap;">{{ $entry->source_file }}</td>
                 </tr>
                 @endforeach
             </tbody>

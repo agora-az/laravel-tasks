@@ -152,6 +152,31 @@ tr:hover {
     background: #f7fafc;
 }
 
+/* Shared monospace transaction table styling */
+.mono-grid th {
+    padding: 12px;
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.mono-grid td {
+    padding: 12px;
+    font-size: 12px;
+    font-family: monospace;
+}
+
+/* Summary metric cards */
+.summary-card-value {
+    font-size: 28px;
+    font-weight: bold;
+}
+
+.summary-card-label {
+    font-size: 13px;
+    opacity: 0.9;
+    margin-top: 4px;
+}
+
 /* Form Styles */
 .form-group { 
     margin-bottom: 18px; 

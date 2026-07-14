@@ -24,37 +24,68 @@
 
 <div class="card">
     @if($transactions->count())
+        @php
+            $toTwoLineDate = function ($value) {
+                if (!$value) {
+                    return ['—', '--:--'];
+                }
+
+                $parts = preg_split('/\s+/', trim((string) $value));
+                return [
+                    $parts[0] ?? '—',
+                    $parts[1] ?? '--:--',
+                ];
+            };
+        @endphp
         <div style="overflow-x: auto;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <table style="width: 100%; border-collapse: collapse; min-width: 1280px;" class="mono-grid">
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn ID</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Customer Name</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
-                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Processing Date</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Settlement Date</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn ID</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Customer Name</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Processing Date</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement Date</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach($transactions as $txn)
-                        <tr style="border-bottom: 1px solid #e2e8f0;">
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748;">{{ $txn->trx_id }}</td>
-                            <td style="padding: 12px; color: #2d3748;">{{ $txn->client_name ?: '—' }}</td>
-                            <td style="padding: 12px; color: #2d3748; white-space: nowrap;" title="{{ $txn->trx_type }}">{{ $txn->trx_type ?: '—' }}</td>
-                            <td style="padding: 12px; color: #2d3748;">{{ $txn->order_status ?: '—' }}</td>
-                            <td style="padding: 12px; color: #4a5568; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes }}">{{ $txn->notes ?: '—' }}</td>
-                            <td style="padding: 12px; text-align: right; font-family: monospace; font-weight: 600; color: {{ (float) $txn->amount < 0 ? '#c53030' : '#2f855a' }}; white-space: nowrap;">
+                        @php
+                            [$createdDate, $createdTime] = $toTwoLineDate($txn->created_date);
+                            [$tradeDate, $tradeTime] = $toTwoLineDate($txn->trade_date);
+                            [$processingDate, $processingTime] = $toTwoLineDate($txn->processing_date);
+                            [$settlementDate, $settlementTime] = $toTwoLineDate($txn->settlement_date);
+                        @endphp
+                        <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
+                            <td style="color: #4a5568;">{{ $txn->trx_id }}</td>
+                            <td style="color: #2d3748;">{{ $txn->client_name ?: '—' }}</td>
+                            <td style="color: #4a5568;white-space: nowrap;" title="{{ $txn->trx_type }}">{{ $txn->trx_type ?: '—' }}</td>
+                            <td style="color: #4a5568;">{{ $txn->order_status ?: '—' }}</td>
+                            <td style="color: #4a5568; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes }}">{{ $txn->notes ?: '—' }}</td>
+                            <td style="text-align: right;font-weight: 500; color: {{ (float) $txn->amount < 0 ? '#e53e3e' : '#276749' }}; white-space: nowrap;">
                                 {{ '$' . number_format((float) $txn->amount, 2) }}
                             </td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->created_date ?: '—' }}</td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->trade_date ?: '—' }}</td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->processing_date ?: '—' }}</td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->settlement_date ?: '—' }}</td>
+                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                                <span style="display: block;">{{ $createdDate }}</span>
+                                <span style="display: block; opacity: 0.9;">{{ $createdTime }}</span>
+                            </td>
+                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                                <span style="display: block;">{{ $tradeDate }}</span>
+                                <span style="display: block; opacity: 0.9;">{{ $tradeTime }}</span>
+                            </td>
+                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                                <span style="display: block;">{{ $processingDate }}</span>
+                                <span style="display: block; opacity: 0.9;">{{ $processingTime }}</span>
+                            </td>
+                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
+                                <span style="display: block;">{{ $settlementDate }}</span>
+                                <span style="display: block; opacity: 0.9;">{{ $settlementTime }}</span>
+                            </td>
                         </tr>
                     @endforeach
                 </tbody>

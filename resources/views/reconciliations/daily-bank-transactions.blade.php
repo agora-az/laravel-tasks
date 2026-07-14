@@ -25,37 +25,37 @@
 <div class="card">
     @if($transactions->count())
         <div style="overflow-x: auto;">
-            <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+            <table style="width: 100%; border-collapse: collapse; min-width: 980px;" class="mono-grid">
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">ID</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Dir</th>
-                        <th style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Memo Type</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Counterparty</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Settlement #</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Wire Ref</th>
-                        <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Description</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">ID</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Dir</th>
+                        <th style="text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Memo Type</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Counterparty</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement #</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Wire Ref</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Description</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach($transactions as $txn)
                         @php $isCredit = $txn->credit_debit_indicator === 'CRDT'; @endphp
-                        <tr style="border-bottom: 1px solid #e2e8f0;">
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748;">{{ $txn->id }}</td>
-                            <td style="padding: 12px;">
+                        <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
+                            <td style="color: #4a5568;">{{ $txn->id }}</td>
+                            <td style="">
                                 <span style="background: {{ $isCredit ? '#c6f6d5' : '#fed7d7' }}; color: {{ $isCredit ? '#22543d' : '#742a2a' }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">
                                     {{ $txn->credit_debit_indicator }}
                                 </span>
                             </td>
-                            <td style="padding: 12px; text-align: right; font-family: monospace; font-weight: 600; color: {{ $isCredit ? '#2f855a' : '#c53030' }}; white-space: nowrap;">
+                            <td style="text-align: right;font-weight: 600; color: {{ $isCredit ? '#2f855a' : '#c53030' }}; white-space: nowrap;">
                                 {{ '$' . number_format((float) $txn->amount, 2) }}
                             </td>
-                            <td style="padding: 12px; color: #2d3748;">{{ $txn->memo_type ?: '—' }}</td>
-                            <td style="padding: 12px; color: #2d3748;">{{ $txn->counterparty ?: '—' }}</td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->settlement_number ?: '—' }}</td>
-                            <td style="padding: 12px; font-family: monospace; color: #2d3748; white-space: nowrap;">{{ $txn->wire_payment_reference ?: '—' }}</td>
-                            <td style="padding: 12px; color: #4a5568; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->additional_info }}">{{ $txn->additional_info ?: '—' }}</td>
+                            <td style="color: #4a5568;">{{ $txn->memo_type ?: '—' }}</td>
+                            <td style="color: #4a5568;">{{ $txn->counterparty ?: '—' }}</td>
+                            <td style="color: #4a5568; white-space: nowrap;">{{ $txn->settlement_number ?: '—' }}</td>
+                            <td style="color: #4a5568; white-space: nowrap;">{{ $txn->wire_payment_reference ?: '—' }}</td>
+                            <td style="color: #4a5568;max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->additional_info }}">{{ $txn->additional_info ?: '—' }}</td>
                         </tr>
                     @endforeach
                 </tbody>
