@@ -24,13 +24,16 @@ mkdir -p storage/logs
 # Fix permissions
 chmod -R 755 storage bootstrap/cache
 
+# Remove stale manifests so production can run artisan without dev providers.
+rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
+
 # Run database migrations
-php artisan migrate --force || true
+bash ./artisan-safe.sh migrate --force || true
 
 # Cache Laravel config/routes/views (ignore errors if DB not ready)
-php artisan config:cache || true
-php artisan route:cache || true
-php artisan view:cache || true
+bash ./artisan-safe.sh config:cache || true
+bash ./artisan-safe.sh route:cache || true
+bash ./artisan-safe.sh view:cache || true
 
 # Start supervisord (required by Azure)
 supervisord -c /etc/supervisor/supervisord.conf
