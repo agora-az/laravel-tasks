@@ -9,7 +9,10 @@
 </div>
 
 {{-- Summary Cards --}}
-<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
+@php
+    $netAmount = (float) ($totals->total_credits ?? 0) - (float) ($totals->total_debits ?? 0);
+@endphp
+<div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
     <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
         <div class="summary-card-value">{{ number_format($totals->total_count) }}</div>
         <div class="summary-card-label">Matching Entries</div>
@@ -21,6 +24,10 @@
     <div class="card" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%); color: white; text-align: center;">
         <div class="summary-card-value">{{ '$' . number_format($totals->total_credits, 2) }}</div>
         <div class="summary-card-label">Total Credits</div>
+    </div>
+    <div class="card" style="background: {{ $netAmount >= 0 ? 'linear-gradient(135deg, #2f855a 0%, #22543d 100%)' : 'linear-gradient(135deg, #c53030 0%, #742a2a 100%)' }}; color: white; text-align: center;">
+        <div class="summary-card-value">{{ '$' . number_format(abs($netAmount), 2) }}</div>
+        <div class="summary-card-label">{{ $netAmount >= 0 ? 'Net Amount +' : 'Net Amount -' }}</div>
     </div>
     <div class="card" style="background: linear-gradient(135deg, #3182ce 0%, #2c5aa0 100%); color: white; text-align: center;">
         <div class="summary-card-value">{{ $entries->currentPage() }} / {{ $entries->lastPage() }}</div>

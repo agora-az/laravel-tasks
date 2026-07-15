@@ -52,6 +52,13 @@
             </label>
         </div>
 
+        <div style="grid-column: 1 / -1; margin-top: 2px; display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="only_fundserv_bank" name="only_fundserv_bank" value="1" {{ $onlyFundservBank ? 'checked' : '' }}>
+            <label for="only_fundserv_bank" style="font-size: 13px; color: #4a5568; cursor: pointer;">
+                Only include Fundserv bank transactions (counterparty contains "fundserv")
+            </label>
+        </div>
+
         <input type="hidden" name="sort" value="{{ $sortField }}">
         <input type="hidden" name="sort_dir" value="{{ $sortDir }}">
     </form>
@@ -64,11 +71,20 @@
         </div>
         <div style="margin-left: auto; max-width: 760px; width: 100%; display: flex; flex-direction: column; align-items: flex-end; text-align: right;">
         <details style="display: block; width: 100%; text-align: right;">
-            <summary title="Calculating VieFund purchase or redemption cash transactions that are confirmed. Calculating all bank transactions." style="cursor: pointer; color: #2c5282; font-size: 13px; font-weight: 600; text-decoration: underline;">
+            <summary title="Calculating VieFund purchase or redemption cash transactions that are confirmed. {{ $onlyFundservBank ? 'Calculating only bank transactions where counterparty contains fundserv.' : 'Calculating all bank transactions.' }}" style="cursor: pointer; color: #2c5282; font-size: 13px; font-weight: 600; text-decoration: underline;">
                 Transaction Criteria
             </summary>
-            <div style="margin-top: 8px; color: #4a5568; font-size: 13px; line-height: 1.5; text-align: right;">
-                Calculating VieFund purchase or redemption cash transactions that are confirmed. Calculating all bank transactions.
+            <div style="margin-top: 8px; color: #4a5568; font-size: 13px; line-height: 1.5; text-align: left; display: inline-block;">
+                <ul style="margin: 0; padding-left: 20px;">
+                    <li>Calculating VieFund purchase or redemption cash transactions that are confirmed.</li>
+                    <li>
+                        @if($onlyFundservBank)
+                            Calculating only bank transactions where counterparty contains "fundserv".
+                        @else
+                            Calculating all bank transactions.
+                        @endif
+                    </li>
+                </ul>
             </div>
         </details>
         </div>
@@ -124,7 +140,7 @@
                             </td>
                             <td style="text-align: right;color: #4a5568;">{{ number_format($row['bank_transaction_count']) }}</td>
                             <td style="text-align: right;font-weight: 500; color: {{ $row['bank_net_total'] < 0 ? '#e53e3e' : '#276749' }};">
-                                <a href="{{ route('reconciliations.daily-totals.bank-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+                                <a href="{{ route('reconciliations.daily-totals.bank-day', ['date' => $row['total_date'], 'only_fundserv_bank' => $onlyFundservBank ? 1 : 0]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
                                     {{ $row['bank_net_total'] < 0 ? '($'.number_format(abs($row['bank_net_total']),2).')' : '$'.number_format($row['bank_net_total'],2) }}
                                 </a>
                             </td>
@@ -135,7 +151,7 @@
                                 </a>
                             </td>
                             <td style="text-align: right;font-weight: 500; color: {{ abs($row['variance']) < 0.01 ? '#276749' : '#e53e3e' }};">
-                                <a href="{{ route('reconciliations.daily-totals.variance-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+                                <a href="{{ route('reconciliations.daily-totals.variance-day', ['date' => $row['total_date'], 'only_fundserv_bank' => $onlyFundservBank ? 1 : 0]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
                                     {{ $row['variance'] < 0 ? '($'.number_format(abs($row['variance']),2).')' : '$'.number_format($row['variance'],2) }}
                                 </a>
                             </td>

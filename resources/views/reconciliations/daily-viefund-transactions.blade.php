@@ -3,6 +3,9 @@
 @section('title', 'VieFund Daily Transactions')
 
 @section('content')
+@php
+    $formattedDate = \Carbon\Carbon::parse($date)->format('F j, Y');
+@endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; gap: 12px; flex-wrap: wrap;">
     <h2 style="margin: 0;">VieFund Daily Transactions</h2>
     <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -17,9 +20,10 @@
 
 <div class="card" style="margin-bottom: 16px; padding: 22px 24px; background: linear-gradient(135deg, #edfdf9 0%, #f0fff4 100%); border: 1px solid #9ae6b4; color: #22543d; box-shadow: 0 4px 14px rgba(72, 187, 120, 0.12);">
     <div style="font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #2f855a; margin-bottom: 8px;">Criteria</div>
-    <div style="font-size: 18px; font-weight: 700; line-height: 1.5;">
-        Settlement date is {{ $date }}, transaction types are either purchase or redemption and transaction status is confirmed.
-    </div>
+    <ul style="margin: 0; padding-left: 20px; font-size: 15px; font-weight: 400; line-height: 1.55; color: #22543d;">
+        <li>Settlement date is {{ $formattedDate }}</li>
+        <li>Calculating purchase or redemption transactions where transaction status is confirmed</li>
+    </ul>
 </div>
 
 <div class="card">

@@ -13,13 +13,14 @@ class DailyTotalsDrilldownController extends Controller
 {
     private const PARSER_VERSION = 'v2';
 
-    public function __construct(private readonly VieFundRemoteService $vieFundRemoteService)
-    {
-    }
+    public function __construct(private readonly VieFundRemoteService $vieFundRemoteService) {}
 
     public function bankDay(Request $request, string $date): View
     {
         $day = $this->parseDateOrFail($date);
+        $onlyFundservBank = $request->has('only_fundserv_bank')
+            ? $request->boolean('only_fundserv_bank')
+            : false;
 
         $transactions = BankStatementEntry::query()
             ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
@@ -27,6 +28,9 @@ class DailyTotalsDrilldownController extends Controller
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
             ->whereDate('bank_statement_entries.value_date', '=', $day->toDateString())
+            ->when($onlyFundservBank, function ($query) {
+                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
+            })
             ->select([
                 'bank_statement_entries.id',
                 'bank_statement_entries.value_date',
@@ -44,7 +48,14 @@ class DailyTotalsDrilldownController extends Controller
             ->withQueryString();
 
         $summary = DB::table('bank_statement_entries')
+            ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
             ->whereDate('value_date', '=', $day->toDateString())
+            ->when($onlyFundservBank, function ($query) {
+                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
+            })
             ->selectRaw('COUNT(*) as transaction_count, SUM(CASE WHEN credit_debit_indicator = "DBIT" THEN -amount ELSE amount END) as net_total')
             ->first();
 
@@ -52,6 +63,7 @@ class DailyTotalsDrilldownController extends Controller
             'date' => $day->toDateString(),
             'transactions' => $transactions,
             'summary' => $summary,
+            'onlyFundservBank' => $onlyFundservBank,
         ]);
     }
 
@@ -76,6 +88,9 @@ class DailyTotalsDrilldownController extends Controller
     public function varianceDay(Request $request, string $date): View
     {
         $day = $this->parseDateOrFail($date);
+        $onlyFundservBank = $request->has('only_fundserv_bank')
+            ? $request->boolean('only_fundserv_bank')
+            : false;
 
         $bankTransactions = BankStatementEntry::query()
             ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
@@ -83,6 +98,9 @@ class DailyTotalsDrilldownController extends Controller
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
             ->whereDate('bank_statement_entries.value_date', '=', $day->toDateString())
+            ->when($onlyFundservBank, function ($query) {
+                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
+            })
             ->select([
                 'bank_statement_entries.id',
                 'bank_statement_entries.credit_debit_indicator',
@@ -98,7 +116,14 @@ class DailyTotalsDrilldownController extends Controller
             ->withQueryString();
 
         $bankSummary = DB::table('bank_statement_entries')
+            ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
             ->whereDate('value_date', '=', $day->toDateString())
+            ->when($onlyFundservBank, function ($query) {
+                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
+            })
             ->selectRaw('COUNT(*) as transaction_count, SUM(CASE WHEN credit_debit_indicator = "DBIT" THEN -amount ELSE amount END) as net_total')
             ->first();
 
@@ -115,6 +140,7 @@ class DailyTotalsDrilldownController extends Controller
             'bankSummary'         => $bankSummary,
             'viefundTransactions' => $viefundTransactions,
             'viefundSummary'      => $viefundSummary,
+            'onlyFundservBank'    => $onlyFundservBank,
         ]);
     }
 

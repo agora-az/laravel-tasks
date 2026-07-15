@@ -148,7 +148,7 @@ class ReconciliationController extends Controller
         // Step 1: Determine which transaction IDs match the search criteria
         $searchConstraintIds = null;
         $searchConstraintType = null; // 'left_id', 'right_id', or 'bank_transaction_id'
-        
+
         if ($searchTable && $searchField && $searchValue) {
             if ($searchTable === 'viefund') {
                 $searchConstraintIds = VieFundTransaction::where($searchField, 'LIKE', '%' . $searchValue . '%')
@@ -173,7 +173,7 @@ class ReconciliationController extends Controller
         // Step 2: Get distinct VieFund fund_wo_number groups with pagination
         $perPage = 50;
         $page = (int) $request->query('page', 1);
-        
+
         // Query fund_wo_numbers directly from viefund_transactions when searching VieFund
         // This ensures we get ALL fund_wo_numbers from matching viefund transactions, not just those with matches
         if ($searchConstraintType === 'left_id' && $searchConstraintIds) {
@@ -343,7 +343,7 @@ class ReconciliationController extends Controller
                     $aggregatedCriteria = [];
                     $matchedCriteriaCount = 0;
                     $totalCriteriaCount = count($allRulesMap);
-                    
+
                     foreach ($allRulesMap as $rule => $matchedValues) {
                         // Special handling for 'amount' criterion: use aggregated totals, not individual matches
                         if ($rule === 'amount') {
@@ -355,11 +355,11 @@ class ReconciliationController extends Controller
                             $criterionMatched = count($matchedValues) === $group->count() && !in_array(false, $matchedValues, true);
                             $matchedCount = array_sum($matchedValues);
                         }
-                        
+
                         if ($criterionMatched) {
                             $matchedCriteriaCount++;
                         }
-                        
+
                         $aggregatedCriteria[] = [
                             'rule' => $rule,
                             'matched' => $criterionMatched,
@@ -367,7 +367,7 @@ class ReconciliationController extends Controller
                             'total_count' => count($matchedValues),
                         ];
                     }
-                    
+
                     // Recalculate aggregated confidence based on corrected criteria (only for parent/first record)
                     // Confidence = number of matched criteria / total criteria
                     if ($totalCriteriaCount > 0 && $group->count() > 1) {
@@ -636,13 +636,13 @@ class ReconciliationController extends Controller
             // Kill any background PHP processes related to this session
             // Look for processes running reconcile:match-viefund-async with this session ID
             $sessionIdArg = escapeshellarg('--session=' . $session->id);
-            
+
             // Use pkill to find and kill processes by pattern
             $killCommand = sprintf(
                 "pkill -f %s 2>/dev/null || true",
                 escapeshellarg("reconcile:match-viefund-async.*session=" . $session->id)
             );
-            
+
             Log::info('Killing process for session ' . $session->id . ': ' . $killCommand);
             exec($killCommand);
 
@@ -666,7 +666,7 @@ class ReconciliationController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('Error resetting matching session: ' . $e->getMessage());
-            
+
             return response()->json([
                 'error' => 'Failed to reset session: ' . $e->getMessage()
             ], 500);
@@ -1049,7 +1049,7 @@ class ReconciliationController extends Controller
                 $transactionIds = VieFundTransaction::where($field, 'LIKE', '%' . $value . '%')
                     ->pluck('id')
                     ->toArray();
-                
+
                 if (empty($transactionIds)) {
                     return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
                 }
@@ -1059,14 +1059,13 @@ class ReconciliationController extends Controller
                     ->whereIn('left_id', $transactionIds)
                     ->pluck('id')
                     ->toArray();
-
             } elseif ($table === 'fundserv') {
                 // Find Fundserv transactions matching the search
                 $transactionIds = DB::table('fundserv_transactions')
                     ->where($field, 'LIKE', '%' . $value . '%')
                     ->pluck('id')
                     ->toArray();
-                
+
                 if (empty($transactionIds)) {
                     return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
                 }
@@ -1076,14 +1075,13 @@ class ReconciliationController extends Controller
                     ->whereIn('right_id', $transactionIds)
                     ->pluck('id')
                     ->toArray();
-
             } elseif ($table === 'bank') {
                 // Find Bank transactions matching the search
                 $transactionIds = DB::table('bank_transactions')
                     ->where($field, 'LIKE', '%' . $value . '%')
                     ->pluck('id')
                     ->toArray();
-                
+
                 if (empty($transactionIds)) {
                     return response()->json(['success' => false, 'matchIds' => [], 'message' => 'No transactions found']);
                 }
@@ -1100,7 +1098,6 @@ class ReconciliationController extends Controller
             }
 
             return response()->json(['success' => true, 'matchIds' => $matchIds, 'count' => count($matchIds)]);
-
         } catch (\Exception $e) {
             Log::error('Search error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
@@ -1132,7 +1129,7 @@ class ReconciliationController extends Controller
     {
         $matcher = new FeeTransactionMatcher();
         $summary = $matcher->getMatchSummary();
-        
+
         $unmatchedAccountFees = $matcher->getUnmatchedAccountFees()->paginate(50);
         $unmatchedAdvisoryFees = $matcher->getUnmatchedAdvisoryFees()->paginate(50);
 

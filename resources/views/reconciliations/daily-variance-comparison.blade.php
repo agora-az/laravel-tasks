@@ -3,8 +3,11 @@
 @section('title', 'Variance Comparison - ' . $date)
 
 @section('content')
+@php
+    $formattedDate = \Carbon\Carbon::parse($date)->format('F j, Y');
+@endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; gap: 12px; flex-wrap: wrap;">
-    <h2 style="margin: 0;">Variance Drilldown: {{ $date }}</h2>
+    <h2 style="margin: 0;">Variance Drilldown: {{ $formattedDate }}</h2>
     <a href="{{ route('reconciliations.daily-totals', ['date_from' => $date, 'date_to' => $date]) }}" class="btn" style="text-decoration: none;">Back to Daily Totals</a>
 </div>
 
@@ -20,19 +23,29 @@
                 <span style="font-size: 11px; font-weight: 700; opacity: 0.85;">{{ number_format((int) ($bankSummary->transaction_count ?? 0)) }} txn(s)</span>
             </div>
         </div>
+        <div style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #2c5282; margin-bottom: 6px;">Criteria</div>
+        <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; font-weight: 400; line-height: 1.5; color: #4a5568;">
+            <li>
+                @if(($onlyFundservBank ?? false))
+                    Calculating only bank transactions where counterparty contains "fundserv"
+                @else
+                    Calculating all bank transactions
+                @endif
+            </li>
+        </ul>
         @if($bankTransactions->count())
             <div style="overflow-x: auto; max-height: 70vh;">
                 <table style="width: 100%; border-collapse: collapse; min-width: 980px;" class="mono-grid">
                     <thead>
-                        <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap; position: sticky; top: 0;">
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">ID</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Dir</th>
-                            <th style="text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Memo Type</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Counterparty</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement #</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Wire Ref</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Description</th>
+                        <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">ID</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Dir</th>
+                            <th style="text-align: right; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Amount</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Memo Type</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Counterparty</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Settlement #</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Wire Ref</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Description</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -76,6 +89,10 @@
                 <span style="font-size: 11px; font-weight: 700; opacity: 0.85;">{{ number_format((int) ($viefundSummary->transaction_count ?? 0)) }} txn(s)</span>
             </div>
         </div>
+        <div style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #2f855a; margin-bottom: 6px;">Criteria</div>
+        <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; font-weight: 400; line-height: 1.5; color: #4a5568;">
+            <li>Calculating VieFund purchase or redemption cash transactions that are confirmed.</li>
+        </ul>
         @if($viefundTransactions->count())
             @php
                 $toTwoLineDate = function ($value) {
@@ -93,17 +110,17 @@
             <div style="overflow-x: auto; max-height: 70vh;">
                 <table style="width: 100%; border-collapse: collapse; min-width: 1280px;" class="mono-grid">
                     <thead>
-                        <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap; position: sticky; top: 0;">
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn ID</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Customer</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
-                            <th style="text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Processing Date</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement Date</th>
+                        <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Txn ID</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Customer</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Txn Type</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Order Status</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Notes</th>
+                            <th style="text-align: right; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Amount</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Created Date</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Trade Date</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Processing Date</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Settlement Date</th>
                         </tr>
                     </thead>
                     <tbody>

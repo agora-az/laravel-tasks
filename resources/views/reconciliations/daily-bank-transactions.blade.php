@@ -3,6 +3,9 @@
 @section('title', 'Bank Daily Transactions')
 
 @section('content')
+@php
+    $formattedDate = \Carbon\Carbon::parse($date)->format('F j, Y');
+@endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; gap: 12px; flex-wrap: wrap;">
     <h2 style="margin: 0;">Bank Daily Transactions</h2>
     <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -17,9 +20,16 @@
 
 <div class="card" style="margin-bottom: 16px; padding: 22px 24px; background: linear-gradient(135deg, #ebf8ff 0%, #e8f4fd 100%); border: 1px solid #90cdf4; color: #2c5282; box-shadow: 0 4px 14px rgba(49, 130, 206, 0.10);">
     <div style="font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #2b6cb0; margin-bottom: 8px;">Criteria</div>
-    <div style="font-size: 18px; font-weight: 700; line-height: 1.5;">
-        Transaction date is {{ $date }}, all bank transactions are included.
-    </div>
+    <ul style="margin: 0; padding-left: 20px; font-size: 15px; font-weight: 400; line-height: 1.55; color: #2c5282;">
+        <li>Transaction date is {{ $formattedDate }}</li>
+        <li>
+            @if(($onlyFundservBank ?? false))
+                Calculating only bank transactions where counterparty contains "fundserv"
+            @else
+                Calculating all bank transactions
+            @endif
+        </li>
+    </ul>
 </div>
 
 <div class="card">

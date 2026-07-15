@@ -440,29 +440,22 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-        $from = $fromDate->toDateString();
-        $to = $toDate->toDateString();
+        $from = $fromDate->copy()->startOfDay()->toDateTimeString();
+        $to = $toDate->copy()->addDay()->startOfDay()->toDateTimeString();
 
-        $excludeZero = config('viefund.hide_zero_amount', false) ? ' AND ct.mAmount <> 0' : '';
-
-        $sql = "
-            SELECT
-                CAST(ct.dtSettlement AS date) AS total_date,
-                COUNT(*) AS transaction_count,
-                SUM(ct.mAmount) AS net_total
-            FROM {$schema}.UB_CashTrx ct
-            WHERE ct.dtSettlement >= ?
-              AND ct.dtSettlement < DATEADD(day, 1, ?)
-              AND ct.dtSettlement IS NOT NULL
-              AND ct.mAmount IS NOT NULL
-              AND ct.iStatus = 6
-              AND ct.iType IN (22, 45)
-              {$excludeZero}
-            GROUP BY CAST(ct.dtSettlement AS date)
-            ORDER BY total_date ASC
-        ";
-
-        return collect(DB::connection(self::CONNECTION)->select($sql, [$from, $to]));
+        // Keep daily totals aligned with the daily transaction drilldown by using
+        // the same fund-linked base query and settlement filters.
+        return $this->buildBaseQuery($schema)
+            ->where('ct.dtSettlement', '>=', $from)
+            ->where('ct.dtSettlement', '<', $to)
+            ->whereNotNull('ct.dtSettlement')
+            ->whereNotNull('ct.mAmount')
+            ->where('ct.iStatus', '=', 6)
+            ->whereIn('ct.iType', [22, 45])
+            ->selectRaw('CAST(ct.dtSettlement AS date) AS total_date, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total')
+            ->groupByRaw('CAST(ct.dtSettlement AS date)')
+            ->orderBy('total_date', 'asc')
+            ->get();
     }
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator

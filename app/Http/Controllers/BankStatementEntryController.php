@@ -17,7 +17,7 @@ class BankStatementEntryController extends Controller
                 'bank_statement_entry_analyses as a',
                 function ($join) {
                     $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
-                         ->where('a.parser_version', self::PARSER_VERSION);
+                        ->where('a.parser_version', self::PARSER_VERSION);
                 }
             )
             ->select([
@@ -57,9 +57,9 @@ class BankStatementEntryController extends Controller
             $term = $request->search;
             $query->where(function ($q) use ($term) {
                 $q->where('bank_statement_entries.additional_info', 'like', '%' . $term . '%')
-                  ->orWhere('a.counterparty', 'like', '%' . $term . '%')
-                  ->orWhere('a.settlement_number', 'like', '%' . $term . '%')
-                  ->orWhere('a.wire_payment_reference', 'like', '%' . $term . '%');
+                    ->orWhere('a.counterparty', 'like', '%' . $term . '%')
+                    ->orWhere('a.settlement_number', 'like', '%' . $term . '%')
+                    ->orWhere('a.wire_payment_reference', 'like', '%' . $term . '%');
             });
         }
 
@@ -86,7 +86,7 @@ class BankStatementEntryController extends Controller
                 'bank_statement_entry_analyses as a',
                 function ($join) {
                     $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
-                         ->where('a.parser_version', self::PARSER_VERSION);
+                        ->where('a.parser_version', self::PARSER_VERSION);
                 }
             );
 
@@ -109,9 +109,9 @@ class BankStatementEntryController extends Controller
             $term = $request->search;
             $totalsQuery->where(function ($q) use ($term) {
                 $q->where('bank_statement_entries.additional_info', 'like', '%' . $term . '%')
-                  ->orWhere('a.counterparty', 'like', '%' . $term . '%')
-                  ->orWhere('a.settlement_number', 'like', '%' . $term . '%')
-                  ->orWhere('a.wire_payment_reference', 'like', '%' . $term . '%');
+                    ->orWhere('a.counterparty', 'like', '%' . $term . '%')
+                    ->orWhere('a.settlement_number', 'like', '%' . $term . '%')
+                    ->orWhere('a.wire_payment_reference', 'like', '%' . $term . '%');
             });
         }
 

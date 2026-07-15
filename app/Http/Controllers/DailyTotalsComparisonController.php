@@ -11,6 +11,8 @@ use Illuminate\View\View;
 
 class DailyTotalsComparisonController extends Controller
 {
+    private const PARSER_VERSION = 'v2';
+
     public function index(Request $request): View
     {
         $earliestBankDate = BankStatementEntry::min('value_date');
@@ -21,17 +23,28 @@ class DailyTotalsComparisonController extends Controller
         $dateFrom = $request->filled('date_from') ? Carbon::parse($request->date_from)->toDateString() : $defaultStart;
         $dateTo = $request->filled('date_to') ? Carbon::parse($request->date_to)->toDateString() : Carbon::today()->toDateString();
         $showZeroDays = $request->boolean('show_zero_days');
+        $onlyFundservBank = $request->has('only_fundserv_bank')
+            ? $request->boolean('only_fundserv_bank')
+            : true;
         $sortField = in_array($request->query('sort'), ['total_date', 'bank_net_total', 'viefund_net_total', 'variance', 'discrepancy_pct'], true)
             ? $request->query('sort')
             : 'total_date';
         $sortDir = $request->query('sort_dir') === 'asc' ? 'asc' : 'desc';
 
-        $bankRows = DB::table('bank_statement_entries')
+        $bankRowsQuery = DB::table('bank_statement_entries')
+            ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
             ->whereBetween('value_date', [$dateFrom, $dateTo])
+            ->when($onlyFundservBank, function ($query) {
+                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
+            })
             ->selectRaw("value_date as total_date, COUNT(*) as transaction_count, SUM(CASE WHEN credit_debit_indicator = 'DBIT' THEN -amount ELSE amount END) as net_total")
             ->groupBy('value_date')
-            ->orderBy('value_date')
-            ->get();
+            ->orderBy('value_date');
+
+        $bankRows = $bankRowsQuery->get();
 
         $viefundRows = VieFundDailyTotal::query()
             ->whereBetween('total_date', [$dateFrom, $dateTo])
@@ -99,6 +112,6 @@ class DailyTotalsComparisonController extends Controller
             'mismatch_days' => $rows->where('status', '!=', 'match')->count(),
         ];
 
-        return view('reconciliations.daily-totals', compact('rows', 'summary', 'dateFrom', 'dateTo', 'sortField', 'sortDir', 'showZeroDays'));
+        return view('reconciliations.daily-totals', compact('rows', 'summary', 'dateFrom', 'dateTo', 'sortField', 'sortDir', 'showZeroDays', 'onlyFundservBank'));
     }
 }
