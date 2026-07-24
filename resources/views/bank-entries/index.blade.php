@@ -97,6 +97,9 @@
                 } else if (data.success === false) {
                     wrap.className = 'sync-chip sync-chip-error';
                     setMessage(data.message || 'Bank sync failed.');
+                } else if (data.message && data.message !== 'Idle') {
+                    wrap.className = 'sync-chip sync-chip-progress';
+                    setMessage(data.message);
                 } else {
                     setVisible(false);
                 }

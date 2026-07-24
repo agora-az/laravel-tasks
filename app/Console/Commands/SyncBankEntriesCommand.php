@@ -16,9 +16,10 @@ class SyncBankEntriesCommand extends Command
         {--password= : SFTP password (defaults to BANK_SFTP_PASSWORD)}
         {--remote-path=/ : Remote directory path (defaults to BANK_SFTP_REMOTE_PATH)}
         {--local-path=resources/data/cibc : Local directory for downloaded CAMT files}
-        {--pattern=*.xml : Remote filename glob (defaults to BANK_SFTP_FILE_PATTERN)}
+        {--pattern= : Remote filename glob (defaults to BANK_SFTP_FILE_PATTERN)}
         {--parser=v2 : Parser version for analyze:bank-entries}
         {--skip-analysis : Skip analyze:bank-entries step}
+        {--dry-run : Preview only (no download, import, analysis, or local file deletion)}
         {--keep-local : Keep processed files in local-path after successful sync}
         {--force : Import files even if filename already imported}
         {--status-file= : Optional path to write sync progress JSON}
@@ -28,8 +29,8 @@ class SyncBankEntriesCommand extends Command
 
     public function handle(): int
     {
-        $lockFile = $this->option('lock-file') ?: null;
-        $statusFile = $this->option('status-file') ?: null;
+        $lockFile = $this->resolveStringOptionValue($this->option('lock-file'));
+        $statusFile = $this->resolveStringOptionValue($this->option('status-file'));
         if ($lockFile) {
             @file_put_contents($lockFile, date('c'));
         }
@@ -73,12 +74,13 @@ class SyncBankEntriesCommand extends Command
         $remotePath = $this->normalizeRemotePath($this->resolveOption('remote-path', 'BANK_SFTP_REMOTE_PATH', '/'));
         $localPath = $this->resolveOption('local-path', 'BANK_SFTP_LOCAL_PATH', 'resources/data/cibc');
         $pattern = $this->resolveOption('pattern', 'BANK_SFTP_FILE_PATTERN', '*.xml');
-        $parserVersion = (string) $this->option('parser');
+        $parserVersion = $this->resolveStringOptionValue($this->option('parser')) ?? 'v2';
         $force = (bool) $this->option('force');
         $keepLocal = (bool) $this->option('keep-local');
+        $dryRun = (bool) $this->option('dry-run') || $this->resolveBooleanEnv('BANK_SFTP_DRY_RUN', false);
 
         $localDir = base_path($localPath);
-        if (!is_dir($localDir) && !mkdir($localDir, 0775, true) && !is_dir($localDir)) {
+        if (!$dryRun && !is_dir($localDir) && !mkdir($localDir, 0775, true) && !is_dir($localDir)) {
             $this->error("Unable to create local directory: {$localDir}");
             $this->writeStatus($statusFile, [
                 'inProgress' => false,
@@ -108,7 +110,7 @@ class SyncBankEntriesCommand extends Command
             ->pluck('filename')
             ->all();
 
-        $localCandidates = collect(glob($localDir . '/' . $pattern) ?: [])
+        $localCandidates = collect((is_dir($localDir) ? glob($localDir . '/' . $pattern) : []) ?: [])
             ->map(fn($path) => basename($path))
             ->sort()
             ->values();
@@ -118,7 +120,7 @@ class SyncBankEntriesCommand extends Command
             ->values();
 
         $deletedProcessedLocalCount = 0;
-        if (!$keepLocal && $localProcessed->isNotEmpty()) {
+        if (!$dryRun && !$keepLocal && $localProcessed->isNotEmpty()) {
             foreach ($localProcessed as $fileName) {
                 $localFilePath = $localDir . DIRECTORY_SEPARATOR . $fileName;
                 if (is_file($localFilePath) && @unlink($localFilePath)) {
@@ -131,7 +133,7 @@ class SyncBankEntriesCommand extends Command
             }
 
             // Refresh local candidates after cleanup.
-            $localCandidates = collect(glob($localDir . '/' . $pattern) ?: [])
+            $localCandidates = collect((is_dir($localDir) ? glob($localDir . '/' . $pattern) : []) ?: [])
                 ->map(fn($path) => basename($path))
                 ->sort()
                 ->values();
@@ -196,6 +198,17 @@ class SyncBankEntriesCommand extends Command
 
         if ($candidateFiles->isEmpty()) {
             $this->info("No remote files matched pattern {$pattern}.");
+            $this->writeStatus($statusFile, [
+                'inProgress' => false,
+                'success' => true,
+                'message' => "No remote files matched pattern {$pattern}.",
+                'processed_files' => 0,
+                'total_files' => 0,
+                'progress_pct' => 100,
+                'started_at' => $startedAt,
+                'updated_at' => now()->toIso8601String(),
+                'completed_at' => now()->toIso8601String(),
+            ]);
             return self::SUCCESS;
         }
 
@@ -205,6 +218,37 @@ class SyncBankEntriesCommand extends Command
                 ->reject(fn($name) => in_array($name, $processedNames, true))
                 ->reject(fn($name) => $localCandidates->contains($name))
                 ->values();
+
+        if ($dryRun) {
+            $localPendingCount = $localPending->count();
+            $toDownloadCount = $toDownload->count();
+            $eligibleCount = $localPendingCount + $toDownloadCount;
+
+            $message = sprintf(
+                'Dry run complete. %d remote files matched, %d already processed, %d eligible to process (%d local pending, %d to download). No files were downloaded or imported.',
+                $candidateFiles->count(),
+                $candidateFiles->count() - $toDownloadCount,
+                $eligibleCount,
+                $localPendingCount,
+                $toDownloadCount
+            );
+
+            $this->info($message);
+            $this->writeStatus($statusFile, [
+                'inProgress' => false,
+                'success' => true,
+                'dry_run' => true,
+                'message' => $message,
+                'processed_files' => 0,
+                'total_files' => $eligibleCount,
+                'progress_pct' => 100,
+                'started_at' => $startedAt,
+                'updated_at' => now()->toIso8601String(),
+                'completed_at' => now()->toIso8601String(),
+            ]);
+
+            return self::SUCCESS;
+        }
 
         $totalFiles = $localPending->count() + $toDownload->count();
         if ($totalFiles === 0) {
@@ -435,21 +479,52 @@ class SyncBankEntriesCommand extends Command
     private function resolveOption(string $option, string $envKey, ?string $default = null): ?string
     {
         $value = $this->option($option);
-        if (is_array($value)) {
-            $value = collect($value)
-                ->first(fn($v) => $v !== null && $v !== '');
-        }
+        $value = $this->resolveStringOptionValue($value);
         if ($value !== null && $value !== '') {
             return (string) $value;
         }
 
         $envValue = env($envKey);
-        if (is_array($envValue)) {
-            $envValue = collect($envValue)
-                ->first(fn($v) => $v !== null && $v !== '');
-        }
+        $envValue = $this->resolveStringOptionValue($envValue);
         if ($envValue !== null && $envValue !== '') {
             return (string) $envValue;
+        }
+
+        return $default;
+    }
+
+    private function resolveStringOptionValue(mixed $value): ?string
+    {
+        if (is_array($value)) {
+            $value = collect($value)
+                ->first(fn($v) => $v !== null && $v !== '');
+        }
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return (string) $value;
+    }
+
+    private function resolveBooleanEnv(string $envKey, bool $default = false): bool
+    {
+        $envValue = env($envKey);
+        if ($envValue === null || $envValue === '') {
+            return $default;
+        }
+
+        if (is_bool($envValue)) {
+            return $envValue;
+        }
+
+        if (is_int($envValue)) {
+            return $envValue !== 0;
+        }
+
+        if (is_string($envValue)) {
+            $normalized = strtolower(trim($envValue));
+            return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
         }
 
         return $default;

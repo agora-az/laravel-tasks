@@ -156,6 +156,7 @@ class BankStatementEntryController extends Controller
         $statusFile = storage_path('app/bank-entries-sync-status.json');
         $logPath = storage_path('logs/bank-entries-sync.log');
         $phpPath = env('PHP_PATH', '/usr/local/bin/php');
+        $dryRun = $this->resolveBooleanEnv('BANK_SFTP_DRY_RUN', false);
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
@@ -169,7 +170,8 @@ class BankStatementEntryController extends Controller
         file_put_contents($statusFile, json_encode([
             'inProgress' => true,
             'success' => null,
-            'message' => 'Bank entries sync queued...',
+            'dry_run' => $dryRun,
+            'message' => $dryRun ? 'Bank entries dry run queued...' : 'Bank entries sync queued...',
             'processed_files' => 0,
             'total_files' => null,
             'progress_pct' => 0,
@@ -177,13 +179,16 @@ class BankStatementEntryController extends Controller
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
 
+        $extraArgs = $dryRun ? ' --dry-run' : '';
+
         $command = sprintf(
-            '%s %s bank:sync-entries --parser=%s --lock-file=%s --status-file=%s >> %s 2>&1 &',
+            '%s %s bank:sync-entries --parser=%s --lock-file=%s --status-file=%s%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg(self::PARSER_VERSION),
             escapeshellarg($lockFile),
             escapeshellarg($statusFile),
+            $extraArgs,
             escapeshellarg($logPath)
         );
 
@@ -204,7 +209,9 @@ class BankStatementEntryController extends Controller
 
         return redirect()
             ->route('bank-entries.index', $request->except('_token'))
-            ->with('sync_success', 'Bank entries sync started. Files will be downloaded from SFTP and processed in the background.');
+            ->with('sync_success', $dryRun
+                ? 'Bank entries dry run started. A preview will be generated without downloading or importing files.'
+                : 'Bank entries sync started. Files will be downloaded from SFTP and processed in the background.');
     }
 
     public function syncStatus(): JsonResponse
@@ -226,6 +233,7 @@ class BankStatementEntryController extends Controller
             'completed_at' => null,
         ];
 
+        $parsed = null;
         if (file_exists($statusFile)) {
             $json = file_get_contents($statusFile);
             $parsed = json_decode($json ?: '{}', true);
@@ -235,6 +243,40 @@ class BankStatementEntryController extends Controller
             }
         }
 
+        $staleInProgress = !$inProgress
+            && is_array($parsed)
+            && (($parsed['inProgress'] ?? false) === true)
+            && (($parsed['success'] ?? null) === null);
+
+        if ($staleInProgress) {
+            $payload['success'] = false;
+            $payload['message'] = 'Bank sync stopped before reporting completion. Check the sync log and retry.';
+            $payload['completed_at'] = $payload['completed_at'] ?? now()->toIso8601String();
+        }
+
         return response()->json($payload);
+    }
+
+    private function resolveBooleanEnv(string $envKey, bool $default = false): bool
+    {
+        $envValue = env($envKey);
+        if ($envValue === null || $envValue === '') {
+            return $default;
+        }
+
+        if (is_bool($envValue)) {
+            return $envValue;
+        }
+
+        if (is_int($envValue)) {
+            return $envValue !== 0;
+        }
+
+        if (is_string($envValue)) {
+            $normalized = strtolower(trim($envValue));
+            return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return $default;
     }
 }
