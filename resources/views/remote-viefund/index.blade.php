@@ -1,6 +1,6 @@
 @extends('layouts.app')
 
-@section('title', 'Remote VieFund Transactions')
+@section('title', 'VieFund Customer Transactions')
 
 <style>
 /* ── Multi-select dropdown widget ──────────────────────────────────── */
@@ -64,12 +64,12 @@
 </style>
 
 @section('content')
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0;">📡 Remote VieFund Transactions</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
+        <h2 style="margin: 0;">VieFund Customer Transactions</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
             <div id="sync-status-badge">
                 @if($syncInProgress)
-                    <span style="background: #ebf8ff; color: #2b6cb0; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600;">
+                    <span class="sync-chip sync-chip-progress">
                         ⟳ Transaction Sync In Progress…
                     </span>
                 @elseif($syncNeeded)
@@ -84,19 +84,16 @@
                                 <input type="hidden" name="{{ $key }}" value="{{ $val }}">
                             @endif
                         @endforeach
-                        <button type="submit" style="background: #fefcbf; color: #744210; border: 1px solid #f6e05e; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600; cursor: pointer;">
+                        <button type="submit" class="sync-action-pill sync-action-pill-secondary">
                             ↻ Sync New Transactions
                         </button>
                     </form>
                 @else
-                    <span style="background: #c6f6d5; color: #276749; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600;">
+                    <span class="sync-chip sync-chip-success">
                         ✓ Transactions Synced
                     </span>
                 @endif
             </div>
-            <span style="background: #c6f6d5; color: #276749; border-radius: 20px; padding: 4px 14px; font-size: 13px; font-weight: 600;">
-                🔴 Live Source DB
-            </span>
         </div>
     </div>
 
@@ -1555,7 +1552,7 @@ const sharedCols = [
                             location.reload();
                         } else {
                             // All caught up
-                            badge.innerHTML = '<span style="background:#c6f6d5;color:#276749;border-radius:20px;padding:4px 14px;font-size:13px;font-weight:600;">✓ Transactions Synced</span>';
+                            badge.innerHTML = '<span class="sync-chip sync-chip-success">✓ Transactions Synced</span>';
                         }
                     })
                     .catch(function () { /* network blip — keep polling */ });

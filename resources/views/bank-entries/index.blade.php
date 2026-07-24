@@ -4,7 +4,7 @@
 
 @section('content')
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
-    <h2 style="margin: 0;">🏦 Bank Statement Entries</h2>
+    <h2 style="margin: 0;">Bank Statement Entries</h2>
     <span style="color: #718096; font-size: 13px;">Source: CIBC CAMT.053 · Parser v2</span>
 </div>
 

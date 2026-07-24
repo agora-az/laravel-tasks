@@ -7,15 +7,15 @@
     <div>
         <h2 style="margin: 0;">Daily Totals Comparison</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. cached VieFund daily net total</div>
-        <div id="daily-sync-status-wrap" style="display:none; margin-top:8px; font-size:12px; font-weight:600; color:#2b6cb0; background:#ebf8ff; border:1px solid #bee3f8; border-radius:14px; padding:4px 10px; width:max-content; align-items:center; gap:8px;">
+        <div id="daily-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
             <span id="daily-sync-status"></span>
             <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
     <form method="POST" action="{{ route('reconciliations.daily-totals.sync') }}" style="display:flex; gap:8px; align-items:center; margin:0;">
         @csrf
-        <button type="submit" id="daily-sync-incremental-btn" class="btn" style="padding: 10px 18px;">↻ Incremental Sync</button>
-        <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="btn" style="background:#d69e2e; padding: 10px 18px;">↻ Full Sync</button>
+        <button type="submit" id="daily-sync-incremental-btn" class="sync-action-pill sync-action-pill-primary">↻ Incremental Sync</button>
+        <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="sync-action-pill sync-action-pill-secondary">↻ Full Sync</button>
     </form>
 </div>
 
@@ -107,9 +107,7 @@
                     ].filter(Boolean).join(' • ');
                     setBadgeVisible(true);
                     localStorage.removeItem(DISMISS_KEY);
-                    badge.style.color = '#2b6cb0';
-                    badgeWrap.style.background = '#ebf8ff';
-                    badgeWrap.style.borderColor = '#bee3f8';
+                    badgeWrap.className = 'sync-chip sync-chip-progress';
                     setMessage(`Sync in progress: ${pct}% (${processed}/${total}) • ${formatEta(data.eta_seconds)}${extras ? ` • ${extras}` : ''}`);
                     setButtonsBusy(true);
                 } else {
@@ -122,16 +120,12 @@
                             updatedAt ? `Updated: ${updatedAt}` : null,
                         ].filter(Boolean).join(' • ');
                         setBadgeVisible(true);
-                        badge.style.color = '#276749';
-                        badgeWrap.style.background = '#c6f6d5';
-                        badgeWrap.style.borderColor = '#9ae6b4';
+                        badgeWrap.className = 'sync-chip sync-chip-success';
                         setMessage(`${data.message || 'Last sync completed.'}${suffix ? ` • ${suffix}` : ''}`);
                     } else if (data.success === false) {
                         const updatedAt = formatDateTime(data.updated_at);
                         setBadgeVisible(true);
-                        badge.style.color = '#742a2a';
-                        badgeWrap.style.background = '#fff5f5';
-                        badgeWrap.style.borderColor = '#feb2b2';
+                        badgeWrap.className = 'sync-chip sync-chip-error';
                         setMessage(`${data.message || 'Last sync failed.'}${updatedAt ? ` • Updated: ${updatedAt}` : ''}`);
                     } else {
                         setBadgeVisible(false);

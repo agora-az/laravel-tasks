@@ -66,6 +66,54 @@ header .header-top a:hover {
     opacity: 0.8;
 }
 
+/* Top nav: balanced spacing and softer visual hierarchy */
+header .header-top .top-nav-menu {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+header .header-top .top-nav-menu a {
+    margin-left: 0;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: #f7fafc;
+    font-weight: 600;
+    line-height: 1;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+header .header-top .top-nav-menu a:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+
+header .header-top .top-nav-menu form {
+    margin: 0;
+}
+
+header .header-top .top-nav-logout-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 7px 14px;
+    border-radius: 8px;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+header .header-top .top-nav-logout-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
 header .logo-container {
     display: flex;
     align-items: center;
@@ -115,6 +163,75 @@ header .tagline {
     background: var(--success-green);
     transform: translateY(-1px);
     box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+/* Shared sync/status chips used on Daily Totals and Customer Transactions */
+.sync-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid transparent;
+}
+
+.sync-chip-progress {
+    background: #ebf8ff;
+    color: #2b6cb0;
+    border-color: #bee3f8;
+}
+
+.sync-chip-success {
+    background: #c6f6d5;
+    color: #276749;
+    border-color: #9ae6b4;
+}
+
+.sync-chip-error {
+    background: #fff5f5;
+    color: #742a2a;
+    border-color: #feb2b2;
+}
+
+/* Shared sync action buttons (pill style) */
+.sync-action-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 18px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.sync-action-pill:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.03);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.sync-action-pill:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.sync-action-pill-primary {
+    background: #38a169;
+    border-color: #2f855a;
+}
+
+.sync-action-pill-secondary {
+    background: #d69e2e;
+    border-color: #b7791f;
 }
 
 /* Card Styles */

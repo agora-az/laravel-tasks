@@ -15,13 +15,13 @@
                     <span>☎ +1.855.462.4672</span>
                     <a href="mailto:info@agoracorp.ca">✉ info@agoracorp.ca</a>
                 </div>
-                <div style="display: flex; align-items: center; gap: 20px;">
+                <div class="top-nav-menu">
                     <a href="/dashboard">Dashboard</a>
                     @if(!in_array('transaction_data', config('app.nav_hide')))
                     <a href="/imports/transactions">Transaction Data</a>
                     @endif
                     <a href="/bank-entries">Bank Entries</a>
-                    <a href="/remote-viefund">Remote VieFund</a>
+                    <a href="/remote-viefund">Customer Transactions</a>
                     <a href="/reconciliations/daily-totals">Daily Totals</a>
                     @if(!in_array('reconciliation', config('app.nav_hide')))
                     <a href="/reconciliations/matches">Reconciliation</a>
@@ -31,7 +31,7 @@
                     @endif
                     <form method="POST" action="{{ route('logout') }}" style="margin: 0;">
                         @csrf
-                        <button type="submit" style="background: none; border: none; color: #3182ce; cursor: pointer; font-size: 14px; text-decoration: none;">Logout</button>
+                        <button type="submit" class="top-nav-logout-btn">Logout</button>
                     </form>
                 </div>
             </div>
