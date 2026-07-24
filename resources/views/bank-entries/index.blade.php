@@ -4,9 +4,112 @@
 
 @section('content')
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
-    <h2 style="margin: 0;">Bank Statement Entries</h2>
-    <span style="color: #718096; font-size: 13px;">Source: CIBC CAMT.053 · Parser v2</span>
+    <div>
+        <h2 style="margin: 0;">Bank Statement Entries</h2>
+        <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source: CIBC CAMT.053 · Parser v2</div>
+        <div id="bank-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
+            <span id="bank-sync-status"></span>
+            <button type="button" id="bank-sync-status-dismiss" aria-label="Dismiss bank sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
+        </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+        <form method="POST" action="{{ route('bank-entries.sync') }}" style="margin:0;">
+            @csrf
+            @foreach(request()->query() as $key => $val)
+                @if(is_array($val))
+                    @foreach($val as $v)
+                        <input type="hidden" name="{{ $key }}[]" value="{{ $v }}">
+                    @endforeach
+                @else
+                    <input type="hidden" name="{{ $key }}" value="{{ $val }}">
+                @endif
+            @endforeach
+            <button type="submit" id="bank-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync Bank Entries</button>
+        </form>
+    </div>
 </div>
+
+@if(session('sync_success'))
+    <div style="margin-bottom: 16px; padding: 10px 14px; border-radius: 6px; background: #c6f6d5; color: #22543d; border: 1px solid #9ae6b4; font-size: 13px;">
+        {{ session('sync_success') }}
+    </div>
+@endif
+@if(session('sync_error'))
+    <div style="margin-bottom: 16px; padding: 10px 14px; border-radius: 6px; background: #fff5f5; color: #742a2a; border: 1px solid #feb2b2; font-size: 13px;">
+        {{ session('sync_error') }}
+    </div>
+@endif
+
+<script>
+(function () {
+    const wrap = document.getElementById('bank-sync-status-wrap');
+    const text = document.getElementById('bank-sync-status');
+    const dismiss = document.getElementById('bank-sync-status-dismiss');
+    const btn = document.getElementById('bank-sync-btn');
+    if (!wrap || !text) return;
+
+    const DISMISS_KEY = 'bankEntriesSyncDismissedMessage';
+    let currentMessage = '';
+
+    const setVisible = (visible) => {
+        wrap.style.display = visible ? 'inline-flex' : 'none';
+    };
+
+    const setBusy = (busy) => {
+        if (!btn) return;
+        btn.disabled = busy;
+    };
+
+    const setMessage = (msg) => {
+        currentMessage = msg;
+        text.textContent = msg;
+        const dismissed = localStorage.getItem(DISMISS_KEY);
+        setVisible(dismissed !== msg);
+    };
+
+    if (dismiss) {
+        dismiss.addEventListener('click', () => {
+            if (!currentMessage) return;
+            localStorage.setItem(DISMISS_KEY, currentMessage);
+            setVisible(false);
+        });
+    }
+
+    const poll = () => {
+        fetch('{{ route('bank-entries.sync-status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(r => r.json())
+            .then(data => {
+                if (data.inProgress) {
+                    const processed = data.processed_files ?? 0;
+                    const total = data.total_files ?? '?';
+                    const pct = data.progress_pct ?? 0;
+                    wrap.className = 'sync-chip sync-chip-progress';
+                    localStorage.removeItem(DISMISS_KEY);
+                    setMessage(`Bank sync in progress: ${pct}% (${processed}/${total})`);
+                    setBusy(true);
+                    return;
+                }
+
+                setBusy(false);
+                if (data.success === true) {
+                    wrap.className = 'sync-chip sync-chip-success';
+                    setMessage(data.message || 'Bank sync completed.');
+                } else if (data.success === false) {
+                    wrap.className = 'sync-chip sync-chip-error';
+                    setMessage(data.message || 'Bank sync failed.');
+                } else {
+                    setVisible(false);
+                }
+            })
+            .catch(() => {
+                // Keep UI stable if polling fails.
+            });
+    };
+
+    poll();
+    setInterval(poll, 5000);
+})();
+</script>
 
 {{-- Summary Cards --}}
 @php

@@ -4,7 +4,8 @@
     "type": "project",
     "require": {
         "laravel/framework": "^11.0",
-        "smalot/pdfparser": "^2.12"
+        "smalot/pdfparser": "^2.12",
+        "phpseclib/phpseclib": "^3.0"
     },
     "autoload": {
         "psr-4": {

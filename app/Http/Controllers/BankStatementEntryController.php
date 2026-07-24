@@ -3,12 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\BankStatementEntry;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BankStatementEntryController extends Controller
 {
     private const PARSER_VERSION = 'v2';
+    private const LOCK_TTL_SECONDS = 14400;
 
     public function index(Request $request)
     {
@@ -143,5 +147,94 @@ class BankStatementEntryController extends Controller
             'channels',
             'memoTypes',
         ));
+    }
+
+    public function sync(Request $request): RedirectResponse
+    {
+        $artisanPath = base_path('artisan');
+        $lockFile = storage_path('app/bank-entries-sync.lock');
+        $statusFile = storage_path('app/bank-entries-sync-status.json');
+        $logPath = storage_path('logs/bank-entries-sync.log');
+        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
+
+        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        if ($hasLiveLock) {
+            return redirect()
+                ->route('bank-entries.index', $request->except('_token'))
+                ->with('sync_error', 'A bank entries sync is already in progress.');
+        }
+
+        // Create lock immediately so UI reflects in-progress state without delay.
+        file_put_contents($lockFile, date('c'));
+        file_put_contents($statusFile, json_encode([
+            'inProgress' => true,
+            'success' => null,
+            'message' => 'Bank entries sync queued...',
+            'processed_files' => 0,
+            'total_files' => null,
+            'progress_pct' => 0,
+            'started_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+        ], JSON_PRETTY_PRINT));
+
+        $command = sprintf(
+            '%s %s bank:sync-entries --parser=%s --lock-file=%s --status-file=%s >> %s 2>&1 &',
+            escapeshellarg($phpPath),
+            escapeshellarg($artisanPath),
+            escapeshellarg(self::PARSER_VERSION),
+            escapeshellarg($lockFile),
+            escapeshellarg($statusFile),
+            escapeshellarg($logPath)
+        );
+
+        Log::info('Dispatching bank:sync-entries in background: ' . $command);
+
+        $descriptorspec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $process = proc_open($command, $descriptorspec, $pipes);
+        if (is_resource($process)) {
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_close($process);
+        }
+
+        return redirect()
+            ->route('bank-entries.index', $request->except('_token'))
+            ->with('sync_success', 'Bank entries sync started. Files will be downloaded from SFTP and processed in the background.');
+    }
+
+    public function syncStatus(): JsonResponse
+    {
+        $lockFile = storage_path('app/bank-entries-sync.lock');
+        $statusFile = storage_path('app/bank-entries-sync-status.json');
+
+        $inProgress = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+
+        $payload = [
+            'inProgress' => $inProgress,
+            'success' => null,
+            'message' => $inProgress ? 'Bank entries sync in progress...' : 'Idle',
+            'processed_files' => null,
+            'total_files' => null,
+            'progress_pct' => null,
+            'started_at' => null,
+            'updated_at' => null,
+            'completed_at' => null,
+        ];
+
+        if (file_exists($statusFile)) {
+            $json = file_get_contents($statusFile);
+            $parsed = json_decode($json ?: '{}', true);
+            if (is_array($parsed)) {
+                $payload = array_merge($payload, $parsed);
+                $payload['inProgress'] = $inProgress;
+            }
+        }
+
+        return response()->json($payload);
     }
 }

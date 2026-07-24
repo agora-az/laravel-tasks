@@ -108,6 +108,8 @@ Route::middleware('auth.check')->group(function () {
 
     // Bank statement entries (raw CAMT analysis view)
     Route::get('/bank-entries', [BankStatementEntryController::class, 'index'])->name('bank-entries.index');
+    Route::post('/bank-entries/sync', [BankStatementEntryController::class, 'sync'])->name('bank-entries.sync');
+    Route::get('/bank-entries/sync-status', [BankStatementEntryController::class, 'syncStatus'])->name('bank-entries.sync-status');
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');
