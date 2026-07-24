@@ -23,9 +23,9 @@ class RemoteVieFundController extends Controller
     {
         $search = trim((string) $request->query('search', ''));
         $trxTypesSelected  = array_values(array_filter((array) $request->query('filter_trx_type', [])));
-        $directionSelected = array_values(array_intersect(
-            (array) $request->query('filter_direction', []),
-            ['debit', 'credit']
+        $statusGroupSelected = array_values(array_intersect(
+            (array) $request->query('filter_status_group', []),
+            ['not_completed', 'open', 'completed']
         ));
         $filters = array_filter([
             'customer_id'     => trim((string) $request->query('filter_customer_id', '')),
@@ -35,7 +35,7 @@ class RemoteVieFundController extends Controller
             'source_id'       => trim((string) $request->query('filter_source_id', '')),
             'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
             'trx_type'        => $trxTypesSelected ?: null,
-            'direction'       => $directionSelected ?: null,
+            'status_group'    => $statusGroupSelected ?: null,
             'created_from'    => trim((string) $request->query('filter_created_from', '')),
             'created_to'      => trim((string) $request->query('filter_created_to', '')),
         ]);
@@ -173,9 +173,9 @@ class RemoteVieFundController extends Controller
         $format = $request->query('format', 'csv');
         $search = trim((string) $request->query('search', ''));
         $trxTypesSelected  = array_values(array_filter((array) $request->query('filter_trx_type', [])));
-        $directionSelected = array_values(array_intersect(
-            (array) $request->query('filter_direction', []),
-            ['debit', 'credit']
+        $statusGroupSelected = array_values(array_intersect(
+            (array) $request->query('filter_status_group', []),
+            ['not_completed', 'open', 'completed']
         ));
         $filters = array_filter([
             'customer_id'     => trim((string) $request->query('filter_customer_id', '')),
@@ -184,32 +184,51 @@ class RemoteVieFundController extends Controller
             'trx_id'          => trim((string) $request->query('filter_trx_id', '')),
             'source_id'       => trim((string) $request->query('filter_source_id', '')),
             'trx_type'        => $trxTypesSelected ?: null,
-            'direction'       => $directionSelected ?: null,
+            'status_group'    => $statusGroupSelected ?: null,
             'created_from'    => trim((string) $request->query('filter_created_from', '')),
             'created_to'      => trim((string) $request->query('filter_created_to', '')),
         ]);
 
-        $rows = $this->remoteService->exportTransactions($search ?: null, $filters);
+        $rows = $this->remoteService->exportTransactions($search ?: null, $filters)
+            ->sortBy([['plan_dealer_account_id', 'asc'], ['created_date', 'asc'], ['trx_id', 'asc']])
+            ->values();
 
-        $customerName = $filters['customer_name'] ?? 'export';
-        $filename = 'viefund-transactions-' . preg_replace('/[^A-Za-z0-9_-]/', '-', $customerName);
+        $runningBalances = [];
+        $rows = $rows->map(function ($row) use (&$runningBalances) {
+            $planId = (string) ($row->plan_dealer_account_id ?? '');
+            $runningBalances[$planId] = $runningBalances[$planId] ?? 0.0;
+
+            $amount = $row->amount !== null ? (float) $row->amount : 0.0;
+            $runningBalances[$planId] = round(($runningBalances[$planId] + $amount) * 10000) / 10000;
+            $row->calculated_balance = $runningBalances[$planId];
+            $row->display_trx_id = $this->buildDisplayTrxId($row);
+
+            return $row;
+        });
+
+        $accountId = preg_replace('/[^A-Za-z0-9_-]/', '-', (string) ($filters['account_id'] ?? 'export'));
+        $timestamp = now()->format('Ymd_His');
+        $filename = "viefund_trx_{$accountId}_{$timestamp}";
 
         $headers = [
-            'Txn ID',
+            'Display Txn ID',
+            'Fund Trx ID',
+            'Cash Trx ID',
+            'Trust Trx ID',
             'Source ID',
             'Client Name',
             'Rep Code',
             'Plan Account ID',
             'Txn Type',
             'Txn Type Detail',
-            'Order Status',
+            'Status',
             'Created Date',
             'Trade Date',
             'Processing Date',
             'Settlement Date',
             'Amount -',
             'Amount +',
-            'Balance',
+            'Calculated Balance',
             'Notes',
         ];
 
@@ -228,16 +247,19 @@ class RemoteVieFundController extends Controller
             fputcsv($out, $headers);
             foreach ($rows as $row) {
                 $amount  = (float) $row->amount;
-                $balance = $row->balance !== null ? (float) $row->balance : null;
+                $balance = $row->calculated_balance !== null ? (float) $row->calculated_balance : null;
                 fputcsv($out, [
-                    $row->trx_id,
+                    $row->display_trx_id,
+                    $row->fund_trx_id,
+                    $row->row_source === 'fund' ? $row->cash_trx_id : '',
+                    $row->trust_trx_id ?? $row->linked_trust_trx_id ?? '',
                     $row->source_id,
                     trim($row->client_name),
                     $row->rep_code,
                     $row->plan_dealer_account_id,
                     $row->trx_type,
                     $row->cash_trx_type,
-                    $row->order_status ?? '',
+                    $row->status ?? '',
                     $row->created_date,
                     $row->trade_date,
                     $row->processing_date,
@@ -269,16 +291,19 @@ class RemoteVieFundController extends Controller
 
             foreach ($rows as $row) {
                 $amount  = (float) $row->amount;
-                $balance = $row->balance !== null ? (float) $row->balance : null;
+                $balance = $row->calculated_balance !== null ? (float) $row->calculated_balance : null;
                 $cells = [
-                    ['String', $row->trx_id],
+                    ['String', $row->display_trx_id],
+                    ['String', $row->fund_trx_id],
+                    ['String', $row->row_source === 'fund' ? $row->cash_trx_id : ''],
+                    ['String', $row->trust_trx_id ?? $row->linked_trust_trx_id ?? ''],
                     ['String', $row->source_id],
                     ['String', trim($row->client_name)],
                     ['String', $row->rep_code],
                     ['String', $row->plan_dealer_account_id],
                     ['String', $row->trx_type],
                     ['String', $row->cash_trx_type],
-                    ['String', $row->order_status ?? ''],
+                    ['String', $row->status ?? ''],
                     ['String', $row->created_date],
                     ['String', $row->trade_date],
                     ['String', $row->processing_date],
@@ -298,6 +323,24 @@ class RemoteVieFundController extends Controller
 
             echo '</Table></Worksheet></Workbook>';
         }, $filename . '.xls', ['Content-Type' => 'application/vnd.ms-excel; charset=UTF-8']);
+    }
+
+    private function buildDisplayTrxId(object $row): string
+    {
+        if (($row->row_source ?? '') === 'trust') {
+            $trustId = $row->trust_trx_id ?? $row->cash_trx_id ?? null;
+            return $trustId ? 'T-' . $trustId : 'T-UNKNOWN';
+        }
+
+        if (!empty($row->cash_trx_id)) {
+            return 'C-' . $row->cash_trx_id;
+        }
+
+        if (!empty($row->fund_trx_id)) {
+            return 'F-' . $row->fund_trx_id;
+        }
+
+        return 'F-UNKNOWN';
     }
 
     public function syncStatus(): JsonResponse

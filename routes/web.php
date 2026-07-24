@@ -57,6 +57,8 @@ Route::middleware('auth.check')->group(function () {
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
         Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
+        Route::post('/daily-totals/sync', [DailyTotalsComparisonController::class, 'sync'])->name('reconciliations.daily-totals.sync');
+        Route::get('/daily-totals/sync-status', [DailyTotalsComparisonController::class, 'syncStatus'])->name('reconciliations.daily-totals.sync-status');
         Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
         Route::get('/daily-totals/{date}/viefund', [DailyTotalsDrilldownController::class, 'viefundDay'])->name('reconciliations.daily-totals.viefund-day');
         Route::get('/daily-totals/{date}/variance', [DailyTotalsDrilldownController::class, 'varianceDay'])->name('reconciliations.daily-totals.variance-day');

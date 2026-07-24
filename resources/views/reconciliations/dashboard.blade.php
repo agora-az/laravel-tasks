@@ -5,35 +5,6 @@
 @section('content')
     <h2 style="margin-bottom: 30px;">Dashboard</h2>
 
-    {{-- Bank Entry Pipeline --}}
-    <div style="background:white;padding:25px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:30px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
-            <h3 style="margin:0;color:#2d3748;font-size:15px;">Bank Entries Pipeline</h3>
-            <div style="display:flex;gap:10px;align-items:center;">
-                <a href="{{ route('bank-entries.index') }}" style="font-size:13px;color:#3182ce;text-decoration:none;">View Bank Entries →</a>
-                <a href="{{ route('reconciliations.daily-totals') }}" style="font-size:13px;color:#2f855a;text-decoration:none;">View Daily Totals →</a>
-            </div>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
-            <div style="background:linear-gradient(135deg,#3182ce 0%,#2c5282 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
-                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['entry_count'] ?? 0) }}</div>
-                <div style="font-size:12px;opacity:0.9;">Raw Bank Entries</div>
-            </div>
-            <div style="background:linear-gradient(135deg,#4a5568 0%,#2d3748 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
-                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['source_file_count'] ?? 0) }}</div>
-                <div style="font-size:12px;opacity:0.9;">Source Files</div>
-            </div>
-            <div style="background:linear-gradient(135deg,#38a169 0%,#276749 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
-                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['analyzed_count'] ?? 0) }}</div>
-                <div style="font-size:12px;opacity:0.9;">Analyzed (Parser v2)</div>
-            </div>
-            <div style="background:linear-gradient(135deg,#d69e2e 0%,#7d6608 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
-                <div style="font-size:18px;font-weight:bold;margin-bottom:6px;">{{ !empty($bankStats['latest_value_date']) ? \Carbon\Carbon::parse($bankStats['latest_value_date'])->format('Y-m-d') : 'N/A' }}</div>
-                <div style="font-size:12px;opacity:0.9;">Latest Transaction Date</div>
-            </div>
-        </div>
-    </div>
-
     @if($connectionError)
         <div style="background:#fff5f5;border:1px solid #fc8181;border-radius:8px;padding:20px;color:#c53030;margin-bottom:30px;">
             Unable to connect to remote VieFund database: {{ $connectionError }}
@@ -143,4 +114,33 @@
     </script>
 
     @endif
+
+    {{-- Bank Entry Pipeline --}}
+    <div style="background:white;padding:25px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:30px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+            <h3 style="margin:0;color:#2d3748;font-size:15px;">Bank Entries Pipeline</h3>
+            <div style="display:flex;gap:10px;align-items:center;">
+                <a href="{{ route('bank-entries.index') }}" style="font-size:13px;color:#3182ce;text-decoration:none;">View Bank Entries →</a>
+                <a href="{{ route('reconciliations.daily-totals') }}" style="font-size:13px;color:#2f855a;text-decoration:none;">View Daily Totals →</a>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+            <div style="background:linear-gradient(135deg,#3182ce 0%,#2c5282 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
+                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['entry_count'] ?? 0) }}</div>
+                <div style="font-size:12px;opacity:0.9;">Raw Bank Entries</div>
+            </div>
+            <div style="background:linear-gradient(135deg,#4a5568 0%,#2d3748 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
+                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['source_file_count'] ?? 0) }}</div>
+                <div style="font-size:12px;opacity:0.9;">Source Files</div>
+            </div>
+            <div style="background:linear-gradient(135deg,#38a169 0%,#276749 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
+                <div style="font-size:24px;font-weight:bold;margin-bottom:6px;">{{ number_format($bankStats['analyzed_count'] ?? 0) }}</div>
+                <div style="font-size:12px;opacity:0.9;">Analyzed (Parser v2)</div>
+            </div>
+            <div style="background:linear-gradient(135deg,#d69e2e 0%,#7d6608 100%);color:white;padding:18px;text-align:center;border-radius:8px;">
+                <div style="font-size:18px;font-weight:bold;margin-bottom:6px;">{{ !empty($bankStats['latest_value_date']) ? \Carbon\Carbon::parse($bankStats['latest_value_date'])->format('Y-m-d') : 'N/A' }}</div>
+                <div style="font-size:12px;opacity:0.9;">Latest Transaction Date</div>
+            </div>
+        </div>
+    </div>
 @endsection

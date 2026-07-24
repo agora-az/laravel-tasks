@@ -53,9 +53,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
             ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
             ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
-            ->leftJoin("{$schema}.UB_Def_TrxOrderStatus as os", 'os.ID', '=', 't.iOrderStatus')
             ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
             ->leftJoin("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
+            ->leftJoin("{$schema}.UB_Def_TrxStatus as os", 'os.ID', '=', 'ct.iStatus')
             ->leftJoin("{$schema}.UB_Def_TrustTypeX as ctt", 'ctt.ID', '=', 'ct.Type')
             // Trust-link: when a UB_TrustTrx row has iTrxID pointing to this fund
             // transaction, pull its extra columns (Notes, mAmountUsed, mAmountLeft, etc.)
@@ -380,21 +380,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if (!empty($filters['trx_type'])) {
             $query->whereIn('tt.NameEN', (array) $filters['trx_type']);
         }
-        if (!empty($filters['direction'])) {
-            $directions = array_intersect((array) $filters['direction'], ['debit', 'credit']);
-            if (count($directions) === 1) {
-                $isDebit = reset($directions) === 'debit';
-                $query->whereIn('l.iTrxID', function ($sub) use ($schema, $isDebit) {
-                    $sub->select('l2.iTrxID')
-                        ->from("{$schema}.UB_FundTrxLookup as l2")
-                        ->join("{$schema}.UB_FundTrxCash as fc2", 'fc2.iTrxID', '=', 'l2.iTrxID')
-                        ->join("{$schema}.UB_CashTrx as ct2", 'ct2.ID', '=', 'fc2.iCashTrxID');
-                    if ($isDebit) {
-                        $sub->where('ct2.mAmount', '<', 0);
-                    } else {
-                        $sub->where('ct2.mAmount', '>=', 0);
-                    }
-                });
+        if (!empty($filters['status_group'])) {
+            $statusIds = $this->resolveStatusGroupIds((array) $filters['status_group']);
+            if (!empty($statusIds)) {
+                $query->whereIn('ct.iStatus', $statusIds);
             }
         }
         if (!empty($filters['created_from'])) {
@@ -897,6 +886,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 $join->whereRaw('c.ID = ISNULL(NULLIF(tr.iClientID, 0), p.iClientID)');
             })
             ->leftJoin("{$schema}.UB_Def_TrustType as ttype", 'ttype.ID', '=', 'tr.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustStatus as ts", 'ts.ID', '=', 'tr.iStatus')
             ->leftJoin("{$schema}.UB_Def_TrustDepositType as tdtype", function ($join) {
                 $join->on('tdtype.ID', '=', 'tr.iDepositType')
                     ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
@@ -955,11 +945,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 $q->whereIn('ttype.NameEN', $types)->orWhereIn('tdtype.NameEN', $types);
             });
         }
-        if (!empty($filters['direction'])) {
-            $directions = array_intersect((array) $filters['direction'], ['debit', 'credit']);
-            if (count($directions) === 1) {
-                $isDebit = reset($directions) === 'debit';
-                $query->where('tr.mAmount', $isDebit ? '<' : '>=', 0);
+        if (!empty($filters['status_group'])) {
+            $statusNames = $this->resolveTrustStatusGroupNames((array) $filters['status_group']);
+            if (!empty($statusNames)) {
+                $query->whereIn('ts.NameEN', $statusNames);
             }
         }
         if (!empty($filters['created_from'])) {
@@ -979,10 +968,49 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
     }
 
+    private function resolveStatusGroupIds(array $groups): array
+    {
+        $map = [
+            'not_completed' => [0, 1, 2],
+            'open'          => [3, 4],
+            'completed'     => [5, 6],
+        ];
+
+        $ids = [];
+        foreach ($groups as $group) {
+            if (!isset($map[$group])) {
+                continue;
+            }
+            $ids = array_merge($ids, $map[$group]);
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    private function resolveTrustStatusGroupNames(array $groups): array
+    {
+        $map = [
+            'not_completed' => ['Deleted'],
+            'open'          => ['Unsettled'],
+            'completed'     => ['Settled'],
+        ];
+
+        $names = [];
+        foreach ($groups as $group) {
+            if (!isset($map[$group])) {
+                continue;
+            }
+            $names = array_merge($names, $map[$group]);
+        }
+
+        return array_values(array_unique($names));
+    }
+
     private function fundSelectColumns(): array
     {
         return [
             DB::raw('l.iTrxID AS trx_id'),
+            DB::raw('l.iTrxID AS fund_trx_id'),
             DB::raw('t.SourceID AS source_id'),
             DB::raw("CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')) AS client_name"),
             DB::raw('l.DealerRepCode AS rep_code'),
@@ -999,12 +1027,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('ct.mAmount AS amount'),
             DB::raw('ct.mBalance AS balance'),
             DB::raw('ct.ID AS cash_trx_id'),
+            DB::raw('NULL AS trust_trx_id'),
+            DB::raw('trlink.ID AS linked_trust_trx_id'),
             DB::raw('trlink.mAmountUsed AS amount_used'),
             DB::raw('trlink.mAmountLeft AS amount_left'),
             DB::raw('trlink.Notes AS notes'),
             DB::raw('trlink.mAmountCredit AS amount_credit'),
             DB::raw('trlink.mAmountDebit AS amount_debit'),
-            DB::raw('os.NameEN AS order_status'),
+            DB::raw('os.NameEN AS status'),
             DB::raw("'fund' AS row_source"),
         ];
     }
@@ -1013,6 +1043,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     {
         return [
             DB::raw("CONCAT('T', CAST(tr.ID AS NVARCHAR)) AS trx_id"),
+            DB::raw('NULL AS fund_trx_id'),
             DB::raw('NULL AS source_id'),
             DB::raw("CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')) AS client_name"),
             DB::raw('NULL AS rep_code'),
@@ -1035,12 +1066,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 ELSE tr.mAmountLeft
             END AS balance"),
             DB::raw('tr.ID AS cash_trx_id'),
+            DB::raw('tr.ID AS trust_trx_id'),
+            DB::raw('NULL AS linked_trust_trx_id'),
             DB::raw('tr.mAmountUsed AS amount_used'),
             DB::raw('tr.mAmountLeft AS amount_left'),
             DB::raw('tr.Notes AS notes'),
             DB::raw('tr.mAmountCredit AS amount_credit'),
             DB::raw('tr.mAmountDebit AS amount_debit'),
-            DB::raw('NULL AS order_status'),
+            DB::raw('ts.NameEN AS status'),
             DB::raw("'trust' AS row_source"),
         ];
     }

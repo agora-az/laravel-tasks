@@ -142,7 +142,18 @@
             if (!empty($filters['created_from']))  $summaryParts[] = ['label' => 'From',     'value' => $filters['created_from']];
             if (!empty($filters['created_to']))    $summaryParts[] = ['label' => 'To',       'value' => $filters['created_to']];
             if (!empty($filters['trx_type']))      $summaryParts[] = ['label' => 'Type',     'value' => implode(', ', (array) $filters['trx_type'])];
-            if (!empty($filters['direction']))     $summaryParts[] = ['label' => 'Direction','value' => implode(', ', (array) $filters['direction'])];
+            if (!empty($filters['status_group'])) {
+                $statusGroupLabels = [
+                    'not_completed' => 'Not Completed',
+                    'open'          => 'Open',
+                    'completed'     => 'Completed',
+                ];
+                $selectedGroups = array_map(
+                    fn($v) => $statusGroupLabels[$v] ?? $v,
+                    (array) $filters['status_group']
+                );
+                $summaryParts[] = ['label' => 'Status Group', 'value' => implode(', ', $selectedGroups)];
+            }
             $hasActiveFilters = !empty($summaryParts);
         @endphp
         <div class="card" style="margin-bottom: 20px; padding: 0;">
@@ -305,11 +316,11 @@
                         <div></div>
                     @endif
                         <div>
-                            <label style="display: block; font-size: 12px; font-weight: 800; color: #4a5568; margin-bottom: 6px;">Direction</label>
+                            <label style="display: block; font-size: 12px; font-weight: 800; color: #4a5568; margin-bottom: 6px;">Status Group</label>
                             <div class="ms-wrap">
                                 <div class="ms-trigger">
                                     <div class="ms-tags"></div>
-                                    <span class="ms-placeholder">All directions</span>
+                                    <span class="ms-placeholder">All status groups</span>
                                     <span class="ms-caret">&#9662;</span>
                                 </div>
                                 <div class="ms-panel">
@@ -317,12 +328,12 @@
                                         <span class="ms-checkbox"></span>
                                         <span>Select All</span>
                                     </div>
-                                    @foreach(['debit' => 'Amount -', 'credit' => 'Amount +'] as $dirVal => $dirLabel)
-                                    <div class="ms-item" data-value="{{ $dirVal }}">
+                                    @foreach(['completed' => 'Completed', 'open' => 'Open', 'not_completed' => 'Not Completed'] as $statusGroupVal => $statusGroupLabel)
+                                    <div class="ms-item" data-value="{{ $statusGroupVal }}">
                                         <span class="ms-checkbox"></span>
-                                        <input type="checkbox" name="filter_direction[]" value="{{ $dirVal }}"
-                                               {{ in_array($dirVal, (array) ($filters['direction'] ?? [])) ? 'checked' : '' }}>
-                                        <span>{{ $dirLabel }}</span>
+                                        <input type="checkbox" name="filter_status_group[]" value="{{ $statusGroupVal }}"
+                                               {{ in_array($statusGroupVal, (array) ($filters['status_group'] ?? []), true) || (empty($filters['status_group']) && $statusGroupVal === 'completed') ? 'checked' : '' }}>
+                                        <span>{{ $statusGroupLabel }}</span>
                                     </div>
                                     @endforeach
                                 </div>
@@ -852,7 +863,7 @@
                            data-plan-totals='@json($calculatedBalances)'>
                         <thead>
                             <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">
-                                <th data-col="trx-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn ID</th>
+                                <th data-col="trx-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748; white-space: nowrap;">Txn ID</th>
                                 <th data-col="source-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Source ID</th>
                                 @if($bannerName === null)
                                     <th data-col="client-name" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Client Name</th>
@@ -860,7 +871,7 @@
                                 <th data-col="rep-code" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Rep Code</th>
                                 <th data-col="plan-account-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Plan Account ID</th>
                                 <th data-col="trx-type" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
-                                <th data-col="order-status" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
+                                <th data-col="order-status" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Status</th>
                                 <th data-col="notes" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
                                 <th data-col="created-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
                                 <th data-col="trade-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
@@ -874,10 +885,21 @@
                         </thead>
                         <tbody>
                             @foreach($transactions as $txn)
+                                @php
+                                    $displayTxnId = ($txn->row_source ?? 'fund') === 'trust'
+                                        ? ('T-' . ($txn->trust_trx_id ?? $txn->cash_trx_id ?? 'UNKNOWN'))
+                                        : (!empty($txn->cash_trx_id)
+                                            ? ('C-' . $txn->cash_trx_id)
+                                            : ('F-' . ($txn->fund_trx_id ?? 'UNKNOWN')));
+                                @endphp
                                 <tr class="remote-viefund-row" style="border-bottom: 1px solid #e2e8f0; cursor: pointer;"
                                     data-trx-id="{{ $txn->trx_id }}"
+                                    data-display-trx-id="{{ $displayTxnId }}"
+                                    data-fund-trx-id="{{ $txn->fund_trx_id ?? '' }}"
                                     data-source-id="{{ $txn->source_id }}"
                                     data-cash-trx-id="{{ $txn->cash_trx_id }}"
+                                    data-trust-trx-id="{{ $txn->trust_trx_id ?? '' }}"
+                                    data-linked-trust-trx-id="{{ $txn->linked_trust_trx_id ?? '' }}"
                                     data-client-name="{{ $txn->client_name }}"
                                     data-rep-code="{{ $txn->rep_code }}"
                                     data-plan-dealer-account-id="{{ $txn->plan_dealer_account_id }}"
@@ -895,7 +917,7 @@
                                     data-amount-used="{{ $txn->amount_used ?? '' }}"
                                     data-amount-left="{{ $txn->amount_left ?? '' }}"
                                     data-running-balance="{{ ($txn->row_source ?? 'fund') === 'fund' ? ($localBalances[$txn->cash_trx_id] ?? '') : '' }}">
-                                    <td data-col="trx-id" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ $txn->trx_id ?? '-' }}</td>
+                                    <td data-col="trx-id" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;">{{ $displayTxnId }}</td>
                                     <td data-col="source-id" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ $txn->source_id ?? '-' }}</td>
                                     @if($bannerName === null)
                                         <td data-col="client-name" style="padding: 12px; color: #2d3748; font-family: monospace;">{{ $txn->client_name ?: '-' }}</td>
@@ -903,7 +925,7 @@
                                     <td data-col="rep-code" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->rep_code ?? '-' }}</td>
                                     <td data-col="plan-account-id" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->plan_dealer_account_id ?? '-' }}</td>
                                     <td data-col="trx-type" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->trx_type ?? '-' }}@if($txn->cash_trx_type)<em style="color:#718096;"> &mdash; {{ $txn->cash_trx_type }}</em>@endif</td>
-                                    <td data-col="order-status" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ $txn->order_status ?? '-' }}</td>
+                                    <td data-col="order-status" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ $txn->status ?? '-' }}</td>
                                     <td data-col="notes" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes ?? '' }}">{{ $txn->notes ?? '-' }}</td>
                                     <td data-col="created-date" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->created_date ? date('m/d/Y H:i', strtotime($txn->created_date)) : '-' }}</td>
                                     <td data-col="trade-date" style="padding: 12px; color: #4a5568; font-family: monospace;">{{ $txn->trade_date ? date('m/d/Y H:i', strtotime($txn->trade_date)) : '-' }}</td>
@@ -1037,9 +1059,11 @@
                 </div>
                 <div style="padding: 20px; max-height: 70vh; overflow: auto;">
                     <div style="display: grid; grid-template-columns: 180px 1fr; row-gap: 12px; column-gap: 16px; align-items: baseline;">
+                        <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Display Txn ID</div><div id="m-display-trx-id" style="font-family: monospace; font-size: 15px;"></div>
                         <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Fund Txn ID</div><div id="m-trx-id" style="font-family: monospace; font-size: 15px;"></div>
                         <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Source ID</div><div id="m-source-id" style="font-family: monospace; font-size: 15px;"></div>
-                        <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Cash Txn ID</div><div id="m-cash-trx-id" style="font-family: monospace; font-size: 15px;"></div>
+                        <div id="m-secondary-id-lbl" style="font-weight: 600; color: #2d3748; font-size: 15px;">Cash Txn ID</div><div id="m-cash-trx-id" style="font-family: monospace; font-size: 15px;"></div>
+                        <div id="m-linked-trust-trx-id-lbl" style="display:none; font-weight: 600; color: #2d3748; font-size: 15px;">Linked Trust Txn ID</div><div id="m-linked-trust-trx-id" style="display:none; font-family: monospace; font-size: 15px;"></div>
                         <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Client Name</div><div id="m-client-name" style="font-family: monospace; font-size: 15px;"></div>
                         <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Rep Code</div><div id="m-rep-code" style="font-family: monospace; font-size: 15px;"></div>
                         <div style="font-weight: 600; color: #2d3748; font-size: 15px;">Plan Account ID</div><div id="m-plan-dealer-account-id" style="font-family: monospace; font-size: 15px;"></div>
@@ -1083,9 +1107,30 @@
                 };
 
                 const openModal = (row) => {
-                    fill('m-trx-id',               row.dataset.trxId);
+                    const rowSource = row.dataset.rowSource || 'fund';
+                    const isTrustRow = rowSource === 'trust' || (row.dataset.trxId || '').startsWith('T');
+                    const secondaryLbl = document.getElementById('m-secondary-id-lbl');
+                    const linkedTrustLbl = document.getElementById('m-linked-trust-trx-id-lbl');
+                    const linkedTrustVal = document.getElementById('m-linked-trust-trx-id');
+
+                    fill('m-display-trx-id',       row.dataset.displayTrxId);
+                    fill('m-trx-id',               row.dataset.fundTrxId);
                     fill('m-source-id',             row.dataset.sourceId);
-                    fill('m-cash-trx-id',           row.dataset.cashTrxId);
+                    fill('m-cash-trx-id',           isTrustRow ? row.dataset.trustTrxId : row.dataset.cashTrxId);
+                    if (secondaryLbl) {
+                        secondaryLbl.textContent = isTrustRow ? 'Trust Txn ID' : 'Cash Txn ID';
+                    }
+
+                    const linkedTrustId = row.dataset.linkedTrustTrxId;
+                    const showLinkedTrust = !isTrustRow && linkedTrustId && linkedTrustId.trim() !== '';
+                    if (linkedTrustLbl && linkedTrustVal) {
+                        linkedTrustLbl.style.display = showLinkedTrust ? '' : 'none';
+                        linkedTrustVal.style.display = showLinkedTrust ? '' : 'none';
+                        if (showLinkedTrust) {
+                            linkedTrustVal.textContent = linkedTrustId;
+                        }
+                    }
+
                     fill('m-client-name',           row.dataset.clientName);
                     fill('m-rep-code',              row.dataset.repCode);
                     fill('m-plan-dealer-account-id',row.dataset.planDealerAccountId);
@@ -1236,7 +1281,7 @@
                             `<button class="trx-toggle-btn" style="background:none;border:none;` +
                             `cursor:pointer;padding:2px 5px;color:#38a169;font-size:13px;` +
                             `line-height:1;flex-shrink:0;" title="Expand/collapse sub-transactions">▶</button>` +
-                            `<span style="font-family:monospace;font-size:12px;">${trxIdText}</span>` +
+                            `<span style="font-family:monospace;font-size:12px;white-space:nowrap;">${trxIdText}</span>` +
                             `<span style="background:#38a169;color:#fff;border-radius:10px;padding:1px 8px;` +
                             `font-size:11px;font-weight:700;flex-shrink:0;" title="${count} sub-transactions">×${count}</span>` +
                             `</div>`;
@@ -1294,10 +1339,10 @@ const sharedCols = [
                             child.style.borderLeft = '3px solid #c6f6d5';
                             child.style.backgroundColor = '#f7fff9';
 
-                            // Show cash trx ID alongside the indent indicator
+                            // Show display transaction ID alongside the indent indicator
                             child.querySelector('[data-col="trx-id"]').innerHTML =
                                 `<span style="color:#68d391;font-size:13px;padding-right:6px;">↳</span>` +
-                                `<span style="font-family:monospace;font-size:11px;color:#718096;">${child.dataset.cashTrxId || ''}</span>`;
+                                `<span style="font-family:monospace;font-size:11px;color:#718096;white-space:nowrap;">${child.dataset.displayTrxId || ''}</span>`;
 
                             // Dim fields that match parent (works regardless of column visibility)
                             sharedCols.forEach(([colName, dataKey]) => {
@@ -1332,8 +1377,8 @@ const sharedCols = [
                                 }
                             }
 
-                            // For the Txn Type cell on child rows, show the cash transaction
-                            // type (from UB_Def_TrxOrderStatus via ct.iType) instead of the
+                            // For the Status cell on child rows, show the cash transaction
+                            // status (from UB_Def_TrxStatus via ct.iStatus) instead of the
                             // shared fund-level type which would just be dimmed.
                             const trxTypeCell = child.querySelector('[data-col="trx-type"]');
                             if (trxTypeCell) {

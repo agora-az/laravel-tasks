@@ -7,9 +7,146 @@
     <div>
         <h2 style="margin: 0;">Daily Totals Comparison</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. cached VieFund daily net total</div>
+        <div id="daily-sync-status-wrap" style="display:none; margin-top:8px; font-size:12px; font-weight:600; color:#2b6cb0; background:#ebf8ff; border:1px solid #bee3f8; border-radius:14px; padding:4px 10px; width:max-content; align-items:center; gap:8px;">
+            <span id="daily-sync-status"></span>
+            <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
+        </div>
     </div>
-    <a href="{{ route('reconciliations.matches') }}" class="btn" style="background: #718096; padding: 10px 20px; text-decoration: none;">← Back to Reconciliation</a>
+    <form method="POST" action="{{ route('reconciliations.daily-totals.sync') }}" style="display:flex; gap:8px; align-items:center; margin:0;">
+        @csrf
+        <button type="submit" id="daily-sync-incremental-btn" class="btn" style="padding: 10px 18px;">↻ Incremental Sync</button>
+        <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="btn" style="background:#d69e2e; padding: 10px 18px;">↻ Full Sync</button>
+    </form>
 </div>
+
+@if(session('sync_error'))
+    <div style="margin-bottom: 16px; padding: 10px 14px; border-radius: 6px; background: #fff5f5; color: #742a2a; border: 1px solid #feb2b2; font-size: 13px;">
+        {{ session('sync_error') }}
+    </div>
+@endif
+
+<script>
+(function () {
+    const badge = document.getElementById('daily-sync-status');
+    const badgeWrap = document.getElementById('daily-sync-status-wrap');
+    const dismissBtn = document.getElementById('daily-sync-status-dismiss');
+    const incrementalBtn = document.getElementById('daily-sync-incremental-btn');
+    const fullBtn = document.getElementById('daily-sync-full-btn');
+    if (!badge || !badgeWrap) return;
+
+    const DISMISS_KEY = 'dailyTotalsSyncDismissedMessage';
+    let currentMessage = '';
+
+    const formatEta = (seconds) => {
+        if (seconds === null || seconds === undefined || isNaN(seconds)) return 'ETA: calculating...';
+        const s = Math.max(0, Number(seconds));
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = Math.floor(s % 60);
+        if (h > 0) return `ETA: ${h}h ${m}m`;
+        if (m > 0) return `ETA: ${m}m ${sec}s`;
+        return `ETA: ${sec}s`;
+    };
+
+    const formatDateTime = (iso) => {
+        if (!iso) return null;
+        const dt = new Date(iso);
+        if (Number.isNaN(dt.getTime())) return null;
+        return dt.toLocaleString([], {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        });
+    };
+
+    const setButtonsBusy = (busy) => {
+        [incrementalBtn, fullBtn].forEach(btn => {
+            if (!btn) return;
+            btn.disabled = busy;
+            btn.style.opacity = busy ? '0.7' : '1';
+            btn.style.cursor = busy ? 'not-allowed' : 'pointer';
+        });
+    };
+
+    const setBadgeVisible = (visible) => {
+        badgeWrap.style.display = visible ? 'inline-flex' : 'none';
+    };
+
+    const setMessage = (message) => {
+        currentMessage = message;
+        badge.textContent = message;
+        const dismissed = localStorage.getItem(DISMISS_KEY);
+        setBadgeVisible(dismissed !== message);
+    };
+
+    if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+            if (!currentMessage) return;
+            localStorage.setItem(DISMISS_KEY, currentMessage);
+            setBadgeVisible(false);
+        });
+    }
+
+    const poll = () => {
+        fetch('{{ route('reconciliations.daily-totals.sync-status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+            .then(r => r.json())
+            .then(data => {
+                if (data.inProgress) {
+                    const pct = data.progress_pct ?? 0;
+                    const processed = data.processed_days ?? 0;
+                    const total = data.total_days ?? '?';
+                    const startedAt = formatDateTime(data.started_at);
+                    const updatedAt = formatDateTime(data.updated_at);
+                    const extras = [
+                        startedAt ? `Started: ${startedAt}` : null,
+                        updatedAt ? `Updated: ${updatedAt}` : null,
+                    ].filter(Boolean).join(' • ');
+                    setBadgeVisible(true);
+                    localStorage.removeItem(DISMISS_KEY);
+                    badge.style.color = '#2b6cb0';
+                    badgeWrap.style.background = '#ebf8ff';
+                    badgeWrap.style.borderColor = '#bee3f8';
+                    setMessage(`Sync in progress: ${pct}% (${processed}/${total}) • ${formatEta(data.eta_seconds)}${extras ? ` • ${extras}` : ''}`);
+                    setButtonsBusy(true);
+                } else {
+                    setButtonsBusy(false);
+                    if (data.success === true && data.completed_at) {
+                        const completedAt = formatDateTime(data.completed_at);
+                        const updatedAt = formatDateTime(data.updated_at);
+                        const suffix = [
+                            completedAt ? `Completed: ${completedAt}` : null,
+                            updatedAt ? `Updated: ${updatedAt}` : null,
+                        ].filter(Boolean).join(' • ');
+                        setBadgeVisible(true);
+                        badge.style.color = '#276749';
+                        badgeWrap.style.background = '#c6f6d5';
+                        badgeWrap.style.borderColor = '#9ae6b4';
+                        setMessage(`${data.message || 'Last sync completed.'}${suffix ? ` • ${suffix}` : ''}`);
+                    } else if (data.success === false) {
+                        const updatedAt = formatDateTime(data.updated_at);
+                        setBadgeVisible(true);
+                        badge.style.color = '#742a2a';
+                        badgeWrap.style.background = '#fff5f5';
+                        badgeWrap.style.borderColor = '#feb2b2';
+                        setMessage(`${data.message || 'Last sync failed.'}${updatedAt ? ` • Updated: ${updatedAt}` : ''}`);
+                    } else {
+                        setBadgeVisible(false);
+                    }
+                }
+            })
+            .catch(() => {
+                // Keep UI stable if polling fails.
+            });
+    };
+
+    poll();
+    setInterval(poll, 5000);
+})();
+</script>
 
 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
     <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
@@ -59,8 +196,16 @@
             </label>
         </div>
 
+        <div style="grid-column: 1 / -1; margin-top: 2px; display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="include_incomplete" name="include_incomplete" value="1" {{ $includeIncomplete ? 'checked' : '' }}>
+            <label for="include_incomplete" style="font-size: 13px; color: #4a5568; cursor: pointer;">
+                Include incomplete datasets (missing bank or VieFund)
+            </label>
+        </div>
+
         <input type="hidden" name="sort" value="{{ $sortField }}">
         <input type="hidden" name="sort_dir" value="{{ $sortDir }}">
+        <input type="hidden" name="per_page" value="{{ $perPage }}">
     </form>
 </div>
 
@@ -96,7 +241,7 @@
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
                         @php
-                            $baseQuery = request()->except(['sort', 'sort_dir']);
+                            $baseQuery = request()->except(['sort', 'sort_dir', 'page']);
                             $sortUrl = fn(string $field) => route('reconciliations.daily-totals', array_merge($baseQuery, [
                                 'sort' => $field,
                                 'sort_dir' => ($sortField === $field && $sortDir === 'desc') ? 'asc' : 'desc',
@@ -130,6 +275,8 @@
                                 'match' => ['bg' => '#c6f6d5', 'text' => '#22543d', 'label' => 'Match'],
                                 'bank-higher' => ['bg' => '#fed7d7', 'text' => '#742a2a', 'label' => 'Bank higher'],
                                 'viefund-higher' => ['bg' => '#bee3f8', 'text' => '#2c5282', 'label' => 'VieFund higher'],
+                                'missing-bank' => ['bg' => '#fef3c7', 'text' => '#92400e', 'label' => 'Missing bank'],
+                                'missing-viefund' => ['bg' => '#fde68a', 'text' => '#78350f', 'label' => 'Missing VieFund'],
                             ];
                             $style = $statusStyles[$row['status']] ?? $statusStyles['match'];
                         @endphp
@@ -166,6 +313,81 @@
                 </tbody>
             </table>
         </div>
+        @if($rows->hasPages())
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <div style="font-size:12px; color:#718096;">
+                        Showing {{ $rows->firstItem() }} to {{ $rows->lastItem() }} of {{ $rows->total() }} day(s)
+                    </div>
+                    <form method="GET" action="{{ route('reconciliations.daily-totals') }}" style="display:flex; align-items:center; gap:6px; margin:0;">
+                        @foreach(request()->except(['per_page', 'page']) as $key => $value)
+                            @if(is_array($value))
+                                @foreach($value as $item)
+                                    <input type="hidden" name="{{ $key }}[]" value="{{ $item }}">
+                                @endforeach
+                            @else
+                                <input type="hidden" name="{{ $key }}" value="{{ $value }}">
+                            @endif
+                        @endforeach
+                        <label for="footer_per_page" style="font-size:12px; color:#4a5568;">Rows per page</label>
+                        <select id="footer_per_page" name="per_page" onchange="this.form.submit()" style="padding:4px 8px; border:1px solid #cbd5e0; border-radius:4px; font-size:12px; color:#2d3748; background:#fff;">
+                            @foreach([25, 50, 100, 250] as $size)
+                                <option value="{{ $size }}" {{ (int) $perPage === $size ? 'selected' : '' }}>{{ $size }}</option>
+                            @endforeach
+                        </select>
+                    </form>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    @php
+                        $current = $rows->currentPage();
+                        $last = $rows->lastPage();
+                        $window = 2;
+                        $startPage = max(1, $current - $window);
+                        $endPage = min($last, $current + $window);
+                    @endphp
+
+                    @if($rows->onFirstPage())
+                        <span style="padding:6px 12px; border:1px solid #e2e8f0; border-radius:4px; color:#a0aec0; background:#f7fafc;">First</span>
+                    @else
+                        <a href="{{ $rows->url(1) }}" style="padding:6px 12px; border:1px solid #cbd5e0; border-radius:4px; color:#2d3748; text-decoration:none; background:#fff;">First</a>
+                    @endif
+
+                    @if($rows->onFirstPage())
+                        <span style="padding:6px 12px; border:1px solid #e2e8f0; border-radius:4px; color:#a0aec0; background:#f7fafc;">Previous</span>
+                    @else
+                        <a href="{{ $rows->previousPageUrl() }}" style="padding:6px 12px; border:1px solid #cbd5e0; border-radius:4px; color:#2d3748; text-decoration:none; background:#fff;">Previous</a>
+                    @endif
+
+                    @if($startPage > 1)
+                        <span style="padding:6px 8px; color:#718096;">...</span>
+                    @endif
+
+                    @for($page = $startPage; $page <= $endPage; $page++)
+                        @if($page === $current)
+                            <span style="padding:6px 10px; border:1px solid #2d3748; border-radius:4px; color:#fff; background:#2d3748; font-weight:600; min-width:36px; text-align:center;">{{ $page }}</span>
+                        @else
+                            <a href="{{ $rows->url($page) }}" style="padding:6px 10px; border:1px solid #cbd5e0; border-radius:4px; color:#2d3748; text-decoration:none; background:#fff; min-width:36px; text-align:center;">{{ $page }}</a>
+                        @endif
+                    @endfor
+
+                    @if($endPage < $last)
+                        <span style="padding:6px 8px; color:#718096;">...</span>
+                    @endif
+
+                    @if($rows->hasMorePages())
+                        <a href="{{ $rows->nextPageUrl() }}" style="padding:6px 12px; border:1px solid #cbd5e0; border-radius:4px; color:#2d3748; text-decoration:none; background:#fff;">Next</a>
+                    @else
+                        <span style="padding:6px 12px; border:1px solid #e2e8f0; border-radius:4px; color:#a0aec0; background:#f7fafc;">Next</span>
+                    @endif
+
+                    @if($rows->currentPage() === $rows->lastPage())
+                        <span style="padding:6px 12px; border:1px solid #e2e8f0; border-radius:4px; color:#a0aec0; background:#f7fafc;">Last</span>
+                    @else
+                        <a href="{{ $rows->url($rows->lastPage()) }}" style="padding:6px 12px; border:1px solid #cbd5e0; border-radius:4px; color:#2d3748; text-decoration:none; background:#fff;">Last</a>
+                    @endif
+                </div>
+            </div>
+        @endif
     @else
         <p style="color: #718096; text-align: center; padding: 40px 0;">No daily totals found in the selected range.</p>
     @endif
