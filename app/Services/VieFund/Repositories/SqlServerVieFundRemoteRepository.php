@@ -428,23 +428,73 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
     {
+        return $this->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, 'settlement_date');
+    }
+
+    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn): Collection
+    {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $from = $fromDate->copy()->startOfDay()->toDateTimeString();
         $to = $toDate->copy()->addDay()->startOfDay()->toDateTimeString();
 
+        $dateColumnMap = [
+            'create_date' => 't.dtCreated',
+            'trade_date' => 'l.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+        ];
+
+        if (!isset($dateColumnMap[$dateColumn])) {
+            throw new InvalidArgumentException('Invalid date column selected for report.');
+        }
+
+        $sqlDateColumn = $dateColumnMap[$dateColumn];
+
         // Keep daily totals aligned with the daily transaction drilldown by using
         // the same fund-linked base query and settlement filters.
         return $this->buildBaseQuery($schema)
-            ->where('ct.dtSettlement', '>=', $from)
-            ->where('ct.dtSettlement', '<', $to)
-            ->whereNotNull('ct.dtSettlement')
+            ->where($sqlDateColumn, '>=', $from)
+            ->where($sqlDateColumn, '<', $to)
+            ->whereNotNull($sqlDateColumn)
             ->whereNotNull('ct.mAmount')
             ->where('ct.iStatus', '=', 6)
             ->whereIn('ct.iType', [22, 45])
-            ->selectRaw('CAST(ct.dtSettlement AS date) AS total_date, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total')
-            ->groupByRaw('CAST(ct.dtSettlement AS date)')
+            ->selectRaw("CAST({$sqlDateColumn} AS date) AS total_date, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total")
+            ->groupByRaw("CAST({$sqlDateColumn} AS date)")
             ->orderBy('total_date', 'asc')
             ->get();
+    }
+
+    public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+
+        $dateColumnMap = [
+            'create_date' => 't.dtCreated',
+            'trade_date' => 'l.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+        ];
+
+        if (!isset($dateColumnMap[$dateColumn])) {
+            throw new InvalidArgumentException('Invalid date column selected for inception lookup.');
+        }
+
+        $sqlDateColumn = $dateColumnMap[$dateColumn];
+
+        $row = $this->buildBaseQuery($schema)
+            ->whereNotNull($sqlDateColumn)
+            ->whereNotNull('ct.mAmount')
+            ->where('ct.iStatus', '=', 6)
+            ->whereIn('ct.iType', [22, 45])
+            ->selectRaw("MIN(CAST({$sqlDateColumn} AS date)) AS inception_date")
+            ->first();
+
+        if (!$row || empty($row->inception_date)) {
+            return null;
+        }
+
+        return \Carbon\Carbon::parse($row->inception_date)->toDateString();
     }
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator

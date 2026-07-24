@@ -27,7 +27,7 @@
                     <a href="/reconciliations/matches">Reconciliation</a>
                     @endif
                     @if(!in_array('reports', config('app.nav_hide')))
-                    <a href="/reconciliations">Reports</a>
+                    <a href="{{ route('reports.index') }}">Reports</a>
                     @endif
                     <form method="POST" action="{{ route('logout') }}" style="margin: 0;">
                         @csrf

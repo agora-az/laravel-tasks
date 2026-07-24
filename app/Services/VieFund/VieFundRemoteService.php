@@ -48,6 +48,16 @@ class VieFundRemoteService
         return $this->repository->fetchDailyNetTotals($fromDate, $toDate);
     }
 
+    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn): Collection
+    {
+        return $this->repository->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, $dateColumn);
+    }
+
+    public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
+    {
+        return $this->repository->fetchInceptionDateByDateColumn($dateColumn);
+    }
+
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
     {
         return $this->repository->fetchDailySettlementFundTransactions($date, $perPage, $page);

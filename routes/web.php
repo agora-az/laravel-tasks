@@ -9,6 +9,7 @@ use App\Http\Controllers\RemoteVieFundController;
 use App\Http\Controllers\DailyTotalsComparisonController;
 use App\Http\Controllers\DailyTotalsDrilldownController;
 use App\Http\Controllers\BankStatementEntryController;
+use App\Http\Controllers\VieFundReportsController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -53,6 +54,9 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/api/matches/{matchId}/clear-reconciliation', [ReconciliationController::class, 'clearReconciliation'])->name('api.matches.clear-reconciliation');
     Route::get('/api/search-fields', [ReconciliationController::class, 'getSearchFields'])->name('api.search.fields');
     Route::post('/api/search-transactions', [ReconciliationController::class, 'searchTransactions'])->name('api.search.transactions');
+
+    Route::get('/reports', [VieFundReportsController::class, 'index'])->name('reports.index');
+    Route::get('/reports/viefund-daily-balance/export', [VieFundReportsController::class, 'exportDailyBalance'])->name('reports.viefund-daily-balance.export');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
