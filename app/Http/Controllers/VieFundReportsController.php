@@ -4,13 +4,18 @@ namespace App\Http\Controllers;
 
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class VieFundReportsController extends Controller
 {
+    private const LOCK_TTL_SECONDS = 43200;
+
     private const DATE_BASIS_OPTIONS = [
         'create_date' => 'Created date',
         'trade_date' => 'Trade date',
@@ -18,11 +23,23 @@ class VieFundReportsController extends Controller
         'settlement_date' => 'Settlement date',
     ];
 
+    private const DATE_BASIS_FILE_CODES = [
+        'create_date' => 'cr',
+        'trade_date' => 'tr',
+        'processing_date' => 'pr',
+        'settlement_date' => 'se',
+    ];
+
     private const DATE_BASIS_INCEPTION_ENV_KEYS = [
         'create_date' => 'VIEFUND_REPORT_INCEPTION_CREATE_DATE',
         'trade_date' => 'VIEFUND_REPORT_INCEPTION_TRADE_DATE',
         'processing_date' => 'VIEFUND_REPORT_INCEPTION_PROCESSING_DATE',
         'settlement_date' => 'VIEFUND_REPORT_INCEPTION_SETTLEMENT_DATE',
+    ];
+
+    private const OUTPUT_ORDER_OPTIONS = [
+        'asc' => 'Earliest first',
+        'desc' => 'Latest first',
     ];
 
     public function __construct(
@@ -43,12 +60,18 @@ class VieFundReportsController extends Controller
 
         $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
         $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
+        $selectedOutputOrder = $request->query('output_order', 'asc');
+        if (!isset(self::OUTPUT_ORDER_OPTIONS[$selectedOutputOrder])) {
+            $selectedOutputOrder = 'asc';
+        }
 
         return view('reports.index', [
             'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
             'selectedDateBasis' => $selectedDateBasis,
             'dateFrom' => $request->query('date_from', $defaultFrom),
             'dateTo' => $request->query('date_to', $defaultTo),
+            'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
+            'selectedOutputOrder' => $selectedOutputOrder,
             'inceptionDates' => $inceptionDates,
         ]);
     }
@@ -78,12 +101,14 @@ class VieFundReportsController extends Controller
             'date_from' => ['required', 'date'],
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
+            'output_order' => ['required', 'in:asc,desc'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
         $dateFrom = Carbon::parse($validated['date_from'])->startOfDay();
         $dateTo = Carbon::parse($validated['date_to'])->startOfDay();
         $dateBasis = $validated['date_basis'];
+        $outputOrder = $validated['output_order'];
         $format = $validated['format'];
 
         $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis);
@@ -113,7 +138,6 @@ class VieFundReportsController extends Controller
 
             $rows[] = [
                 'report_date' => $dateKey,
-                'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
                 'transaction_count' => (int) $day['transaction_count'],
                 'daily_net_transactions' => $dailyNet,
                 'running_daily_balance' => $runningBalance,
@@ -122,50 +146,261 @@ class VieFundReportsController extends Controller
             $cursor->addDay();
         }
 
-        $safeBasis = Str::slug(str_replace('_', ' ', $dateBasis));
-        $baseName = sprintf(
-            'viefund-daily-balance-%s-%s-to-%s',
-            $safeBasis,
-            $dateFrom->toDateString(),
-            $dateTo->toDateString()
-        );
-
-        if ($format === 'excel') {
-            return $this->streamExcelTsv($rows, $baseName . '.xls');
+        $finalBalance = $runningBalance;
+        if ($outputOrder === 'desc') {
+            $rows = array_reverse($rows);
         }
 
-        return $this->streamCsv($rows, $baseName . '.csv');
+        $baseName = sprintf(
+            'viefund_bal_report_%s-%s_%s',
+            $dateFrom->format('Ymd'),
+            $dateTo->format('Ymd'),
+            self::DATE_BASIS_FILE_CODES[$dateBasis]
+        );
+
+        $dateBasisLabel = self::DATE_BASIS_OPTIONS[$dateBasis];
+        $outputOrderLabel = self::OUTPUT_ORDER_OPTIONS[$outputOrder];
+
+        $metadataRows = [
+            ['Report', 'VieFund Daily Net + Running Balance'],
+            ['Date Basis', $dateBasisLabel],
+            ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
+            ['Output Order', $outputOrderLabel],
+            ['Generated At', now()->toDateTimeString()],
+            ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
+        ];
+
+        if ($format === 'excel') {
+            return $this->streamExcelTsv($rows, $baseName . '.xls', $metadataRows);
+        }
+
+        return $this->streamCsv($rows, $baseName . '.csv', $metadataRows);
     }
 
-    private function streamCsv(array $rows, string $filename): StreamedResponse
+    public function runDailyBalanceReport(Request $request): RedirectResponse
     {
-        return response()->streamDownload(function () use ($rows) {
-            $out = fopen('php://output', 'w');
+        $validated = $request->validate([
+            'date_from' => ['required', 'date'],
+            'date_to' => ['required', 'date', 'after_or_equal:date_from'],
+            'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
+            'output_order' => ['required', 'in:asc,desc'],
+            'format' => ['required', 'in:csv,excel'],
+        ]);
 
-            fputcsv($out, [
-                'Report Date',
-                'Date Basis',
-                'Transaction Count',
-                'Daily Net Transactions',
-                'Running Daily Balance',
-            ]);
+        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        $logPath = storage_path('logs/viefund-daily-balance-report.log');
+        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
+        $artisanPath = base_path('artisan');
 
-            foreach ($rows as $row) {
-                fputcsv($out, [
-                    $row['report_date'],
-                    $row['date_basis'],
-                    $row['transaction_count'],
-                    number_format($row['daily_net_transactions'], 2, '.', ''),
-                    number_format($row['running_daily_balance'], 2, '.', ''),
-                ]);
+        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        if ($hasLiveLock) {
+            return redirect()
+                ->route('reports.index')
+                ->with('report_error', 'A VieFund daily balance report is already running.');
+        }
+
+        $dateFrom = Carbon::parse($validated['date_from'])->toDateString();
+        $dateTo = Carbon::parse($validated['date_to'])->toDateString();
+        $dateBasis = $validated['date_basis'];
+        $outputOrder = $validated['output_order'];
+        $format = $validated['format'];
+
+        $extension = $format === 'excel' ? 'xls' : 'csv';
+        $outputFileName = sprintf(
+            'viefund_bal_report_%s-%s_%s.%s',
+            Carbon::parse($dateFrom)->format('Ymd'),
+            Carbon::parse($dateTo)->format('Ymd'),
+            self::DATE_BASIS_FILE_CODES[$dateBasis],
+            $extension
+        );
+        $outputRelativePath = 'reports/' . $outputFileName;
+
+        $reportsDir = dirname($statusFile);
+        if (!is_dir($reportsDir)) {
+            @mkdir($reportsDir, 0775, true);
+        }
+
+        file_put_contents($lockFile, date('c'));
+        file_put_contents($statusFile, json_encode([
+            'inProgress' => true,
+            'success' => null,
+            'message' => 'VieFund daily balance report queued...',
+            'date_from' => $dateFrom,
+            'date_to' => $dateTo,
+            'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
+            'output_order' => self::OUTPUT_ORDER_OPTIONS[$outputOrder],
+            'format' => strtoupper($format),
+            'processed_days' => 0,
+            'total_days' => null,
+            'progress_pct' => 0,
+            'output_relative_path' => $outputRelativePath,
+            'started_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+        ], JSON_PRETTY_PRINT));
+
+        $command = sprintf(
+            '%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            escapeshellarg($phpPath),
+            escapeshellarg($artisanPath),
+            escapeshellarg($dateFrom),
+            escapeshellarg($dateTo),
+            escapeshellarg($dateBasis),
+            escapeshellarg($outputOrder),
+            escapeshellarg($format),
+            escapeshellarg($outputRelativePath),
+            escapeshellarg($statusFile),
+            escapeshellarg($lockFile),
+            escapeshellarg($logPath)
+        );
+
+        Log::info('Dispatching background VieFund daily balance report: ' . $command);
+
+        $descriptorspec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = proc_open($command, $descriptorspec, $pipes);
+        if (is_resource($process)) {
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_close($process);
+        }
+
+        return redirect()
+            ->route('reports.index')
+            ->with('report_success', 'VieFund daily balance report started in background.');
+    }
+
+    public function reportStatus(): JsonResponse
+    {
+        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+
+        $inProgress = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+
+        $payload = [
+            'inProgress' => $inProgress,
+            'success' => null,
+            'message' => $inProgress ? 'Report in progress...' : 'Idle',
+            'processed_days' => null,
+            'total_days' => null,
+            'progress_pct' => null,
+            'download_url' => null,
+            'updated_at' => null,
+            'started_at' => null,
+            'completed_at' => null,
+        ];
+
+        $parsed = null;
+        if (file_exists($statusFile)) {
+            $json = file_get_contents($statusFile);
+            $parsed = json_decode($json ?: '{}', true);
+            if (is_array($parsed)) {
+                $payload = array_merge($payload, $parsed);
+                $payload['inProgress'] = $inProgress;
+            }
+        }
+
+        $staleInProgress = !$inProgress
+            && is_array($parsed)
+            && (($parsed['inProgress'] ?? false) === true)
+            && (($parsed['success'] ?? null) === null);
+
+        if ($staleInProgress) {
+            $payload['success'] = false;
+            $payload['message'] = 'Report stopped before reporting completion. Check logs and retry.';
+            $payload['completed_at'] = $payload['completed_at'] ?? now()->toIso8601String();
+        }
+
+        if (($payload['success'] ?? null) === true && !empty($payload['output_relative_path'])) {
+            $outputPath = storage_path('app/' . ltrim((string) $payload['output_relative_path'], '/'));
+            if (is_file($outputPath)) {
+                $payload['download_url'] = route('reports.viefund-daily-balance.download-latest');
+            }
+        }
+
+        return response()->json($payload);
+    }
+
+    public function downloadLatestReport(): BinaryFileResponse|RedirectResponse
+    {
+        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        if (!file_exists($statusFile)) {
+            return redirect()->route('reports.index')->with('report_error', 'No report output found to download.');
+        }
+
+        $parsed = json_decode((string) file_get_contents($statusFile), true);
+        $relativePath = is_array($parsed) ? ($parsed['output_relative_path'] ?? null) : null;
+        if (!$relativePath) {
+            return redirect()->route('reports.index')->with('report_error', 'No report output found to download.');
+        }
+
+        $relativePath = ltrim((string) $relativePath, '/');
+        if (!str_starts_with($relativePath, 'reports/')) {
+            return redirect()->route('reports.index')->with('report_error', 'Invalid report output path.');
+        }
+
+        $absolutePath = storage_path('app/' . $relativePath);
+        if (!is_file($absolutePath)) {
+            return redirect()->route('reports.index')->with('report_error', 'Report file was not found.');
+        }
+
+        return response()->download($absolutePath, basename($absolutePath));
+    }
+
+    public function dismissLatestReport(): JsonResponse
+    {
+        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+
+        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        if ($hasLiveLock) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot dismiss while report is still running.',
+            ], 409);
+        }
+
+        $deletedOutput = false;
+        $deletedStatus = false;
+
+        if (file_exists($statusFile)) {
+            $parsed = json_decode((string) file_get_contents($statusFile), true);
+            $relativePath = is_array($parsed) ? ($parsed['output_relative_path'] ?? null) : null;
+
+            if ($relativePath) {
+                $relativePath = ltrim((string) $relativePath, '/');
+                if (str_starts_with($relativePath, 'reports/')) {
+                    $absolutePath = storage_path('app/' . $relativePath);
+                    if (is_file($absolutePath)) {
+                        $deletedOutput = @unlink($absolutePath);
+                    }
+                }
             }
 
-            $finalBalance = !empty($rows)
-                ? (float) ($rows[count($rows) - 1]['running_daily_balance'] ?? 0.0)
-                : 0.0;
+            $deletedStatus = @unlink($statusFile);
+        }
 
-            fputcsv($out, []);
-            fputcsv($out, ['Final Balance', '', '', '', number_format($finalBalance, 2, '.', '')]);
+        return response()->json([
+            'success' => true,
+            'deleted_output' => $deletedOutput,
+            'deleted_status' => $deletedStatus,
+        ]);
+    }
+
+    private function streamCsv(array $rows, string $filename, array $metadataRows): StreamedResponse
+    {
+        return response()->streamDownload(function () use ($rows, $metadataRows) {
+            $out = fopen('php://output', 'w');
+
+            $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
+            foreach ($sheetRows as $sheetRow) {
+                fputcsv($out, $sheetRow);
+            }
 
             fclose($out);
         }, $filename, [
@@ -173,9 +408,9 @@ class VieFundReportsController extends Controller
         ]);
     }
 
-    private function streamExcelTsv(array $rows, string $filename): StreamedResponse
+    private function streamExcelTsv(array $rows, string $filename, array $metadataRows): StreamedResponse
     {
-        return response()->streamDownload(function () use ($rows) {
+        return response()->streamDownload(function () use ($rows, $metadataRows) {
             $out = fopen('php://output', 'w');
 
             $writeTsv = function (array $values) use ($out): void {
@@ -188,34 +423,63 @@ class VieFundReportsController extends Controller
                 fwrite($out, implode("\t", $escaped) . "\r\n");
             };
 
-            $writeTsv([
-                'Report Date',
-                'Date Basis',
-                'Transaction Count',
-                'Daily Net Transactions',
-                'Running Daily Balance',
-            ]);
-
-            foreach ($rows as $row) {
-                $writeTsv([
-                    $row['report_date'],
-                    $row['date_basis'],
-                    $row['transaction_count'],
-                    number_format($row['daily_net_transactions'], 2, '.', ''),
-                    number_format($row['running_daily_balance'], 2, '.', ''),
-                ]);
+            $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
+            foreach ($sheetRows as $sheetRow) {
+                $writeTsv($sheetRow);
             }
-
-            $finalBalance = !empty($rows)
-                ? (float) ($rows[count($rows) - 1]['running_daily_balance'] ?? 0.0)
-                : 0.0;
-
-            $writeTsv([]);
-            $writeTsv(['Final Balance', '', '', '', number_format($finalBalance, 2, '.', '')]);
 
             fclose($out);
         }, $filename, [
             'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
         ]);
+    }
+
+    private function buildSheetRowsWithSideMetadata(array $rows, array $metadataRows): array
+    {
+        $sheetRows = [];
+
+        $dataRows = [];
+        $dataRows[] = [
+            'Report Date',
+            'Transaction Count',
+            'Daily Net Transactions',
+            'Running Daily Balance',
+        ];
+
+        foreach ($rows as $row) {
+            $dataRows[] = [
+                $row['report_date'],
+                number_format((int) $row['transaction_count']),
+                $this->formatAccountingCurrency((float) $row['daily_net_transactions']),
+                $this->formatAccountingCurrency((float) $row['running_daily_balance']),
+            ];
+        }
+
+        $maxRows = max(count($dataRows), count($metadataRows));
+        for ($i = 0; $i < $maxRows; $i++) {
+            $dataPart = $dataRows[$i] ?? ['', '', '', ''];
+            $metadataPart = $metadataRows[$i] ?? ['', ''];
+            $sheetRows[] = [
+                $dataPart[0],
+                $dataPart[1],
+                $dataPart[2],
+                $dataPart[3],
+                '',
+                $metadataPart[0],
+                $metadataPart[1],
+            ];
+        }
+
+        return $sheetRows;
+    }
+
+    private function formatAccountingCurrency(float $amount): string
+    {
+        $formatted = '$' . number_format(abs($amount), 2, '.', ',');
+        if ($amount < 0) {
+            return '(' . $formatted . ')';
+        }
+
+        return $formatted;
     }
 }

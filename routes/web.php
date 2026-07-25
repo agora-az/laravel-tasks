@@ -57,6 +57,10 @@ Route::middleware('auth.check')->group(function () {
 
     Route::get('/reports', [VieFundReportsController::class, 'index'])->name('reports.index');
     Route::get('/reports/viefund-daily-balance/export', [VieFundReportsController::class, 'exportDailyBalance'])->name('reports.viefund-daily-balance.export');
+    Route::post('/reports/viefund-daily-balance/run', [VieFundReportsController::class, 'runDailyBalanceReport'])->name('reports.viefund-daily-balance.run');
+    Route::get('/reports/viefund-daily-balance/status', [VieFundReportsController::class, 'reportStatus'])->name('reports.viefund-daily-balance.status');
+    Route::get('/reports/viefund-daily-balance/download-latest', [VieFundReportsController::class, 'downloadLatestReport'])->name('reports.viefund-daily-balance.download-latest');
+    Route::post('/reports/viefund-daily-balance/dismiss-latest', [VieFundReportsController::class, 'dismissLatestReport'])->name('reports.viefund-daily-balance.dismiss-latest');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
