@@ -20,12 +20,19 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         'asc' => 'Earliest first',
         'desc' => 'Latest first',
     ];
+    private const STATUS_GROUP_LABELS = [
+        'completed' => 'Completed',
+        'open' => 'Open',
+        'not_completed' => 'Not Completed',
+    ];
 
     protected $signature = 'report:viefund-daily-balance
         {--date-from= : Report start date (YYYY-MM-DD)}
         {--date-to= : Report end date (YYYY-MM-DD)}
         {--date-basis=create_date : create_date|trade_date|processing_date|settlement_date}
         {--output-order=asc : asc|desc}
+        {--status-group=* : completed|open|not_completed}
+        {--include-trust=1 : 1 to include trust transactions, 0 to exclude}
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
@@ -72,6 +79,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         $dateToRaw = $this->resolveString($this->option('date-to'));
         $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'create_date';
         $outputOrder = $this->resolveString($this->option('output-order')) ?? 'asc';
+        $statusGroups = $this->resolveStatusGroups($this->option('status-group'));
+        $includeTrust = $this->resolveBoolean($this->option('include-trust'), true);
         $format = $this->resolveString($this->option('format')) ?? 'csv';
         $outputRelativePath = $this->resolveString($this->option('output-file'));
 
@@ -93,6 +102,10 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         $outputOrderLabel = self::OUTPUT_ORDER_LABELS[$outputOrder];
+        $statusGroupLabel = implode(', ', array_map(
+            fn(string $group): string => self::STATUS_GROUP_LABELS[$group] ?? $group,
+            $statusGroups
+        ));
 
         if (!in_array($format, ['csv', 'excel'], true)) {
             $this->error('Invalid --format value.');
@@ -129,6 +142,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_to' => $dateTo->toDateString(),
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
+            'status_group' => $statusGroupLabel,
+            'include_trust' => $includeTrust,
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => $totalDays,
@@ -149,7 +164,10 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 $chunkEnd = $dateTo->copy();
             }
 
-            $chunkRows = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis);
+            $chunkRows = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
+                'status_group' => $statusGroups,
+                'include_trust' => $includeTrust,
+            ]);
             foreach ($chunkRows as $row) {
                 $key = Carbon::parse($row->total_date)->toDateString();
                 if (!isset($dailyMap[$key])) {
@@ -175,6 +193,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasisLabel,
                 'output_order' => $outputOrderLabel,
+                'status_group' => $statusGroupLabel,
+                'include_trust' => $includeTrust,
                 'format' => strtoupper($format),
                 'processed_days' => min($totalDays, $processedEquivalent),
                 'total_days' => $totalDays,
@@ -220,6 +240,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasisLabel,
                 'output_order' => $outputOrderLabel,
+                'status_group' => $statusGroupLabel,
+                'include_trust' => $includeTrust,
                 'format' => strtoupper($format),
                 'processed_days' => min($totalDays, $processedEquivalent),
                 'total_days' => $totalDays,
@@ -242,6 +264,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
+            ['Status Group', $statusGroupLabel],
+            ['Include Trust Transactions', $includeTrust ? 'Yes' : 'No'],
             ['Generated At', now()->toDateTimeString()],
             ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
         ];
@@ -264,6 +288,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_to' => $dateTo->toDateString(),
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
+            'status_group' => $statusGroupLabel,
+            'include_trust' => $includeTrust,
             'format' => strtoupper($format),
             'processed_days' => $totalDays,
             'total_days' => $totalDays,
@@ -342,6 +368,50 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         return (string) $value;
+    }
+
+    private function resolveStatusGroups(mixed $value): array
+    {
+        $raw = is_array($value) ? $value : (array) $value;
+        $groups = array_values(array_intersect($raw, array_keys(self::STATUS_GROUP_LABELS)));
+
+        if (empty($groups)) {
+            return ['completed'];
+        }
+
+        return $groups;
+    }
+
+    private function resolveBoolean(mixed $value, bool $default = false): bool
+    {
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        if (is_array($value)) {
+            $value = collect($value)->first(fn($v) => $v !== null && $v !== '');
+            if ($value === null || $value === '') {
+                return $default;
+            }
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+            return true;
+        }
+        if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+            return false;
+        }
+
+        return $default;
     }
 
     private function buildSheetRowsWithSideMetadata(array $rows, array $metadataRows): array

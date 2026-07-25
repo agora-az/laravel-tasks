@@ -13,6 +13,7 @@ use InvalidArgumentException;
 class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterface
 {
     private const CONNECTION = 'viefund_sqlsrv';
+    private const CASH_COMPLETED_STATUS_IDS = [5, 6];
 
     public function ping(): bool
     {
@@ -431,37 +432,91 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return $this->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, 'settlement_date');
     }
 
-    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn): Collection
+    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $from = $fromDate->copy()->startOfDay()->toDateTimeString();
         $to = $toDate->copy()->addDay()->startOfDay()->toDateTimeString();
 
-        $dateColumnMap = [
+        $fundDateColumnMap = [
             'create_date' => 't.dtCreated',
             'trade_date' => 'l.dtTrade',
             'processing_date' => 'ct.dtProcessing',
             'settlement_date' => 'ct.dtSettlement',
         ];
 
-        if (!isset($dateColumnMap[$dateColumn])) {
+        // Trust rows only guarantee dtCreated in this dataset; keep mapping
+        // consistent for all report bases until other trust date fields are
+        // validated in production data.
+        $trustDateColumnMap = [
+            'create_date' => 'tr.dtCreated',
+            'trade_date' => 'tr.dtCreated',
+            'processing_date' => 'tr.dtCreated',
+            'settlement_date' => 'tr.dtCreated',
+        ];
+
+        if (!isset($fundDateColumnMap[$dateColumn])) {
             throw new InvalidArgumentException('Invalid date column selected for report.');
         }
 
-        $sqlDateColumn = $dateColumnMap[$dateColumn];
+        $fundDateColumn = $fundDateColumnMap[$dateColumn];
+        $trustDateColumn = $trustDateColumnMap[$dateColumn];
+        $reportStatusGroups = $this->resolveReportStatusGroups($filters);
+        $includeTrust = $this->resolveIncludeTrustFilter($filters);
+        $cashStatusIds = $this->resolveStatusGroupIds($reportStatusGroups);
+        $trustStatusNames = $this->resolveTrustStatusGroupNames($reportStatusGroups);
 
-        // Keep daily totals aligned with the daily transaction drilldown by using
-        // the same fund-linked base query and settlement filters.
-        return $this->buildBaseQuery($schema)
-            ->where($sqlDateColumn, '>=', $from)
-            ->where($sqlDateColumn, '<', $to)
-            ->whereNotNull($sqlDateColumn)
+        $fundDailyTotals = $this->buildBaseQuery($schema)
+            ->where($fundDateColumn, '>=', $from)
+            ->where($fundDateColumn, '<', $to)
+            ->whereNotNull($fundDateColumn)
             ->whereNotNull('ct.mAmount')
-            ->where('ct.iStatus', '=', 6)
+            ->when(!empty($cashStatusIds), function ($query) use ($cashStatusIds) {
+                $query->whereIn('ct.iStatus', $cashStatusIds);
+            })
             ->whereIn('ct.iType', [22, 45])
-            ->selectRaw("CAST({$sqlDateColumn} AS date) AS total_date, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total")
-            ->groupByRaw("CAST({$sqlDateColumn} AS date)")
+            ->when(!empty($filters['account_id']), function ($query) use ($filters) {
+                $query->where('p.DealerAccountID', '=', $filters['account_id']);
+            })
+            ->when(!empty($filters['customer_id']), function ($query) use ($filters) {
+                $query->where('c.ID', '=', $filters['customer_id']);
+            })
+            ->selectRaw("CAST({$fundDateColumn} AS date) AS total_date, p.DealerAccountID AS plan_account_id, c.ID AS customer_id, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total")
+            ->groupByRaw("CAST({$fundDateColumn} AS date), p.DealerAccountID, c.ID");
+
+        $trustDailyTotals = $this->buildTrustBaseQuery($schema)
+            ->where($trustDateColumn, '>=', $from)
+            ->where($trustDateColumn, '<', $to)
+            ->whereNotNull($trustDateColumn)
+            ->whereNotNull('tr.mAmount')
+            ->when(!empty($trustStatusNames), function ($query) use ($trustStatusNames) {
+                $query->whereIn('ts.NameEN', $trustStatusNames);
+            })
+            ->when(!empty($filters['account_id']), function ($query) use ($filters) {
+                $query->where('p.DealerAccountID', '=', $filters['account_id']);
+            })
+            ->when(!empty($filters['customer_id']), function ($query) use ($filters) {
+                $query->where(function ($q) use ($filters) {
+                    $q->where('tr.iClientID', '=', $filters['customer_id'])
+                        ->orWhere('p.iClientID', '=', $filters['customer_id']);
+                });
+            })
+            ->selectRaw("CAST({$trustDateColumn} AS date) AS total_date, p.DealerAccountID AS plan_account_id, ISNULL(NULLIF(tr.iClientID, 0), p.iClientID) AS customer_id, COUNT(*) AS transaction_count, SUM(tr.mAmount) AS net_total")
+            ->groupByRaw("CAST({$trustDateColumn} AS date), p.DealerAccountID, ISNULL(NULLIF(tr.iClientID, 0), p.iClientID)");
+
+        $combinedDailyTotals = $fundDailyTotals;
+        if ($includeTrust) {
+            $combinedDailyTotals = $combinedDailyTotals->unionAll($trustDailyTotals);
+        }
+
+        return DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($combinedDailyTotals, 'daily_totals')
+            ->selectRaw('total_date, plan_account_id, customer_id, SUM(transaction_count) AS transaction_count, SUM(net_total) AS net_total')
+            ->groupBy('total_date', 'plan_account_id', 'customer_id')
             ->orderBy('total_date', 'asc')
+            ->orderBy('plan_account_id', 'asc')
+            ->orderBy('customer_id', 'asc')
             ->get();
     }
 
@@ -469,32 +524,65 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
 
-        $dateColumnMap = [
+        $fundDateColumnMap = [
             'create_date' => 't.dtCreated',
             'trade_date' => 'l.dtTrade',
             'processing_date' => 'ct.dtProcessing',
             'settlement_date' => 'ct.dtSettlement',
         ];
 
-        if (!isset($dateColumnMap[$dateColumn])) {
+        $trustDateColumnMap = [
+            'create_date' => 'tr.dtCreated',
+            'trade_date' => 'tr.dtCreated',
+            'processing_date' => 'tr.dtCreated',
+            'settlement_date' => 'tr.dtCreated',
+        ];
+
+        if (!isset($fundDateColumnMap[$dateColumn])) {
             throw new InvalidArgumentException('Invalid date column selected for inception lookup.');
         }
 
-        $sqlDateColumn = $dateColumnMap[$dateColumn];
+        $fundDateColumn = $fundDateColumnMap[$dateColumn];
+        $trustDateColumn = $trustDateColumnMap[$dateColumn];
+        $trustCompletedStatuses = $this->resolveTrustStatusGroupNames(['completed']);
 
-        $row = $this->buildBaseQuery($schema)
-            ->whereNotNull($sqlDateColumn)
+        $fundRow = $this->buildBaseQuery($schema)
+            ->whereNotNull($fundDateColumn)
             ->whereNotNull('ct.mAmount')
-            ->where('ct.iStatus', '=', 6)
+            ->whereIn('ct.iStatus', self::CASH_COMPLETED_STATUS_IDS)
             ->whereIn('ct.iType', [22, 45])
-            ->selectRaw("MIN(CAST({$sqlDateColumn} AS date)) AS inception_date")
+            ->selectRaw("MIN(CAST({$fundDateColumn} AS date)) AS inception_date")
             ->first();
 
-        if (!$row || empty($row->inception_date)) {
+        $trustRow = $this->buildTrustBaseQuery($schema)
+            ->whereNotNull($trustDateColumn)
+            ->whereNotNull('tr.mAmount')
+            ->when(!empty($trustCompletedStatuses), function ($query) use ($trustCompletedStatuses) {
+                $query->whereIn('ts.NameEN', $trustCompletedStatuses);
+            })
+            ->selectRaw("MIN(CAST({$trustDateColumn} AS date)) AS inception_date")
+            ->first();
+
+        $fundInception = $fundRow && !empty($fundRow->inception_date)
+            ? \Carbon\Carbon::parse($fundRow->inception_date)->toDateString()
+            : null;
+        $trustInception = $trustRow && !empty($trustRow->inception_date)
+            ? \Carbon\Carbon::parse($trustRow->inception_date)->toDateString()
+            : null;
+
+        if (!$fundInception && !$trustInception) {
             return null;
         }
 
-        return \Carbon\Carbon::parse($row->inception_date)->toDateString();
+        if (!$fundInception) {
+            return $trustInception;
+        }
+
+        if (!$trustInception) {
+            return $fundInception;
+        }
+
+        return $fundInception <= $trustInception ? $fundInception : $trustInception;
     }
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
@@ -1054,6 +1142,37 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
 
         return array_values(array_unique($names));
+    }
+
+    private function resolveReportStatusGroups(array $filters): array
+    {
+        $allowed = ['not_completed', 'open', 'completed'];
+        $statusGroups = array_values(array_intersect((array) ($filters['status_group'] ?? ['completed']), $allowed));
+
+        if (empty($statusGroups)) {
+            return ['completed'];
+        }
+
+        return $statusGroups;
+    }
+
+    private function resolveIncludeTrustFilter(array $filters): bool
+    {
+        if (!array_key_exists('include_trust', $filters)) {
+            return true;
+        }
+
+        $value = $filters['include_trust'];
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
     }
 
     private function fundSelectColumns(): array

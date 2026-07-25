@@ -42,6 +42,12 @@ class VieFundReportsController extends Controller
         'desc' => 'Latest first',
     ];
 
+    private const STATUS_GROUP_OPTIONS = [
+        'completed' => 'Completed',
+        'open' => 'Open',
+        'not_completed' => 'Not Completed',
+    ];
+
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService
     ) {}
@@ -65,6 +71,9 @@ class VieFundReportsController extends Controller
             $selectedOutputOrder = 'asc';
         }
 
+        $selectedStatusGroups = $this->resolveStatusGroups($request->query('status_group', ['completed']));
+        $includeTrust = $this->resolveIncludeTrust($request->query('include_trust', '1'));
+
         return view('reports.index', [
             'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
             'selectedDateBasis' => $selectedDateBasis,
@@ -72,6 +81,9 @@ class VieFundReportsController extends Controller
             'dateTo' => $request->query('date_to', $defaultTo),
             'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
             'selectedOutputOrder' => $selectedOutputOrder,
+            'statusGroupOptions' => self::STATUS_GROUP_OPTIONS,
+            'selectedStatusGroups' => $selectedStatusGroups,
+            'includeTrust' => $includeTrust,
             'inceptionDates' => $inceptionDates,
         ]);
     }
@@ -102,6 +114,9 @@ class VieFundReportsController extends Controller
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'output_order' => ['required', 'in:asc,desc'],
+            'status_group' => ['sometimes', 'array'],
+            'status_group.*' => ['in:' . implode(',', array_keys(self::STATUS_GROUP_OPTIONS))],
+            'include_trust' => ['sometimes', 'in:0,1'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -109,18 +124,28 @@ class VieFundReportsController extends Controller
         $dateTo = Carbon::parse($validated['date_to'])->startOfDay();
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
+        $statusGroups = $this->resolveStatusGroups($validated['status_group'] ?? null);
+        $includeTrust = $this->resolveIncludeTrust($validated['include_trust'] ?? '1');
         $format = $validated['format'];
 
-        $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis);
+        $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis, [
+            'status_group' => $statusGroups,
+            'include_trust' => $includeTrust,
+        ]);
 
-        $byDate = $dailyTotals
-            ->mapWithKeys(function ($row) {
-                $key = Carbon::parse($row->total_date)->toDateString();
-                return [$key => [
-                    'transaction_count' => (int) $row->transaction_count,
-                    'net_total' => (float) $row->net_total,
-                ]];
-            });
+        $byDate = [];
+        foreach ($dailyTotals as $row) {
+            $key = Carbon::parse($row->total_date)->toDateString();
+            if (!isset($byDate[$key])) {
+                $byDate[$key] = [
+                    'transaction_count' => 0,
+                    'net_total' => 0.0,
+                ];
+            }
+
+            $byDate[$key]['transaction_count'] += (int) $row->transaction_count;
+            $byDate[$key]['net_total'] += (float) $row->net_total;
+        }
 
         $rows = [];
         $runningBalance = 0.0;
@@ -128,10 +153,10 @@ class VieFundReportsController extends Controller
 
         while ($cursor->lte($dateTo)) {
             $dateKey = $cursor->toDateString();
-            $day = $byDate->get($dateKey, [
+            $day = $byDate[$dateKey] ?? [
                 'transaction_count' => 0,
                 'net_total' => 0.0,
-            ]);
+            ];
 
             $dailyNet = (float) $day['net_total'];
             $runningBalance += $dailyNet;
@@ -160,12 +185,18 @@ class VieFundReportsController extends Controller
 
         $dateBasisLabel = self::DATE_BASIS_OPTIONS[$dateBasis];
         $outputOrderLabel = self::OUTPUT_ORDER_OPTIONS[$outputOrder];
+        $statusGroupLabel = implode(', ', array_map(
+            fn(string $group): string => self::STATUS_GROUP_OPTIONS[$group] ?? $group,
+            $statusGroups
+        ));
 
         $metadataRows = [
             ['Report', 'VieFund Daily Net + Running Balance'],
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
+            ['Status Group', $statusGroupLabel],
+            ['Include Trust Transactions', $includeTrust ? 'Yes' : 'No'],
             ['Generated At', now()->toDateTimeString()],
             ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
         ];
@@ -184,6 +215,9 @@ class VieFundReportsController extends Controller
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'output_order' => ['required', 'in:asc,desc'],
+            'status_group' => ['sometimes', 'array'],
+            'status_group.*' => ['in:' . implode(',', array_keys(self::STATUS_GROUP_OPTIONS))],
+            'include_trust' => ['sometimes', 'in:0,1'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -204,6 +238,8 @@ class VieFundReportsController extends Controller
         $dateTo = Carbon::parse($validated['date_to'])->toDateString();
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
+        $statusGroups = $this->resolveStatusGroups($validated['status_group'] ?? null);
+        $includeTrust = $this->resolveIncludeTrust($validated['include_trust'] ?? '1');
         $format = $validated['format'];
 
         $extension = $format === 'excel' ? 'xls' : 'csv';
@@ -230,6 +266,8 @@ class VieFundReportsController extends Controller
             'date_to' => $dateTo,
             'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
             'output_order' => self::OUTPUT_ORDER_OPTIONS[$outputOrder],
+            'status_group' => implode(', ', array_map(fn(string $group): string => self::STATUS_GROUP_OPTIONS[$group] ?? $group, $statusGroups)),
+            'include_trust' => $includeTrust,
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => null,
@@ -239,14 +277,23 @@ class VieFundReportsController extends Controller
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
 
+        $statusGroupArgs = implode(' ', array_map(
+            fn(string $group): string => '--status-group=' . escapeshellarg($group),
+            $statusGroups
+        ));
+
+        $includeTrustArg = '--include-trust=' . escapeshellarg($includeTrust ? '1' : '0');
+
         $command = sprintf(
-            '%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg($dateFrom),
             escapeshellarg($dateTo),
             escapeshellarg($dateBasis),
             escapeshellarg($outputOrder),
+            $statusGroupArgs,
+            $includeTrustArg,
             escapeshellarg($format),
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
@@ -481,5 +528,31 @@ class VieFundReportsController extends Controller
         }
 
         return $formatted;
+    }
+
+    private function resolveStatusGroups(null|array|string $rawStatusGroups): array
+    {
+        $values = is_array($rawStatusGroups) ? $rawStatusGroups : (array) $rawStatusGroups;
+        $values = array_values(array_intersect($values, array_keys(self::STATUS_GROUP_OPTIONS)));
+
+        if (empty($values)) {
+            return ['completed'];
+        }
+
+        return $values;
+    }
+
+    private function resolveIncludeTrust(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
     }
 }

@@ -53,44 +53,86 @@
 
     <form method="POST" action="{{ route('reports.viefund-daily-balance.run') }}" id="viefund-report-form" data-inception-dates='@json($inceptionDates)'>
         @csrf
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto; gap: 12px; align-items: end;">
-            <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Start Date</label>
-                <input type="date" id="report-date-from" name="date_from" value="{{ $dateFrom }}" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+        @php
+            $reportSelectedStatusGroups = array_values(array_intersect(
+                (array) old('status_group', $selectedStatusGroups ?? ['completed']),
+                array_keys($statusGroupOptions ?? [])
+            ));
+            if (empty($reportSelectedStatusGroups)) {
+                $reportSelectedStatusGroups = ['completed'];
+            }
+            $reportIncludeTrust = old('include_trust', ($includeTrust ?? true) ? '1' : '0') === '1';
+        @endphp
+        <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
+            <div style="flex: 1 1 820px; min-width: 0;">
+                <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end;">
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Start Date</label>
+                        <input type="date" id="report-date-from" name="date_from" value="{{ $dateFrom }}" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+                    </div>
+
+                    <div>
+                        <label id="inception-date-note" style="display: block; font-size: 12px; font-weight: 400; color: #718096; margin-bottom: 4px;"></label>
+                        <button type="button" id="set-inception-date-btn" style="width: 100%; height: 35px; padding: 0 10px; border: 1px solid #cbd5e0; border-radius: 4px; background: #e2e8f0; color: #2d3748; white-space: nowrap; font-size: 13px; font-weight: 500; line-height: 1; text-align: left; cursor: pointer; box-sizing: border-box;">&laquo; Use Inception Date</button>
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">End Date</label>
+                        <input type="date" name="date_to" value="{{ $dateTo }}" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Date Basis</label>
+                        <select id="report-date-basis" name="date_basis" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+                            @foreach($dateBasisOptions as $key => $label)
+                                <option value="{{ $key }}" @selected($selectedDateBasis === $key)>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Output Order</label>
+                        <select name="output_order" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+                            @foreach($outputOrderOptions as $key => $label)
+                                <option value="{{ $key }}" @selected($selectedOutputOrder === $key)>{{ $label }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                </div>
+
+                <div style="margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 6px; background: #f7fafc; width: 100%;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div>
+                            <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Status Group</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #2d3748;">
+                                @foreach($statusGroupOptions as $value => $label)
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" name="status_group[]" value="{{ $value }}" {{ in_array($value, $reportSelectedStatusGroups, true) ? 'checked' : '' }}>
+                                        <span>{{ $label }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
+                        </div>
+
+                        <div style="display: flex; align-items: flex-start; justify-content: flex-start;">
+                            <div>
+                                <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Trust Transactions</div>
+                                <input type="hidden" name="include_trust" value="0">
+                                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #2d3748;">
+                                    <input type="checkbox" name="include_trust" value="1" {{ $reportIncludeTrust ? 'checked' : '' }}>
+                                    <span>Included</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
-            <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">End Date</label>
-                <input type="date" name="date_to" value="{{ $dateTo }}" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
-            </div>
-
-            <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Date Basis</label>
-                <select id="report-date-basis" name="date_basis" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
-                    @foreach($dateBasisOptions as $key => $label)
-                        <option value="{{ $key }}" @selected($selectedDateBasis === $key)>{{ $label }}</option>
-                    @endforeach
-                </select>
-            </div>
-
-            <div>
-                <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Output Order</label>
-                <select name="output_order" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
-                    @foreach($outputOrderOptions as $key => $label)
-                        <option value="{{ $key }}" @selected($selectedOutputOrder === $key)>{{ $label }}</option>
-                    @endforeach
-                </select>
-            </div>
-
-            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+            <div style="display: flex; gap: 8px; justify-content: flex-end; flex: 0 0 auto; padding-top: 30px;">
                 <button type="submit" name="format" value="csv" class="btn" style="padding: 8px 16px; white-space: nowrap;">Run CSV Report</button>
                 <button type="submit" name="format" value="excel" class="btn" style="padding: 8px 16px; background: #2f855a; white-space: nowrap;">Run Excel Report</button>
             </div>
-        </div>
-
-        <div style="margin-top: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px;">
-            <div id="inception-date-note" style="font-size: 12px; color: #718096;"></div>
-            <button type="button" id="set-inception-date-btn" class="btn" style="padding: 8px 10px; background: #2c5282; white-space: nowrap;">Set to Inception Date</button>
         </div>
     </form>
 </div>
@@ -123,8 +165,8 @@
         const selected = dateBasis.value;
         const inception = inceptionDates[selected] || null;
         note.textContent = inception
-            ? `Inception date for selected basis: ${inception}`
-            : 'No inception date found for selected basis.';
+            ? `Inception Date: ${inception}`
+            : 'Inception Date: N/A';
         button.disabled = !inception;
         button.style.opacity = inception ? '1' : '0.6';
         button.style.cursor = inception ? 'pointer' : 'not-allowed';

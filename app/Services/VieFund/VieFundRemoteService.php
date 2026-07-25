@@ -48,9 +48,9 @@ class VieFundRemoteService
         return $this->repository->fetchDailyNetTotals($fromDate, $toDate);
     }
 
-    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn): Collection
+    public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection
     {
-        return $this->repository->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, $dateColumn);
+        return $this->repository->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, $dateColumn, $filters);
     }
 
     public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
