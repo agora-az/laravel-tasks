@@ -69,7 +69,7 @@
                             <td style="color: #4a5568;">{{ $txn->trx_id }}</td>
                             <td style="color: #2d3748;">{{ $txn->client_name ?: '—' }}</td>
                             <td style="color: #4a5568;white-space: nowrap;" title="{{ $txn->trx_type }}">{{ $txn->trx_type ?: '—' }}</td>
-                            <td style="color: #4a5568;">{{ $txn->order_status ?: '—' }}</td>
+                            <td style="color: #4a5568;">{{ data_get($txn, 'status', data_get($txn, 'order_status', '—')) }}</td>
                             <td style="color: #4a5568; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes }}">{{ $txn->notes ?: '—' }}</td>
                             <td style="text-align: right;font-weight: 500; color: {{ (float) $txn->amount < 0 ? '#e53e3e' : '#276749' }}; white-space: nowrap;">
                                 {{ '$' . number_format((float) $txn->amount, 2) }}
