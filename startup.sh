@@ -1,5 +1,7 @@
 #!/bin/bash
 
+echo "Launching startup script..." >> /home/site/wwwroot/storage/logs/startup.log
+
 # Copy custom nginx config
 cp /home/site/wwwroot/default /etc/nginx/sites-available/default
 ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
