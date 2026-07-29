@@ -28,13 +28,13 @@ Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', functi
 })->purpose('Run reconciliation matching rules');
 
 Schedule::command('viefund:sync-daily-totals --days=90')
-    ->dailyAt('20:00')
+    ->dailyAt('21:00')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
 
 Schedule::command('viefund:sync-customers')
-    ->dailyAt('21:00')
+    ->dailyAt('22:00')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
