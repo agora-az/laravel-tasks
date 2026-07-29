@@ -35,6 +35,14 @@ bash ./artisan-safe.sh config:cache || true
 bash ./artisan-safe.sh route:cache || true
 bash ./artisan-safe.sh view:cache || true
 
+# Install Supervisor (required every container start on Azure App Service Linux)
+echo "Installing Supervisor..." >> /home/site/wwwroot/storage/logs/startup.log
+apt-get update
+apt-get install -y supervisor
+
+# Ensure Supervisor directories exist
+mkdir -p /etc/supervisor/conf.d
+
 # Ensure Supervisor has a main config file
 if [ ! -f /etc/supervisor/supervisord.conf ]; then
 cat << 'EOF' > /etc/supervisor/supervisord.conf
@@ -48,5 +56,7 @@ files = /etc/supervisor/conf.d/*.conf
 EOF
 fi
 
-echo "Starting supervisord..."
+echo "Starting supervisord..." >> /home/site/wwwroot/storage/logs/startup.log
+
+# Start Supervisor in foreground mode so it becomes PID 1
 exec supervisord -c /etc/supervisor/supervisord.conf
