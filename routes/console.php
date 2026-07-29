@@ -29,7 +29,9 @@ Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', functi
 
 Schedule::command('viefund:sync-daily-totals --days=90')
     ->dailyAt('20:00')
-    ->timezone('America/Toronto');
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
 
 Schedule::command('viefund:sync-customers')
     ->dailyAt('21:00')
