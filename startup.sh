@@ -35,23 +35,18 @@ bash ./artisan-safe.sh config:cache || true
 bash ./artisan-safe.sh route:cache || true
 bash ./artisan-safe.sh view:cache || true
 
-# Install repo-managed Supervisor programs if present.
-# This lets us version process definitions (for example, Laravel scheduler).
-if [ -d /home/site/wwwroot/supervisor ]; then
-    mkdir -p /etc/supervisor/conf.d
-    cp /home/site/wwwroot/supervisor/*.conf /etc/supervisor/conf.d/ 2>/dev/null || true
+# Ensure Supervisor has a main config file
+if [ ! -f /etc/supervisor/supervisord.conf ]; then
+cat << 'EOF' > /etc/supervisor/supervisord.conf
+[supervisord]
+nodaemon=true
+logfile=/home/site/wwwroot/storage/logs/supervisord.log
+pidfile=/home/site/wwwroot/storage/logs/supervisord.pid
+
+[include]
+files = /etc/supervisor/conf.d/*.conf
+EOF
 fi
 
-# Start process manager if available, otherwise start Laravel scheduler directly.
-if command -v supervisord >/dev/null 2>&1; then
-    echo "Starting supervisord"
-    supervisord -c /etc/supervisor/supervisord.conf
-else
-    echo "supervisord not found; starting Laravel scheduler worker directly"
-
-    # Avoid duplicate scheduler workers on container restarts.
-    if ! pgrep -f "artisan schedule:work" >/dev/null 2>&1; then
-        nohup /bin/bash -lc 'cd /home/site/wwwroot && php artisan schedule:work --no-interaction' \
-            >> /home/site/wwwroot/storage/logs/scheduler.log 2>&1 &
-    fi
-fi
+echo "Starting supervisord..."
+exec supervisord -c /etc/supervisor/supervisord.conf
