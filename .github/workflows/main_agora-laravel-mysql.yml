@@ -44,6 +44,7 @@ jobs:
             --exclude='.devcontainer' \
             --exclude='infra' \
             --exclude='hostingstart.html' \
+            --exclude='startup.sh' \
             ./ deploy/
 
           cd deploy
@@ -83,5 +84,3 @@ jobs:
             --src-path app.zip \
             --type zip \
             --clean true
-
-
