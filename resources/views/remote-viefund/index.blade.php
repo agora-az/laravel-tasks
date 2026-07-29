@@ -2,6 +2,11 @@
 
 @section('title', 'VieFund Customer Transactions')
 
+@php
+    $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    $showSyncButtons = $showSyncButtons ?? true;
+@endphp
+
 <style>
 /* ── Multi-select dropdown widget ──────────────────────────────────── */
 .ms-wrap { position: relative; }
@@ -72,7 +77,7 @@
                     <span class="sync-chip sync-chip-progress">
                         ⟳ Transaction Sync In Progress…
                     </span>
-                @elseif($syncNeeded)
+                @elseif($syncNeeded && $showSyncButtons)
                     <form method="POST" action="{{ route('remote-viefund.sync') }}" style="margin:0;">
                         @csrf
                         @foreach(request()->query() as $key => $val)
@@ -88,6 +93,10 @@
                             ↻ Sync New Transactions
                         </button>
                     </form>
+                @elseif($syncNeeded)
+                    <span class="sync-chip sync-chip-progress">
+                        Transactions Sync Needed
+                    </span>
                 @else
                     <span class="sync-chip sync-chip-success">
                         ✓ Transactions Synced

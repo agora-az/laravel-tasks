@@ -2,6 +2,11 @@
 
 @section('title', 'Daily Totals Comparison')
 
+@php
+    $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    $showSyncButtons = $showSyncButtons ?? true;
+@endphp
+
 @section('content')
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
     <div>
@@ -12,11 +17,13 @@
             <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
-    <form method="POST" action="{{ route('reconciliations.daily-totals.sync') }}" style="display:flex; gap:8px; align-items:center; margin:0;">
-        @csrf
-        <button type="submit" id="daily-sync-incremental-btn" class="sync-action-pill sync-action-pill-primary">↻ Incremental Sync</button>
-        <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="sync-action-pill sync-action-pill-secondary">↻ Full Sync</button>
-    </form>
+    @if($showSyncButtons)
+        <form method="POST" action="{{ route('reconciliations.daily-totals.sync') }}" style="display:flex; gap:8px; align-items:center; margin:0;">
+            @csrf
+            <button type="submit" id="daily-sync-incremental-btn" class="sync-action-pill sync-action-pill-primary">↻ Incremental Sync</button>
+            <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="sync-action-pill sync-action-pill-secondary">↻ Full Sync</button>
+        </form>
+    @endif
 </div>
 
 @if(session('sync_error'))

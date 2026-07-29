@@ -3,6 +3,10 @@
 @section('title', 'Bank Statement Entries')
 
 @section('content')
+@php
+    $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    $showSyncButtons = $showSyncButtons ?? true;
+@endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
     <div>
         <h2 style="margin: 0;">Bank Statement Entries</h2>
@@ -12,21 +16,23 @@
             <button type="button" id="bank-sync-status-dismiss" aria-label="Dismiss bank sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
-    <div style="display:flex; align-items:center; gap:10px;">
-        <form method="POST" action="{{ route('bank-entries.sync') }}" style="margin:0;">
-            @csrf
-            @foreach(request()->query() as $key => $val)
-                @if(is_array($val))
-                    @foreach($val as $v)
-                        <input type="hidden" name="{{ $key }}[]" value="{{ $v }}">
-                    @endforeach
-                @else
-                    <input type="hidden" name="{{ $key }}" value="{{ $val }}">
-                @endif
-            @endforeach
-            <button type="submit" id="bank-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync Bank Entries</button>
-        </form>
-    </div>
+    @if($showSyncButtons)
+        <div style="display:flex; align-items:center; gap:10px;">
+            <form method="POST" action="{{ route('bank-entries.sync') }}" style="margin:0;">
+                @csrf
+                @foreach(request()->query() as $key => $val)
+                    @if(is_array($val))
+                        @foreach($val as $v)
+                            <input type="hidden" name="{{ $key }}[]" value="{{ $v }}">
+                        @endforeach
+                    @else
+                        <input type="hidden" name="{{ $key }}" value="{{ $val }}">
+                    @endif
+                @endforeach
+                <button type="submit" id="bank-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync Bank Entries</button>
+            </form>
+        </div>
+    @endif
 </div>
 
 @if(session('sync_success'))
