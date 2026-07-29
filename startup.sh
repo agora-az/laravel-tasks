@@ -26,18 +26,18 @@ mkdir -p storage/logs
 # Fix permissions
 chmod -R 755 storage bootstrap/cache
 
-# Remove stale manifests so production can run artisan without dev providers.
+# Remove stale manifests
 rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
 # Run database migrations
-bash ./artisan-safe.sh migrate --force || true
+bash /home/site/wwwroot/artisan-safe.sh migrate --force || true
 
-# Cache Laravel config/routes/views (ignore errors if DB not ready)
-bash ./artisan-safe.sh config:cache || true
-bash ./artisan-safe.sh route:cache || true
-bash ./artisan-safe.sh view:cache || true
+# Cache Laravel config/routes/views
+bash /home/site/wwwroot/artisan-safe.sh config:cache || true
+bash /home/site/wwwroot/artisan-safe.sh route:cache || true
+bash /home/site/wwwroot/artisan-safe.sh view:cache || true
 
-# Install Supervisor (required every container start on Azure App Service Linux)
+# Install Supervisor
 echo "Installing Supervisor..." >> /home/site/wwwroot/storage/logs/startup.log
 apt-get update
 apt-get install -y supervisor
@@ -60,5 +60,5 @@ fi
 
 echo "Starting supervisord..." >> /home/site/wwwroot/storage/logs/startup.log
 
-# Start Supervisor in foreground mode so it becomes PID 1
+# Start Supervisor in foreground mode
 exec supervisord -c /etc/supervisor/supervisord.conf
