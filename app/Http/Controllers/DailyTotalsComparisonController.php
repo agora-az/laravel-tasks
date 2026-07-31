@@ -9,7 +9,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
@@ -23,6 +22,20 @@ class DailyTotalsComparisonController extends Controller
     private const LOCK_TTL_SECONDS = 43200;
     private const PER_PAGE_OPTIONS = [25, 50, 100, 250];
     private const DEFAULT_PER_PAGE = 50;
+
+    /** Fund transaction statuses (UB_Def_TrxStatus id => label). */
+    public const FUND_STATUS_OPTIONS = [
+        0 => 'Deleted',
+        1 => 'Rejected',
+        2 => 'Cancelled',
+        3 => 'Pending',
+        4 => 'Accepted',
+        5 => 'Contracted',
+        6 => 'Confirmed',
+    ];
+
+    /** Trust transaction statuses (UB_Def_TrustStatus NameEN). */
+    public const TRUST_STATUS_OPTIONS = ['Deleted', 'Unsettled', 'Settled'];
 
     public function index(Request $request): View
     {
@@ -71,7 +84,16 @@ class DailyTotalsComparisonController extends Controller
 
         $bankRows = $bankRowsQuery->get();
 
+        [$selectedBasis, $selectedStatuses, $selectedTrustStatuses] = $this->resolveSelection($request);
+        $variantKey = VieFundDailyTotal::variantKey($selectedBasis, $selectedStatuses, $selectedTrustStatuses);
+        $viefundVariantSynced = VieFundDailyTotal::where('variant_key', $variantKey)->exists();
+        $viefundLastSynced = VieFundDailyTotal::where('variant_key', $variantKey)->max('synced_at');
+        $syncInProgress = $this->syncInProgress();
+        // No cached data for this combo and nothing running → the page will auto-start a sync.
+        $autoSync = !$viefundVariantSynced && !$syncInProgress;
+
         $viefundRows = VieFundDailyTotal::query()
+            ->where('variant_key', $variantKey)
             ->whereBetween('total_date', [$dateFrom, $dateTo])
             ->orderBy('total_date')
             ->get();
@@ -170,101 +192,207 @@ class DailyTotalsComparisonController extends Controller
             ]
         );
 
-        return view('reconciliations.daily-totals', compact('rows', 'summary', 'dateFrom', 'dateTo', 'sortField', 'sortDir', 'showZeroDays', 'onlyFundservBank', 'includeIncomplete', 'perPage'));
+        $fundStatusOptions = self::FUND_STATUS_OPTIONS;
+        $trustStatusOptions = self::TRUST_STATUS_OPTIONS;
+        $dateBasisOptions = VieFundDailyTotal::DATE_BASIS_OPTIONS;
+
+        return view('reconciliations.daily-totals', compact('rows', 'summary', 'dateFrom', 'dateTo', 'sortField', 'sortDir', 'showZeroDays', 'onlyFundservBank', 'includeIncomplete', 'perPage', 'fundStatusOptions', 'trustStatusOptions', 'dateBasisOptions', 'selectedStatuses', 'selectedTrustStatuses', 'selectedBasis', 'variantKey', 'viefundVariantSynced', 'viefundLastSynced', 'syncInProgress', 'autoSync'));
+    }
+
+    /**
+     * Resolve the variant (date basis + fund statuses + trust statuses) the page
+     * should display. An explicit request selection wins; otherwise default to
+     * the most-recently-synced variant so real data shows on load, falling back
+     * to the configured defaults when nothing has been synced.
+     *
+     * @return array{0: string, 1: int[], 2: string[]}
+     */
+    private function resolveSelection(Request $request): array
+    {
+        $allowedBasis = array_keys(VieFundDailyTotal::DATE_BASIS_OPTIONS);
+        $defaultBasis = (string) config('viefund.default_date_basis', 'settlement_date');
+
+        if ($request->has('date_basis') || $request->has('statuses') || $request->has('trust_statuses')) {
+            $basis = in_array($request->query('date_basis'), $allowedBasis, true)
+                ? $request->query('date_basis')
+                : $defaultBasis;
+
+            $statuses = array_values(array_filter(
+                array_map('intval', (array) $request->query('statuses', [])),
+                fn($id) => array_key_exists($id, self::FUND_STATUS_OPTIONS)
+            ));
+            if (empty($statuses)) {
+                $statuses = (array) config('viefund.default_fund_status', [6]);
+            }
+
+            $trust = array_values(array_intersect(self::TRUST_STATUS_OPTIONS, (array) $request->query('trust_statuses', [])));
+
+            return [$basis, $statuses, $trust];
+        }
+
+        $latest = VieFundDailyTotal::whereNotNull('variant_key')
+            ->orderByDesc('synced_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latest) {
+            $basis = in_array($latest->date_basis, $allowedBasis, true) ? $latest->date_basis : $defaultBasis;
+            $statuses = array_values(array_filter(
+                array_map('intval', (array) $latest->status_ids),
+                fn($id) => array_key_exists($id, self::FUND_STATUS_OPTIONS)
+            )) ?: (array) config('viefund.default_fund_status', [6]);
+            $trust = array_values(array_intersect(self::TRUST_STATUS_OPTIONS, (array) $latest->trust_status_names));
+
+            return [$basis, $statuses, $trust];
+        }
+
+        return [
+            $defaultBasis,
+            (array) config('viefund.default_fund_status', [6]),
+            (array) config('viefund.default_trust_status', ['Settled']),
+        ];
     }
 
     public function sync(Request $request): RedirectResponse
     {
-        $lockFile = storage_path('app/viefund-daily-totals-sync.lock');
-        $statusFile = storage_path('app/viefund-daily-totals-sync-status.json');
+        $request->validate([
+            'statuses' => ['sometimes', 'array'],
+            'statuses.*' => ['integer', 'between:0,6'],
+            'trust_statuses' => ['sometimes', 'array'],
+            'trust_statuses.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'date_basis' => ['sometimes', 'in:' . implode(',', array_keys(VieFundDailyTotal::DATE_BASIS_OPTIONS))],
+        ]);
+
+        // Fund selection defaults to Confirmed when nothing is checked; trust is
+        // exactly what was checked (empty = exclude trust from the snapshot).
+        $statusIds = array_values(array_unique(array_map('intval', (array) $request->input('statuses', []))));
+        $statusIds = array_values(array_filter($statusIds, fn($id) => array_key_exists($id, self::FUND_STATUS_OPTIONS)));
+        if (empty($statusIds)) {
+            $statusIds = (array) config('viefund.default_fund_status', [6]);
+        }
+        $trustStatusNames = array_values(array_intersect(self::TRUST_STATUS_OPTIONS, (array) $request->input('trust_statuses', [])));
+
+        $allowedBasis = array_keys(VieFundDailyTotal::DATE_BASIS_OPTIONS);
+        $basis = in_array($request->input('date_basis'), $allowedBasis, true)
+            ? $request->input('date_basis')
+            : (string) config('viefund.default_date_basis', 'settlement_date');
+
+        // Preserve the selected variant on redirect so the page shows it while the
+        // background sync populates it.
+        $selectionParams = [
+            'date_basis' => $basis,
+            'statuses' => $statusIds,
+            'trust_statuses' => $trustStatusNames,
+        ];
+
+        $dispatched = $this->dispatchVariantSync($basis, $statusIds, $trustStatusNames);
+
+        return redirect()
+            ->route('reconciliations.daily-totals', $selectionParams)
+            ->with(
+                $dispatched ? 'sync_success' : 'sync_error',
+                $dispatched
+                    ? 'VieFund daily totals sync started for this basis/criteria.'
+                    : 'A daily totals sync is already in progress.'
+            );
+    }
+
+    private function syncLockFile(): string
+    {
+        return storage_path('app/viefund-daily-totals-sync.lock');
+    }
+
+    private function syncStatusFile(): string
+    {
+        return storage_path('app/viefund-daily-totals-sync-status.json');
+    }
+
+    private function syncInProgress(): bool
+    {
+        $lockFile = $this->syncLockFile();
+
+        return file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+    }
+
+    /**
+     * Dispatch a background full-range sync for one variant (basis + criteria).
+     * Returns false when a sync is already running.
+     */
+    private function dispatchVariantSync(string $basis, array $statusIds, array $trustStatusNames): bool
+    {
+        if ($this->syncInProgress()) {
+            return false;
+        }
+
+        $lockFile = $this->syncLockFile();
+        $statusFile = $this->syncStatusFile();
         $logPath = storage_path('logs/viefund-daily-totals-sync.log');
         $phpPath = env('PHP_PATH', '/usr/local/bin/php');
         $artisanPath = base_path('artisan');
 
-        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
-        if ($hasLiveLock) {
-            return redirect()
-                ->route('reconciliations.daily-totals')
-                ->with('sync_error', 'A daily totals sync is already in progress.');
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $minSettlement = DB::connection('viefund_sqlsrv')
+            ->table("{$schema}.UB_CashTrx as ct")
+            ->whereNotNull('ct.dtSettlement')
+            ->whereNotNull('ct.mAmount')
+            ->where('ct.iStatus', '=', self::VIEFUND_CASH_STATUS_CONFIRMED)
+            ->whereIn('ct.iType', self::VIEFUND_CASH_TYPES)
+            ->min('ct.dtSettlement');
+
+        $from = $minSettlement ? Carbon::parse($minSettlement)->toDateString() : Carbon::today()->toDateString();
+        $to = Carbon::today()->toDateString();
+
+        file_put_contents($lockFile, date('c'));
+        file_put_contents($statusFile, json_encode([
+            'inProgress' => true,
+            'mode' => 'full',
+            'message' => 'Sync queued...',
+            'started_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+            'from' => $from,
+            'to' => $to,
+            'progress_pct' => 0,
+            'processed_days' => 0,
+            'total_days' => null,
+            'eta_seconds' => null,
+            'estimated_finish_at' => null,
+        ], JSON_PRETTY_PRINT));
+
+        $statusArgs = implode(' ', array_map(
+            fn($id) => '--statuses=' . escapeshellarg((string) $id),
+            $statusIds
+        ));
+        $trustArgs = implode(' ', array_map(
+            fn($name) => '--trust-statuses=' . escapeshellarg($name),
+            $trustStatusNames
+        ));
+        $basisArg = '--date-basis=' . escapeshellarg($basis);
+
+        $command = sprintf(
+            '%s %s viefund:sync-daily-totals --from=%s --to=%s --sync-mode=full %s %s %s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            escapeshellarg($phpPath),
+            escapeshellarg($artisanPath),
+            escapeshellarg($from),
+            escapeshellarg($to),
+            $statusArgs,
+            $trustArgs,
+            $basisArg,
+            escapeshellarg($statusFile),
+            escapeshellarg($lockFile),
+            escapeshellarg($logPath)
+        );
+
+        Log::info('Dispatching background daily totals sync: ' . $command);
+
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (is_resource($process)) {
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_close($process);
         }
 
-        $runFull = $request->boolean('full_sync');
-
-        if ($runFull) {
-            $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-            $minSettlement = DB::connection('viefund_sqlsrv')
-                ->table("{$schema}.UB_CashTrx as ct")
-                ->whereNotNull('ct.dtSettlement')
-                ->whereNotNull('ct.mAmount')
-                ->where('ct.iStatus', '=', self::VIEFUND_CASH_STATUS_CONFIRMED)
-                ->whereIn('ct.iType', self::VIEFUND_CASH_TYPES)
-                ->min('ct.dtSettlement');
-
-            if (!$minSettlement) {
-                return redirect()
-                    ->route('reconciliations.daily-totals')
-                    ->with('sync_error', 'No eligible VieFund settlement transactions were found to sync.');
-            }
-
-            $from = Carbon::parse($minSettlement)->toDateString();
-            $to = Carbon::today()->toDateString();
-
-            file_put_contents($lockFile, date('c'));
-            file_put_contents($statusFile, json_encode([
-                'inProgress' => true,
-                'mode' => 'full',
-                'message' => 'Full sync queued...',
-                'started_at' => now()->toIso8601String(),
-                'updated_at' => now()->toIso8601String(),
-                'from' => $from,
-                'to' => $to,
-                'progress_pct' => 0,
-                'processed_days' => 0,
-                'total_days' => null,
-                'eta_seconds' => null,
-                'estimated_finish_at' => null,
-            ], JSON_PRETTY_PRINT));
-
-            $command = sprintf(
-                '%s %s viefund:sync-daily-totals --from=%s --to=%s --sync-mode=full --status-file=%s --lock-file=%s >> %s 2>&1 &',
-                escapeshellarg($phpPath),
-                escapeshellarg($artisanPath),
-                escapeshellarg($from),
-                escapeshellarg($to),
-                escapeshellarg($statusFile),
-                escapeshellarg($lockFile),
-                escapeshellarg($logPath)
-            );
-
-            Log::info('Dispatching background full daily totals sync: ' . $command);
-
-            $descriptorspec = [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ];
-            $process = proc_open($command, $descriptorspec, $pipes);
-            if (is_resource($process)) {
-                fclose($pipes[0]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                proc_close($process);
-            }
-
-            return redirect()
-                ->route('reconciliations.daily-totals')
-                ->with('sync_success', "VieFund daily totals full sync started ({$from} to {$to}).");
-        }
-
-        Artisan::call('viefund:sync-daily-totals', [
-            '--sync-mode' => 'incremental',
-            '--status-file' => $statusFile,
-            '--lock-file' => $lockFile,
-        ]);
-
-        return redirect()
-            ->route('reconciliations.daily-totals')
-            ->with('sync_success', 'VieFund daily totals incremental sync completed.');
+        return true;
     }
 
     public function syncStatus(): JsonResponse

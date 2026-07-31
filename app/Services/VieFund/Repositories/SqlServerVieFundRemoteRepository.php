@@ -46,7 +46,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->get();
     }
 
-    private function buildBaseQuery(string $schema): \Illuminate\Database\Query\Builder
+    private function buildBaseQuery(string $schema, ?bool $hideZeroAmount = null): \Illuminate\Database\Query\Builder
     {
         $query = DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_FundTrxLookup as l")
@@ -78,7 +78,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             }
         }
 
-        if (config('viefund.hide_zero_amount', false)) {
+        // Per-call override wins; otherwise the global default (config/viefund.php).
+        if ($hideZeroAmount ?? config('viefund.hide_zero_amount', false)) {
             $query->whereNotNull('ct.mAmount')->where('ct.mAmount', '!=', 0);
         }
 
@@ -427,9 +428,42 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->values();
     }
 
-    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
+    /**
+     * Fund date column for a report basis. UB_FundTrx/UB_FundTrxLookup/UB_CashTrx.
+     */
+    private function fundDateColumn(string $basis): string
     {
-        return $this->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, 'settlement_date');
+        return match ($basis) {
+            'create_date' => 't.dtCreated',
+            // Trade basis uses the CASH transaction's trade date (ct.dtTrade), not
+            // the fund lookup's (l.dtTrade) — the two can differ by a day and the
+            // client's report keys on ct.dtTrade. Settlement/processing already use ct.*.
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+            default => throw new InvalidArgumentException('Invalid date column selected for report.'),
+        };
+    }
+
+    /**
+     * Trust date column for a report basis. UB_TrustTrx has dtEffective
+     * (value/"trade" date) and dtSettlement (clears, ~T+1); dtCreated is the
+     * entry timestamp. Trust has no distinct processing date, so it reuses
+     * dtEffective there.
+     */
+    private function trustDateColumn(string $basis): string
+    {
+        return match ($basis) {
+            'create_date' => 'tr.dtCreated',
+            'trade_date', 'processing_date' => 'tr.dtEffective',
+            'settlement_date' => 'tr.dtSettlement',
+            default => 'tr.dtCreated',
+        };
+    }
+
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection
+    {
+        return $this->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, $basis, $filters);
     }
 
     public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection
@@ -438,35 +472,18 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $from = $fromDate->copy()->startOfDay()->toDateTimeString();
         $to = $toDate->copy()->addDay()->startOfDay()->toDateTimeString();
 
-        $fundDateColumnMap = [
-            'create_date' => 't.dtCreated',
-            'trade_date' => 'l.dtTrade',
-            'processing_date' => 'ct.dtProcessing',
-            'settlement_date' => 'ct.dtSettlement',
-        ];
+        $fundDateColumn = $this->fundDateColumn($dateColumn);
+        $trustDateColumn = $this->trustDateColumn($dateColumn);
+        $cashStatusIds = $this->resolveFundStatusIds($filters);
+        $trustStatusNames = $this->resolveTrustStatusNames($filters);
+        $includeTrust = !empty($trustStatusNames);
 
-        // Trust rows only guarantee dtCreated in this dataset; keep mapping
-        // consistent for all report bases until other trust date fields are
-        // validated in production data.
-        $trustDateColumnMap = [
-            'create_date' => 'tr.dtCreated',
-            'trade_date' => 'tr.dtCreated',
-            'processing_date' => 'tr.dtCreated',
-            'settlement_date' => 'tr.dtCreated',
-        ];
-
-        if (!isset($fundDateColumnMap[$dateColumn])) {
-            throw new InvalidArgumentException('Invalid date column selected for report.');
-        }
-
-        $fundDateColumn = $fundDateColumnMap[$dateColumn];
-        $trustDateColumn = $trustDateColumnMap[$dateColumn];
-        $reportStatusGroups = $this->resolveReportStatusGroups($filters);
-        $includeTrust = $this->resolveIncludeTrustFilter($filters);
-        $cashStatusIds = $this->resolveStatusGroupIds($reportStatusGroups);
-        $trustStatusNames = $this->resolveTrustStatusGroupNames($reportStatusGroups);
-
-        $fundDailyTotals = $this->buildBaseQuery($schema)
+        // Deduplicate by cash transaction. UB_FundTrxLookup can hold several
+        // allocation rows (e.g. redemption-for-fee / advisor fee / tax) that all
+        // link to the SAME UB_CashTrx row carrying the SAME ct.mAmount. Summing
+        // per lookup row therefore double/triple-counts fee & tax cash movements,
+        // so collapse to distinct ct.ID first (same guard as getCalculatedBalancesByPlan).
+        $fundDistinct = $this->buildBaseQuery($schema)
             ->where($fundDateColumn, '>=', $from)
             ->where($fundDateColumn, '<', $to)
             ->whereNotNull($fundDateColumn)
@@ -481,8 +498,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->when(!empty($filters['customer_id']), function ($query) use ($filters) {
                 $query->where('c.ID', '=', $filters['customer_id']);
             })
-            ->selectRaw("CAST({$fundDateColumn} AS date) AS total_date, p.DealerAccountID AS plan_account_id, c.ID AS customer_id, COUNT(*) AS transaction_count, SUM(ct.mAmount) AS net_total")
-            ->groupByRaw("CAST({$fundDateColumn} AS date), p.DealerAccountID, c.ID");
+            ->distinct()
+            ->selectRaw("ct.ID AS cash_id, ct.mAmount AS cash_amount, CAST({$fundDateColumn} AS date) AS total_date, p.DealerAccountID AS plan_account_id, c.ID AS customer_id");
+
+        $fundDailyTotals = DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($fundDistinct, 'fund_distinct')
+            ->selectRaw('total_date, plan_account_id, customer_id, COUNT(*) AS transaction_count, SUM(cash_amount) AS net_total')
+            ->groupBy('total_date', 'plan_account_id', 'customer_id');
 
         $trustDailyTotals = $this->buildTrustBaseQuery($schema)
             ->where($trustDateColumn, '>=', $from)
@@ -524,26 +547,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
 
-        $fundDateColumnMap = [
-            'create_date' => 't.dtCreated',
-            'trade_date' => 'l.dtTrade',
-            'processing_date' => 'ct.dtProcessing',
-            'settlement_date' => 'ct.dtSettlement',
-        ];
-
-        $trustDateColumnMap = [
-            'create_date' => 'tr.dtCreated',
-            'trade_date' => 'tr.dtCreated',
-            'processing_date' => 'tr.dtCreated',
-            'settlement_date' => 'tr.dtCreated',
-        ];
-
-        if (!isset($fundDateColumnMap[$dateColumn])) {
-            throw new InvalidArgumentException('Invalid date column selected for inception lookup.');
-        }
-
-        $fundDateColumn = $fundDateColumnMap[$dateColumn];
-        $trustDateColumn = $trustDateColumnMap[$dateColumn];
+        $fundDateColumn = $this->fundDateColumn($dateColumn);
+        $trustDateColumn = $this->trustDateColumn($dateColumn);
         $trustCompletedStatuses = $this->resolveTrustStatusGroupNames(['completed']);
 
         $fundRow = $this->buildBaseQuery($schema)
@@ -604,6 +609,97 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->orderBy('ct.ID', 'asc');
 
         return $query->paginate($perPage, ['*'], 'viefund_page', max(1, $page));
+    }
+
+    /**
+     * Merged fund + trust transaction listing for a single settlement day,
+     * filtered by explicit fund status IDs and trust status names. The row
+     * granularity and filters mirror the COUNT(*)/SUM used by
+     * fetchDailyNetTotalsByDateColumn (settlement-date basis), so the paginator
+     * total and summed amount equal the cached daily-totals snapshot for the
+     * same filters.
+     *
+     * @return array{items: LengthAwarePaginator, transaction_count: int, net_total: float}
+     */
+    public function fetchDailyTransactions(CarbonInterface $date, array $statusIds, array $trustStatusNames, int $perPage = 250, int $page = 1, string $basis = 'settlement_date', ?bool $hideZeroAmount = null): array
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $dayStart = $date->copy()->startOfDay()->toDateTimeString();
+        $dayEnd = $date->copy()->addDay()->startOfDay()->toDateTimeString();
+        $page = max(1, $page);
+        $fundDateColumn = $this->fundDateColumn($basis);
+        $trustDateColumn = $this->trustDateColumn($basis);
+
+        $items = collect();
+
+        if (!empty($statusIds)) {
+            // One UB_CashTrx can appear on several UB_FundTrxLookup allocation
+            // rows (all carrying the same amount); collapse to one row per cash
+            // transaction so the listing matches the deduped daily total.
+            $seenCash = [];
+            $fundRows = $this->buildBaseQuery($schema, $hideZeroAmount)
+                ->where($fundDateColumn, '>=', $dayStart)
+                ->where($fundDateColumn, '<', $dayEnd)
+                ->whereNotNull($fundDateColumn)
+                ->whereNotNull('ct.mAmount')
+                ->whereIn('ct.iStatus', $statusIds)
+                ->whereIn('ct.iType', [22, 45])
+                ->select($this->fundSelectColumns())
+                ->get()
+                ->filter(function ($row) use (&$seenCash) {
+                    $key = $row->cash_trx_id;
+                    if ($key === null || isset($seenCash[$key])) {
+                        return false;
+                    }
+                    $seenCash[$key] = true;
+                    return true;
+                })
+                ->values();
+            $items = $items->concat($fundRows);
+        }
+
+        if (!empty($trustStatusNames)) {
+            $items = $items->concat(
+                $this->buildTrustBaseQuery($schema, $hideZeroAmount)
+                    ->where($trustDateColumn, '>=', $dayStart)
+                    ->where($trustDateColumn, '<', $dayEnd)
+                    ->whereNotNull($trustDateColumn)
+                    ->whereNotNull('tr.mAmount')
+                    ->whereIn('ts.NameEN', $trustStatusNames)
+                    ->select($this->trustSelectColumns())
+                    ->get()
+            );
+        }
+
+        $items = $items
+            ->sortBy(fn($row) => sprintf(
+                '%s|%s|%s',
+                (string) ($row->plan_dealer_account_id ?? ''),
+                (string) ($row->settlement_date ?? $row->created_date ?? '9999-12-31'),
+                (string) $row->trx_id
+            ))
+            ->values();
+
+        $transactionCount = $items->count();
+        $netTotal = (float) $items->sum(fn($row) => (float) ($row->amount ?? 0));
+
+        $paginator = new LengthAwarePaginator(
+            $items->forPage($page, $perPage)->values(),
+            $transactionCount,
+            $perPage,
+            $page,
+            [
+                'path' => LengthAwarePaginator::resolveCurrentPath(),
+                'pageName' => 'viefund_page',
+                'query' => LengthAwarePaginator::resolveQueryString(),
+            ]
+        );
+
+        return [
+            'items' => $paginator,
+            'transaction_count' => $transactionCount,
+            'net_total' => $netTotal,
+        ];
     }
 
     public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
@@ -993,29 +1089,60 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
 
-        $query = $this->buildBaseQuery($schema);
-        $this->applyFiltersAndSearch($query, $search ?: null, $filters, $schema);
-
-        return $query
+        // Fund-side plan accounts.
+        $fundQuery = $this->buildBaseQuery($schema);
+        $this->applyFiltersAndSearch($fundQuery, $search ?: null, $filters, $schema);
+        $fundRows = $fundQuery
             ->select([
                 DB::raw('p.DealerAccountID AS account_id'),
                 DB::raw("TRIM(CONCAT(ISNULL(c.FirstName,''),' ',ISNULL(c.LastName,''))) AS customer_name"),
                 DB::raw('COUNT(DISTINCT l.iTrxID) AS txn_count'),
             ])
             ->groupBy('p.DealerAccountID', 'c.FirstName', 'c.LastName')
-            ->orderBy('p.DealerAccountID')
-            ->get()
-            ->map(fn($r) => [
-                'account_id'    => $r->account_id,
-                'customer_name' => trim((string) $r->customer_name),
-                'txn_count'     => (int) $r->txn_count,
+            ->get();
+
+        // Trust-side plan accounts. Plans that hold ONLY standalone trust activity
+        // (e.g. transfer-only / terminated cash accounts) have no fund lookups, so
+        // they'd otherwise be invisible here even though their transactions and
+        // balances are available on drill-in.
+        $trustQuery = $this->buildTrustBaseQuery($schema);
+        $this->applyTrustFiltersAndSearch($trustQuery, $search ?: null, $filters, $schema);
+        $trustRows = $trustQuery
+            ->select([
+                DB::raw('p.DealerAccountID AS account_id'),
+                DB::raw("TRIM(CONCAT(ISNULL(c.FirstName,''),' ',ISNULL(c.LastName,''))) AS customer_name"),
+                DB::raw('COUNT(*) AS txn_count'),
             ])
-            ->toArray();
+            ->groupBy('p.DealerAccountID', 'c.FirstName', 'c.LastName')
+            ->get();
+
+        $byAccount = [];
+        foreach ($fundRows->concat($trustRows) as $r) {
+            $key = trim((string) $r->account_id);
+            if ($key === '') {
+                continue;
+            }
+            if (!isset($byAccount[$key])) {
+                $byAccount[$key] = [
+                    'account_id'    => $r->account_id,
+                    'customer_name' => trim((string) $r->customer_name),
+                    'txn_count'     => 0,
+                ];
+            }
+            $byAccount[$key]['txn_count'] += (int) $r->txn_count;
+            if ($byAccount[$key]['customer_name'] === '' && trim((string) $r->customer_name) !== '') {
+                $byAccount[$key]['customer_name'] = trim((string) $r->customer_name);
+            }
+        }
+
+        ksort($byAccount);
+
+        return array_values($byAccount);
     }
 
     // ── Trust transaction helpers ────────────────────────────────────────────
 
-    private function buildTrustBaseQuery(string $schema): \Illuminate\Database\Query\Builder
+    private function buildTrustBaseQuery(string $schema, ?bool $hideZeroAmount = null): \Illuminate\Database\Query\Builder
     {
         return DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_TrustTrx as tr")
@@ -1054,7 +1181,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             // When iTrxID > 0 the trust row is linked to an existing UB_FundTrx record
             // and will appear with merged data via buildBaseQuery instead.
             ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
-            ->when(config('viefund.hide_zero_amount', false), function ($q) {
+            ->when($hideZeroAmount ?? config('viefund.hide_zero_amount', false), function ($q) {
                 $q->whereNotNull('tr.mAmount')->where('tr.mAmount', '!=', 0);
             });
     }
@@ -1175,6 +1302,51 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
     }
 
+    /**
+     * Resolve the fund status IDs (UB_Def_TrxStatus: 0-6) to include.
+     * Prefers explicit `status_ids`; falls back to the legacy `status_group`
+     * names; defaults to Confirmed (6).
+     */
+    private function resolveFundStatusIds(array $filters): array
+    {
+        if (array_key_exists('status_ids', $filters)) {
+            $ids = array_map('intval', (array) $filters['status_ids']);
+            $ids = array_values(array_unique(array_filter($ids, fn($id) => $id >= 0 && $id <= 6)));
+            return $ids;
+        }
+
+        if (!empty($filters['status_group'])) {
+            return $this->resolveStatusGroupIds($this->resolveReportStatusGroups($filters));
+        }
+
+        return [6];
+    }
+
+    /**
+     * Resolve the trust status names (UB_Def_TrustStatus NameEN) to include.
+     * Prefers explicit `trust_status_names`; falls back to the legacy
+     * `status_group` + `include_trust` filters; defaults to Settled. An empty
+     * result means trust transactions are excluded entirely.
+     */
+    private function resolveTrustStatusNames(array $filters): array
+    {
+        $allowed = ['Deleted', 'Unsettled', 'Settled'];
+
+        if (array_key_exists('trust_status_names', $filters)) {
+            return array_values(array_intersect($allowed, (array) $filters['trust_status_names']));
+        }
+
+        if (!$this->resolveIncludeTrustFilter($filters)) {
+            return [];
+        }
+
+        if (!empty($filters['status_group'])) {
+            return $this->resolveTrustStatusGroupNames($this->resolveReportStatusGroups($filters));
+        }
+
+        return ['Settled'];
+    }
+
     private function fundSelectColumns(): array
     {
         return [
@@ -1188,7 +1360,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw('ISNULL(ctt.NameEN, CAST(ct.Type AS NVARCHAR)) AS cash_trx_type'),
             DB::raw('l.OrderID AS fund_wo_number'),
             DB::raw('t.dtCreated AS created_date'),
-            DB::raw('l.dtTrade AS trade_date'),
+            // Trade date = the CASH transaction's dtTrade (matches the reconciled
+            // trade basis and the client), not the fund lookup's l.dtTrade which
+            // can be a day later.
+            DB::raw('ct.dtTrade AS trade_date'),
             DB::raw('ct.dtCreated AS cash_created_date'),
             DB::raw('ct.dtTrade AS cash_trade_date'),
             DB::raw('ct.dtProcessing AS processing_date'),
@@ -1221,11 +1396,11 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             DB::raw("CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN tdtype.NameEN ELSE NULL END AS cash_trx_type"),
             DB::raw('NULL AS fund_wo_number'),
             DB::raw('tr.dtCreated AS created_date'),
-            DB::raw('NULL AS trade_date'),
+            DB::raw('tr.dtEffective AS trade_date'),
             DB::raw('NULL AS cash_created_date'),
             DB::raw('NULL AS cash_trade_date'),
             DB::raw('NULL AS processing_date'),
-            DB::raw('NULL AS settlement_date'),
+            DB::raw('tr.dtSettlement AS settlement_date'),
             DB::raw('tr.mAmount AS amount'),
             // For the first deposit in a plan, use the deposited amount as the balance
             // (mAmountLeft is a current snapshot value, not the historical balance at the time).

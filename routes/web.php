@@ -69,6 +69,7 @@ Route::middleware('auth.check')->group(function () {
         Route::get('/daily-totals/sync-status', [DailyTotalsComparisonController::class, 'syncStatus'])->name('reconciliations.daily-totals.sync-status');
         Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
         Route::get('/daily-totals/{date}/viefund', [DailyTotalsDrilldownController::class, 'viefundDay'])->name('reconciliations.daily-totals.viefund-day');
+        Route::get('/daily-totals/{date}/viefund/export', [DailyTotalsDrilldownController::class, 'viefundDayExport'])->name('reconciliations.daily-totals.viefund-day.export');
         Route::get('/daily-totals/{date}/variance', [DailyTotalsDrilldownController::class, 'varianceDay'])->name('reconciliations.daily-totals.variance-day');
         Route::get('/manage', function () {
             return view('reconciliations.manage');

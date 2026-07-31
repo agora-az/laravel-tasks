@@ -14,6 +14,7 @@
             <div style="font-size: 20px; font-weight: 800;">{{ '$' . number_format((float) ($summary->net_total ?? 0), 2) }}</div>
             <div style="font-size: 13px; font-weight: 700; opacity: 0.85;">{{ number_format((int) ($summary->transaction_count ?? 0)) }} txn(s)</div>
         </div>
+        <a href="{{ route('reconciliations.daily-totals.viefund-day.export', ['date' => $date, 'variant' => request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null]) }}" class="btn" style="text-decoration: none; background: #2f855a;">Export CSV</a>
         <a href="{{ route('reconciliations.daily-totals', ['date_from' => $date, 'date_to' => $date]) }}" class="btn" style="text-decoration: none;">Back to Daily Totals</a>
     </div>
 </div>
@@ -21,8 +22,15 @@
 <div class="card" style="margin-bottom: 16px; padding: 22px 24px; background: linear-gradient(135deg, #edfdf9 0%, #f0fff4 100%); border: 1px solid #9ae6b4; color: #22543d; box-shadow: 0 4px 14px rgba(72, 187, 120, 0.12);">
     <div style="font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #2f855a; margin-bottom: 8px;">Criteria</div>
     <ul style="margin: 0; padding-left: 20px; font-size: 15px; font-weight: 400; line-height: 1.55; color: #22543d;">
-        <li>Settlement date is {{ $formattedDate }}</li>
-        <li>Calculating purchase or redemption transactions where transaction status is confirmed</li>
+        <li><strong>{{ $basisLabel ?? 'Settlement date' }}</strong> is {{ $formattedDate }}</li>
+        <li>Purchase or redemption fund transactions with status: <strong>{{ $fundCriteria ?? 'Confirmed' }}</strong></li>
+        <li>Trust transactions: <strong>{{ $trustCriteria ?? 'excluded' }}</strong></li>
+        <li style="list-style: none; margin-left: -20px; margin-top: 6px;">
+            <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 400;">
+                <input type="checkbox" id="hide-zero-toggle" {{ ($hideZero ?? false) ? 'checked' : '' }}>
+                <strong>Exclude $0 transactions</strong>
+            </label>
+        </li>
     </ul>
 </div>
 
@@ -46,6 +54,7 @@
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
                         <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn ID</th>
+                        <th style="text-align: left; font-weight: 600; color: #2d3748;">Source</th>
                         <th style="text-align: left; font-weight: 600; color: #2d3748;">Customer Name</th>
                         <th style="text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
                         <th style="text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
@@ -67,6 +76,10 @@
                         @endphp
                         <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
                             <td style="color: #4a5568;">{{ $txn->trx_id }}</td>
+                            <td style="color: #4a5568;">
+                                @php $rowSource = data_get($txn, 'row_source', 'fund'); @endphp
+                                <span style="display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:700; {{ $rowSource === 'trust' ? 'background:#e9d8fd; color:#553c9a;' : 'background:#c6f6d5; color:#22543d;' }}">{{ ucfirst($rowSource) }}</span>
+                            </td>
                             <td style="color: #2d3748;">{{ $txn->client_name ?: '—' }}</td>
                             <td style="color: #4a5568;white-space: nowrap;" title="{{ $txn->trx_type }}">{{ $txn->trx_type ?: '—' }}</td>
                             <td style="color: #4a5568;">{{ data_get($txn, 'status', data_get($txn, 'order_status', '—')) }}</td>
@@ -103,4 +116,21 @@
         <p style="color: #718096; text-align: center; padding: 40px 0;">No VieFund transactions found for this date.</p>
     @endif
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const toggle = document.getElementById('hide-zero-toggle');
+    if (!toggle) return;
+    toggle.addEventListener('change', function () {
+        const u = new URL(window.location.href);
+        if (this.checked) {
+            u.searchParams.set('hide_zero', '1');
+        } else {
+            u.searchParams.delete('hide_zero');
+        }
+        u.searchParams.delete('viefund_page'); // back to page 1
+        window.location.assign(u.toString());
+    });
+});
+</script>
 @endsection

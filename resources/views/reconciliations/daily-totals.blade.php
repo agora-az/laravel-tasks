@@ -8,22 +8,13 @@
 @endphp
 
 @section('content')
-<div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
-    <div>
-        <h2 style="margin: 0;">Daily Totals Comparison</h2>
-        <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. cached VieFund daily net total</div>
-        <div id="daily-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
-            <span id="daily-sync-status"></span>
-            <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
-        </div>
+<div style="margin: 20px 0;">
+    <h2 style="margin: 0;">Daily Totals Comparison</h2>
+    <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. cached VieFund daily net total</div>
+    <div id="daily-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
+        <span id="daily-sync-status"></span>
+        <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
     </div>
-    @if($showSyncButtons)
-        <form method="POST" action="{{ route('reconciliations.daily-totals.sync') }}" style="display:flex; gap:8px; align-items:center; margin:0;">
-            @csrf
-            <button type="submit" id="daily-sync-incremental-btn" class="sync-action-pill sync-action-pill-primary">↻ Incremental Sync</button>
-            <button type="submit" id="daily-sync-full-btn" name="full_sync" value="1" class="sync-action-pill sync-action-pill-secondary">↻ Full Sync</button>
-        </form>
-    @endif
 </div>
 
 @if(session('sync_error'))
@@ -33,12 +24,12 @@
 @endif
 
 <script>
-(function () {
+document.addEventListener('DOMContentLoaded', function () {
     const badge = document.getElementById('daily-sync-status');
     const badgeWrap = document.getElementById('daily-sync-status-wrap');
     const dismissBtn = document.getElementById('daily-sync-status-dismiss');
-    const incrementalBtn = document.getElementById('daily-sync-incremental-btn');
-    const fullBtn = document.getElementById('daily-sync-full-btn');
+    const applyBtn = document.getElementById('daily-apply-btn');
+    const resyncBtn = document.getElementById('daily-resync-btn');
     if (!badge || !badgeWrap) return;
 
     const DISMISS_KEY = 'dailyTotalsSyncDismissedMessage';
@@ -71,7 +62,7 @@
     };
 
     const setButtonsBusy = (busy) => {
-        [incrementalBtn, fullBtn].forEach(btn => {
+        [applyBtn, resyncBtn].forEach(btn => {
             if (!btn) return;
             btn.disabled = busy;
             btn.style.opacity = busy ? '0.7' : '1';
@@ -98,11 +89,14 @@
         });
     }
 
+    let wasInProgress = false;
+
     const poll = () => {
         fetch('{{ route('reconciliations.daily-totals.sync-status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(r => r.json())
             .then(data => {
                 if (data.inProgress) {
+                    wasInProgress = true;
                     const pct = data.progress_pct ?? 0;
                     const processed = data.processed_days ?? 0;
                     const total = data.total_days ?? '?';
@@ -129,6 +123,12 @@
                         setBadgeVisible(true);
                         badgeWrap.className = 'sync-chip sync-chip-success';
                         setMessage(`${data.message || 'Last sync completed.'}${suffix ? ` • ${suffix}` : ''}`);
+                        // A sync we were tracking just finished — reload so the freshly
+                        // built variant displays.
+                        if (wasInProgress) {
+                            wasInProgress = false;
+                            setTimeout(() => window.location.reload(), 700);
+                        }
                     } else if (data.success === false) {
                         const updatedAt = formatDateTime(data.updated_at);
                         setBadgeVisible(true);
@@ -146,8 +146,134 @@
 
     poll();
     setInterval(poll, 5000);
-})();
+});
 </script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const cfgEl = document.getElementById('daily-variant-config');
+    const form = document.getElementById('daily-variant-form');
+    if (!cfgEl || !form) return;
+
+    const cfg = JSON.parse(cfgEl.textContent);
+    const applyBtn = document.getElementById('daily-apply-btn');
+    const resyncBtn = document.getElementById('daily-resync-btn');
+
+    const sig = (basis, statuses, trust) =>
+        JSON.stringify([basis, statuses.map(Number).sort((a, b) => a - b), trust.slice().sort()]);
+
+    const loadedSig = sig(cfg.loadedBasis, cfg.loadedStatuses, cfg.loadedTrust);
+
+    const currentSelection = () => ({
+        basis: form.querySelector('[name="date_basis"]').value,
+        statuses: Array.from(form.querySelectorAll('input[name="statuses[]"]:checked')).map(el => Number(el.value)),
+        trust: Array.from(form.querySelectorAll('input[name="trust_statuses[]"]:checked')).map(el => el.value),
+    });
+
+    const refreshButtons = () => {
+        // While a sync is running / auto-starting, suppress both actions.
+        if (cfg.syncInProgress || cfg.autoSync) {
+            if (applyBtn) applyBtn.style.display = 'none';
+            if (resyncBtn) resyncBtn.style.display = 'none';
+            return;
+        }
+        const sel = currentSelection();
+        const changed = sig(sel.basis, sel.statuses, sel.trust) !== loadedSig;
+        // Changed selection → Apply (loads/auto-builds it). Unchanged + cached → Resync.
+        if (applyBtn) applyBtn.style.display = (changed || !cfg.cached) ? '' : 'none';
+        if (resyncBtn) resyncBtn.style.display = (!changed && cfg.cached) ? '' : 'none';
+    };
+
+    form.addEventListener('change', refreshButtons);
+    refreshButtons();
+
+    // Never-built combo → start the sync automatically; the poller reloads on completion.
+    if (cfg.autoSync && resyncBtn) {
+        resyncBtn.click();
+    }
+});
+</script>
+
+@if($showSyncButtons)
+    {{-- Apply (GET) loads the selected variant from cache (auto-syncing if it has
+         never been built). When the form matches the loaded variant, Apply morphs
+         into Resync (POST) to refresh it on demand. --}}
+    <form method="GET" action="{{ route('reconciliations.daily-totals') }}" id="daily-variant-form" style="display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; width:100%; margin:0 0 16px 0; padding:12px 16px; border:1px solid #e2e8f0; border-radius:8px; background:#f7fafc;">
+        @csrf
+        <input type="hidden" name="date_from" value="{{ $dateFrom }}">
+        <input type="hidden" name="date_to" value="{{ $dateTo }}">
+        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+            <fieldset style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin:0;">
+                <legend style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#4a5568; padding:0 4px;">Date basis</legend>
+                <select name="date_basis" style="font-size:12px; padding:4px 6px; border:1px solid #cbd5e0; border-radius:4px;">
+                    @foreach($dateBasisOptions as $key => $label)
+                        <option value="{{ $key }}" @selected($selectedBasis === $key)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </fieldset>
+            <fieldset style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin:0;">
+                <legend style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#4a5568; padding:0 4px;">Fund status</legend>
+                <div style="display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#2d3748;">
+                    @foreach($fundStatusOptions as $id => $label)
+                        <label style="display:flex; align-items:center; gap:4px; white-space:nowrap; cursor:pointer;">
+                            <input type="checkbox" name="statuses[]" value="{{ $id }}" @checked(in_array($id, $selectedStatuses, true))>
+                            {{ $label }}
+                        </label>
+                    @endforeach
+                </div>
+            </fieldset>
+            <fieldset style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin:0;">
+                <legend style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#4a5568; padding:0 4px;">Trust status <span style="font-weight:400; text-transform:none; letter-spacing:0; color:#718096;">(none = excluded)</span></legend>
+                <div style="display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#2d3748;">
+                    @foreach($trustStatusOptions as $name)
+                        <label style="display:flex; align-items:center; gap:4px; white-space:nowrap; cursor:pointer;">
+                            <input type="checkbox" name="trust_statuses[]" value="{{ $name }}" @checked(in_array($name, $selectedTrustStatuses, true))>
+                            {{ $name }}
+                        </label>
+                    @endforeach
+                </div>
+            </fieldset>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center;">
+            <div id="daily-last-updated" style="font-size:11px; color:#718096; white-space:nowrap; text-align:right;">
+                @if($viefundLastSynced)
+                    Last updated:<br>{{ \Carbon\Carbon::parse($viefundLastSynced)->format('M j, Y g:i A') }}
+                @elseif($syncInProgress || $autoSync)
+                    Syncing…
+                @else
+                    Not synced
+                @endif
+            </div>
+            <button type="submit" id="daily-apply-btn" class="btn" style="padding:8px 16px;">Apply</button>
+            <button type="submit" id="daily-resync-btn" name="resync" value="1"
+                    formmethod="post" formaction="{{ route('reconciliations.daily-totals.sync') }}"
+                    class="sync-action-pill sync-action-pill-secondary" style="display:none;">↻ Resync data</button>
+        </div>
+    </form>
+
+    @php
+        $dailyVariantConfig = [
+            'loadedBasis' => $selectedBasis,
+            'loadedStatuses' => array_values($selectedStatuses),
+            'loadedTrust' => array_values($selectedTrustStatuses),
+            'cached' => (bool) $viefundVariantSynced,
+            'autoSync' => (bool) $autoSync,
+            'syncInProgress' => (bool) $syncInProgress,
+        ];
+    @endphp
+    <script type="application/json" id="daily-variant-config">{!! json_encode($dailyVariantConfig) !!}</script>
+@endif
+
+@if(!$viefundVariantSynced && ($syncInProgress || $autoSync))
+    <div style="margin-bottom: 16px; padding: 10px 14px; border-radius: 6px; background: #ebf8ff; color: #2c5282; border: 1px solid #90cdf4; font-size: 13px;">
+        Building VieFund totals for this basis / status combination… the page will refresh automatically when it finishes.
+    </div>
+@elseif(!$viefundVariantSynced)
+    <div style="margin-bottom: 16px; padding: 10px 14px; border-radius: 6px; background: #fffaf0; color: #744210; border: 1px solid #f6e05e; font-size: 13px;">
+        No VieFund totals are cached for this basis / status combination.
+        @if($showSyncButtons) Use <strong>Resync data</strong> to build it. @endif
+    </div>
+@endif
 
 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;">
     <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
@@ -170,6 +296,14 @@
 
 <div class="card" style="margin-bottom: 20px;">
     <form method="GET" action="{{ route('reconciliations.daily-totals') }}" style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end;">
+        {{-- Preserve the active variant selection when filtering by date. --}}
+        <input type="hidden" name="date_basis" value="{{ $selectedBasis }}">
+        @foreach($selectedStatuses as $sid)
+            <input type="hidden" name="statuses[]" value="{{ $sid }}">
+        @endforeach
+        @foreach($selectedTrustStatuses as $tname)
+            <input type="hidden" name="trust_statuses[]" value="{{ $tname }}">
+        @endforeach
         <div>
             <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Date From</label>
             <input type="date" name="date_from" value="{{ $dateFrom }}" style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%;">
@@ -294,7 +428,7 @@
                             </td>
                             <td style="text-align: right;color: #4a5568;">{{ number_format($row['viefund_transaction_count']) }}</td>
                             <td style="text-align: right;font-weight: 500; color: {{ $row['viefund_net_total'] < 0 ? '#e53e3e' : '#276749' }};">
-                                <a href="{{ route('reconciliations.daily-totals.viefund-day', ['date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+                                <a href="{{ route('reconciliations.daily-totals.viefund-day', ['date' => $row['total_date'], 'variant' => $variantKey]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
                                     {{ $row['viefund_net_total'] < 0 ? '($'.number_format(abs($row['viefund_net_total']),2).')' : '$'.number_format($row['viefund_net_total'],2) }}
                                 </a>
                             </td>

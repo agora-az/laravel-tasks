@@ -19,6 +19,9 @@ class SyncVieFundDailyTotalsCommand extends Command
         {--from= : Optional explicit start date (YYYY-MM-DD)}
         {--to= : Optional explicit end date (YYYY-MM-DD)}
         {--sync-mode=incremental : incremental|full marker for status output}
+        {--statuses=* : Fund status IDs (0-6) to include. When omitted, default to Confirmed (6)}
+        {--trust-statuses=* : Trust status names (Deleted|Unsettled|Settled) to include. Empty in an explicit run excludes trust}
+        {--date-basis= : Date column basis: create_date|trade_date|processing_date|settlement_date (default from config)}
         {--status-file= : Optional path to write sync progress JSON}
         {--lock-file= : Optional lock file path to mark sync in progress}';
 
@@ -41,11 +44,19 @@ class SyncVieFundDailyTotalsCommand extends Command
         }
 
         try {
+            $basis = $this->resolveBasis();
+            [$statusIds, $trustStatusNames] = $this->resolveFilters();
+            $variantKey = VieFundDailyTotal::variantKey($basis, $statusIds, $trustStatusNames);
+            $filters = [
+                'status_ids' => $statusIds,
+                'trust_status_names' => $trustStatusNames,
+            ];
+
             $toDate = $this->option('to')
                 ? Carbon::parse($this->option('to'))->startOfDay()
                 : Carbon::today();
 
-            $fromDate = $this->resolveFromDate($toDate);
+            $fromDate = $this->resolveFromDate($toDate, $variantKey);
             if ($fromDate->greaterThan($toDate)) {
                 $this->error('The start date is after the end date.');
                 $this->writeStatus($statusFile, [
@@ -59,9 +70,12 @@ class SyncVieFundDailyTotalsCommand extends Command
             }
 
             $this->info(sprintf(
-                'Syncing VieFund daily totals from %s to %s...',
+                'Syncing VieFund daily totals from %s to %s (basis: %s; fund statuses: %s; trust: %s)...',
                 $fromDate->toDateString(),
-                $toDate->toDateString()
+                $toDate->toDateString(),
+                $basis,
+                implode(',', $statusIds) ?: 'none',
+                implode(',', $trustStatusNames) ?: 'excluded'
             ));
 
             $totalDays = $fromDate->diffInDays($toDate) + 1;
@@ -94,7 +108,7 @@ class SyncVieFundDailyTotalsCommand extends Command
                     $chunkEnd = $toDate->copy();
                 }
 
-                $chunkRows = $this->remoteService->fetchDailyNetTotals($chunkStart, $chunkEnd);
+                $chunkRows = $this->remoteService->fetchDailyNetTotals($chunkStart, $chunkEnd, $filters, $basis);
                 foreach ($chunkRows as $chunkRow) {
                     $key = Carbon::parse($chunkRow->total_date)->toDateString();
                     $existing = $remoteMap->get($key);
@@ -149,6 +163,11 @@ class SyncVieFundDailyTotalsCommand extends Command
 
             $now = now();
 
+            // upsert() bypasses Eloquent casts, so JSON-encode the filter columns
+            // manually. The array cast decodes them again on read.
+            $statusIdsJson = json_encode(array_values($statusIds));
+            $trustStatusNamesJson = json_encode(array_values($trustStatusNames));
+
             $batch = [];
             $written = 0;
             $processedWriteDays = 0;
@@ -162,6 +181,10 @@ class SyncVieFundDailyTotalsCommand extends Command
                     'total_date' => $dateKey,
                     'net_total' => $remoteRow ? (float) $remoteRow->net_total : 0.0,
                     'transaction_count' => $remoteRow ? (int) $remoteRow->transaction_count : 0,
+                    'date_basis' => $basis,
+                    'variant_key' => $variantKey,
+                    'status_ids' => $statusIdsJson,
+                    'trust_status_names' => $trustStatusNamesJson,
                     'source_window_start' => $fromDate->toDateString(),
                     'source_window_end' => $toDate->toDateString(),
                     'synced_at' => $now,
@@ -172,8 +195,8 @@ class SyncVieFundDailyTotalsCommand extends Command
                 if (count($batch) >= 500) {
                     VieFundDailyTotal::upsert(
                         $batch,
-                        ['total_date'],
-                        ['net_total', 'transaction_count', 'source_window_start', 'source_window_end', 'synced_at', 'updated_at']
+                        ['total_date', 'variant_key'],
+                        ['net_total', 'transaction_count', 'date_basis', 'status_ids', 'trust_status_names', 'source_window_start', 'source_window_end', 'synced_at', 'updated_at']
                     );
                     $written += count($batch);
                     $batch = [];
@@ -212,8 +235,8 @@ class SyncVieFundDailyTotalsCommand extends Command
             if (!empty($batch)) {
                 VieFundDailyTotal::upsert(
                     $batch,
-                    ['total_date'],
-                    ['net_total', 'transaction_count', 'source_window_start', 'source_window_end', 'synced_at', 'updated_at']
+                    ['total_date', 'variant_key'],
+                    ['net_total', 'transaction_count', 'date_basis', 'status_ids', 'trust_status_names', 'source_window_start', 'source_window_end', 'synced_at', 'updated_at']
                 );
                 $written += count($batch);
             }
@@ -266,7 +289,44 @@ class SyncVieFundDailyTotalsCommand extends Command
         @file_put_contents($statusFile, json_encode($payload, JSON_PRETTY_PRINT));
     }
 
-    private function resolveFromDate(Carbon $toDate): Carbon
+    /**
+     * Resolve the fund status IDs + trust status names for this sync.
+     *
+     * An explicit run (any --statuses given, e.g. from the daily-totals form)
+     * uses exactly what is passed — an empty trust list then means "exclude
+     * trust". A bare run with no --statuses (e.g. the nightly scheduler) uses
+     * the configured defaults (VIEFUND_DEFAULT_FUND_STATUS /
+     * VIEFUND_DEFAULT_TRUST_STATUS).
+     *
+     * @return array{0: int[], 1: string[]}
+     */
+    private function resolveFilters(): array
+    {
+        $allowedTrust = ['Deleted', 'Unsettled', 'Settled'];
+
+        $statusOption = (array) $this->option('statuses');
+        $trustOption = (array) $this->option('trust-statuses');
+
+        if (!empty($statusOption)) {
+            $statusIds = array_values(array_unique(array_filter(
+                array_map('intval', $statusOption),
+                fn($id) => $id >= 0 && $id <= 6
+            )));
+            if (empty($statusIds)) {
+                $statusIds = (array) config('viefund.default_fund_status', [6]);
+            }
+            $trustStatusNames = array_values(array_intersect($allowedTrust, $trustOption));
+
+            return [$statusIds, $trustStatusNames];
+        }
+
+        return [
+            (array) config('viefund.default_fund_status', [6]),
+            (array) config('viefund.default_trust_status', ['Settled']),
+        ];
+    }
+
+    private function resolveFromDate(Carbon $toDate, string $variantKey): Carbon
     {
         if ($this->option('from')) {
             return Carbon::parse($this->option('from'))->startOfDay();
@@ -275,7 +335,9 @@ class SyncVieFundDailyTotalsCommand extends Command
         $earliestBankDate = BankStatementEntry::min('value_date');
         $earliestBank = $earliestBankDate ? Carbon::parse($earliestBankDate)->startOfDay() : $toDate->copy();
 
-        if (!VieFundDailyTotal::exists()) {
+        // First sync of this variant (basis + criteria) does a full-range build;
+        // an existing variant only rolls the recent window.
+        if (!VieFundDailyTotal::where('variant_key', $variantKey)->exists()) {
             return $earliestBank;
         }
 
@@ -283,5 +345,17 @@ class SyncVieFundDailyTotalsCommand extends Command
         $rollingStart = $toDate->copy()->subDays($days - 1)->startOfDay();
 
         return $rollingStart->lt($earliestBank) ? $earliestBank : $rollingStart;
+    }
+
+    private function resolveBasis(): string
+    {
+        $allowed = ['create_date', 'trade_date', 'processing_date', 'settlement_date'];
+        $basis = (string) $this->option('date-basis');
+
+        if (!in_array($basis, $allowed, true)) {
+            $basis = (string) config('viefund.default_date_basis', 'settlement_date');
+        }
+
+        return in_array($basis, $allowed, true) ? $basis : 'settlement_date';
     }
 }

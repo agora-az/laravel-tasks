@@ -42,11 +42,19 @@ class VieFundReportsController extends Controller
         'desc' => 'Latest first',
     ];
 
-    private const STATUS_GROUP_OPTIONS = [
-        'completed' => 'Completed',
-        'open' => 'Open',
-        'not_completed' => 'Not Completed',
+    /** Individual fund transaction statuses (UB_Def_TrxStatus id => label). */
+    public const FUND_STATUS_OPTIONS = [
+        0 => 'Deleted',
+        1 => 'Rejected',
+        2 => 'Cancelled',
+        3 => 'Pending',
+        4 => 'Accepted',
+        5 => 'Contracted',
+        6 => 'Confirmed',
     ];
+
+    /** Trust transaction statuses (UB_Def_TrustStatus NameEN). */
+    public const TRUST_STATUS_OPTIONS = ['Deleted', 'Unsettled', 'Settled'];
 
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService
@@ -71,8 +79,8 @@ class VieFundReportsController extends Controller
             $selectedOutputOrder = 'asc';
         }
 
-        $selectedStatusGroups = $this->resolveStatusGroups($request->query('status_group', ['completed']));
-        $includeTrust = $this->resolveIncludeTrust($request->query('include_trust', '1'));
+        $selectedStatuses = $this->resolveStatuses($request->query('status'));
+        $selectedTrustStatuses = $this->resolveTrustStatuses($request->query('trust_status'));
 
         return view('reports.index', [
             'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
@@ -81,9 +89,10 @@ class VieFundReportsController extends Controller
             'dateTo' => $request->query('date_to', $defaultTo),
             'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
             'selectedOutputOrder' => $selectedOutputOrder,
-            'statusGroupOptions' => self::STATUS_GROUP_OPTIONS,
-            'selectedStatusGroups' => $selectedStatusGroups,
-            'includeTrust' => $includeTrust,
+            'fundStatusOptions' => self::FUND_STATUS_OPTIONS,
+            'trustStatusOptions' => self::TRUST_STATUS_OPTIONS,
+            'selectedStatuses' => $selectedStatuses,
+            'selectedTrustStatuses' => $selectedTrustStatuses,
             'inceptionDates' => $inceptionDates,
         ]);
     }
@@ -114,9 +123,10 @@ class VieFundReportsController extends Controller
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'output_order' => ['required', 'in:asc,desc'],
-            'status_group' => ['sometimes', 'array'],
-            'status_group.*' => ['in:' . implode(',', array_keys(self::STATUS_GROUP_OPTIONS))],
-            'include_trust' => ['sometimes', 'in:0,1'],
+            'status' => ['sometimes', 'array'],
+            'status.*' => ['integer', 'between:0,6'],
+            'trust_status' => ['sometimes', 'array'],
+            'trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -124,13 +134,13 @@ class VieFundReportsController extends Controller
         $dateTo = Carbon::parse($validated['date_to'])->startOfDay();
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
-        $statusGroups = $this->resolveStatusGroups($validated['status_group'] ?? null);
-        $includeTrust = $this->resolveIncludeTrust($validated['include_trust'] ?? '1');
+        $statuses = $this->resolveStatuses($validated['status'] ?? null);
+        $trustStatuses = $this->resolveTrustStatuses($validated['trust_status'] ?? null, []);
         $format = $validated['format'];
 
         $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis, [
-            'status_group' => $statusGroups,
-            'include_trust' => $includeTrust,
+            'status_ids' => $statuses,
+            'trust_status_names' => $trustStatuses,
         ]);
 
         $byDate = [];
@@ -185,18 +195,16 @@ class VieFundReportsController extends Controller
 
         $dateBasisLabel = self::DATE_BASIS_OPTIONS[$dateBasis];
         $outputOrderLabel = self::OUTPUT_ORDER_OPTIONS[$outputOrder];
-        $statusGroupLabel = implode(', ', array_map(
-            fn(string $group): string => self::STATUS_GROUP_OPTIONS[$group] ?? $group,
-            $statusGroups
-        ));
+        $statusLabel = $this->describeStatuses($statuses);
+        $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
 
         $metadataRows = [
             ['Report', 'VieFund Daily Net + Running Balance'],
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
-            ['Status Group', $statusGroupLabel],
-            ['Include Trust Transactions', $includeTrust ? 'Yes' : 'No'],
+            ['Fund Statuses', $statusLabel],
+            ['Trust Statuses', $trustLabel],
             ['Generated At', now()->toDateTimeString()],
             ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
         ];
@@ -215,9 +223,10 @@ class VieFundReportsController extends Controller
             'date_to' => ['required', 'date', 'after_or_equal:date_from'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'output_order' => ['required', 'in:asc,desc'],
-            'status_group' => ['sometimes', 'array'],
-            'status_group.*' => ['in:' . implode(',', array_keys(self::STATUS_GROUP_OPTIONS))],
-            'include_trust' => ['sometimes', 'in:0,1'],
+            'status' => ['sometimes', 'array'],
+            'status.*' => ['integer', 'between:0,6'],
+            'trust_status' => ['sometimes', 'array'],
+            'trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -238,8 +247,8 @@ class VieFundReportsController extends Controller
         $dateTo = Carbon::parse($validated['date_to'])->toDateString();
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
-        $statusGroups = $this->resolveStatusGroups($validated['status_group'] ?? null);
-        $includeTrust = $this->resolveIncludeTrust($validated['include_trust'] ?? '1');
+        $statuses = $this->resolveStatuses($validated['status'] ?? null);
+        $trustStatuses = $this->resolveTrustStatuses($validated['trust_status'] ?? null, []);
         $format = $validated['format'];
 
         $extension = $format === 'excel' ? 'xls' : 'csv';
@@ -266,8 +275,8 @@ class VieFundReportsController extends Controller
             'date_to' => $dateTo,
             'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
             'output_order' => self::OUTPUT_ORDER_OPTIONS[$outputOrder],
-            'status_group' => implode(', ', array_map(fn(string $group): string => self::STATUS_GROUP_OPTIONS[$group] ?? $group, $statusGroups)),
-            'include_trust' => $includeTrust,
+            'status' => $this->describeStatuses($statuses),
+            'trust_status' => $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded',
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => null,
@@ -277,12 +286,15 @@ class VieFundReportsController extends Controller
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
 
-        $statusGroupArgs = implode(' ', array_map(
-            fn(string $group): string => '--status-group=' . escapeshellarg($group),
-            $statusGroups
+        $statusArgs = implode(' ', array_map(
+            fn($id): string => '--status=' . escapeshellarg((string) $id),
+            $statuses
         ));
 
-        $includeTrustArg = '--include-trust=' . escapeshellarg($includeTrust ? '1' : '0');
+        $trustStatusArgs = implode(' ', array_map(
+            fn(string $name): string => '--trust-status=' . escapeshellarg($name),
+            $trustStatuses
+        ));
 
         $command = sprintf(
             '%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
@@ -292,8 +304,8 @@ class VieFundReportsController extends Controller
             escapeshellarg($dateTo),
             escapeshellarg($dateBasis),
             escapeshellarg($outputOrder),
-            $statusGroupArgs,
-            $includeTrustArg,
+            $statusArgs,
+            $trustStatusArgs,
             escapeshellarg($format),
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
@@ -530,29 +542,44 @@ class VieFundReportsController extends Controller
         return $formatted;
     }
 
-    private function resolveStatusGroups(null|array|string $rawStatusGroups): array
+    /**
+     * Sanitize the submitted fund status IDs (0-6). Falls back to $default when
+     * nothing valid is provided — the display GET passes Confirmed; report/export
+     * POSTs pass Confirmed too so an all-unchecked submit never yields no rows.
+     *
+     * @return int[]
+     */
+    private function resolveStatuses(mixed $raw, ?array $default = null): array
     {
-        $values = is_array($rawStatusGroups) ? $rawStatusGroups : (array) $rawStatusGroups;
-        $values = array_values(array_intersect($values, array_keys(self::STATUS_GROUP_OPTIONS)));
+        $default ??= (array) config('viefund.default_fund_status', [6]);
+        $values = array_map('intval', (array) $raw);
+        $values = array_values(array_unique(array_filter(
+            $values,
+            fn($id) => array_key_exists($id, self::FUND_STATUS_OPTIONS)
+        )));
 
-        if (empty($values)) {
-            return ['completed'];
-        }
-
-        return $values;
+        return $values ?: $default;
     }
 
-    private function resolveIncludeTrust(mixed $value): bool
+    /**
+     * Sanitize the submitted trust status names. Display GET passes the Settled
+     * default; report/export POSTs pass an empty default so an all-unchecked
+     * submit excludes trust entirely.
+     *
+     * @return string[]
+     */
+    private function resolveTrustStatuses(mixed $raw, ?array $default = null): array
     {
-        if (is_bool($value)) {
-            return $value;
-        }
+        $default ??= (array) config('viefund.default_trust_status', ['Settled']);
+        $values = array_values(array_intersect(self::TRUST_STATUS_OPTIONS, (array) $raw));
 
-        if (is_int($value)) {
-            return $value === 1;
-        }
+        return $values ?: $default;
+    }
 
-        $normalized = strtolower(trim((string) $value));
-        return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+    private function describeStatuses(array $statuses): string
+    {
+        $labels = array_map(fn($id) => self::FUND_STATUS_OPTIONS[$id] ?? $id, $statuses);
+
+        return $labels ? implode(', ', $labels) : 'None';
     }
 }

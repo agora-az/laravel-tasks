@@ -91,7 +91,9 @@
         </div>
         <div style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #2f855a; margin-bottom: 6px;">Criteria</div>
         <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; font-weight: 400; line-height: 1.5; color: #4a5568;">
-            <li>Calculating VieFund purchase or redemption cash transactions that are confirmed.</li>
+            <li>Date basis: <strong>{{ $basisLabel ?? 'Settlement date' }}</strong></li>
+            <li>Fund purchase/redemption transactions with status: <strong>{{ $fundCriteria ?? 'Confirmed' }}</strong></li>
+            <li>Trust transactions: <strong>{{ $trustCriteria ?? 'excluded' }}</strong></li>
         </ul>
         @if($viefundTransactions->count())
             @php
@@ -112,6 +114,7 @@
                     <thead>
                         <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0; white-space: nowrap;">
                             <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Txn ID</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Source</th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Customer</th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Txn Type</th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748; position: sticky; top: 0; background: #f7fafc; z-index: 2;">Order Status</th>
@@ -133,9 +136,13 @@
                             @endphp
                             <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
                                 <td style="color: #4a5568;">{{ $txn->trx_id }}</td>
+                                <td style="color: #4a5568;">
+                                    @php $rowSource = data_get($txn, 'row_source', 'fund'); @endphp
+                                    <span style="display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:700; {{ $rowSource === 'trust' ? 'background:#e9d8fd; color:#553c9a;' : 'background:#c6f6d5; color:#22543d;' }}">{{ ucfirst($rowSource) }}</span>
+                                </td>
                                 <td style="color: #2d3748;max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->client_name }}">{{ $txn->client_name ?: '—' }}</td>
                                 <td style="color: #4a5568;white-space: nowrap;">{{ $txn->trx_type ?: '—' }}</td>
-                                <td style="color: #4a5568;">{{ $txn->order_status ?: '—' }}</td>
+                                <td style="color: #4a5568;">{{ data_get($txn, 'status', data_get($txn, 'order_status', '—')) }}</td>
                                 <td style="color: #4a5568;max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ $txn->notes }}">{{ $txn->notes ?: '—' }}</td>
                                 <td style="text-align: right;font-weight: 500; color: {{ (float) $txn->amount < 0 ? '#e53e3e' : '#276749' }}; white-space: nowrap;">
                                     {{ '$' . number_format((float) $txn->amount, 2) }}

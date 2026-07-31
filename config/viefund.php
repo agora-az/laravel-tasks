@@ -41,10 +41,84 @@ return [
     |--------------------------------------------------------------------------
     | Hide Zero-Amount Transactions
     |--------------------------------------------------------------------------
-    | When true, rows where the transaction amount is exactly $0.00 are
-    | excluded from the Remote VieFund transactions view.
+    | Global default for whether $0.00 transactions are hidden. Default false so
+    | zero-value transactions are INCLUDED (they affect counts, never net totals).
+    | Individual queries can still force-hide them via the repository's
+    | $hideZeroAmount override on buildBaseQuery()/buildTrustBaseQuery().
     */
 
-    'hide_zero_amount' => true,
+    'hide_zero_amount' => filter_var(env('VIEFUND_HIDE_ZERO_AMOUNT', false), FILTER_VALIDATE_BOOLEAN),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Default Status Filters (Daily Totals Sync + Reports)
+    |--------------------------------------------------------------------------
+    | Used whenever no explicit selection is supplied: the scheduled
+    | viefund:sync-daily-totals command, the initial daily-totals / reports
+    | form state, and the drilldown fallback for a day with no snapshot row.
+    |
+    | VIEFUND_DEFAULT_FUND_STATUS — comma-separated fund status IDs
+    |   (UB_Def_TrxStatus): 0=Deleted 1=Rejected 2=Cancelled 3=Pending
+    |   4=Accepted 5=Contracted 6=Confirmed.   e.g. "6,5,3"
+    |
+    | VIEFUND_DEFAULT_TRUST_STATUS — comma-separated trust statuses, given as
+    |   names (Deleted|Unsettled|Settled) or their position 0|1|2.
+    |   An empty value excludes trust.   e.g. "2" (Settled) or "Settled"
+    */
+
+    'default_fund_status' => (static function () {
+        $ids = array_values(array_unique(array_filter(
+            array_map(
+                static fn ($v) => (int) trim($v),
+                explode(',', (string) env('VIEFUND_DEFAULT_FUND_STATUS', '6'))
+            ),
+            static fn ($id) => $id >= 0 && $id <= 6
+        )));
+
+        return $ids ?: [6];
+    })(),
+
+    'default_trust_status' => (static function () {
+        $names = ['Deleted', 'Unsettled', 'Settled'];
+        $out = [];
+
+        foreach (explode(',', (string) env('VIEFUND_DEFAULT_TRUST_STATUS', 'Settled')) as $token) {
+            $token = trim($token);
+            if ($token === '') {
+                continue;
+            }
+
+            if (is_numeric($token)) {
+                $idx = (int) $token;
+                if (isset($names[$idx])) {
+                    $out[] = $names[$idx];
+                }
+                continue;
+            }
+
+            foreach ($names as $name) {
+                if (strcasecmp($name, $token) === 0) {
+                    $out[] = $name;
+                }
+            }
+        }
+
+        return array_values(array_unique($out));
+    })(),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Default Daily-Totals Date Basis
+    |--------------------------------------------------------------------------
+    | Which VieFund date column the daily-totals snapshot is built on by
+    | default: create_date | trade_date | processing_date | settlement_date.
+    */
+
+    'default_date_basis' => (static function () {
+        $allowed = ['create_date', 'trade_date', 'processing_date', 'settlement_date'];
+        $value = trim((string) env('VIEFUND_DEFAULT_DATE_BASIS', 'settlement_date'));
+
+        return in_array($value, $allowed, true) ? $value : 'settlement_date';
+    })(),
 
 ];

@@ -43,9 +43,9 @@ class VieFundRemoteService
         return $this->repository->exportTransactions($search, $filters);
     }
 
-    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection
     {
-        return $this->repository->fetchDailyNetTotals($fromDate, $toDate);
+        return $this->repository->fetchDailyNetTotals($fromDate, $toDate, $filters, $basis);
     }
 
     public function fetchDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection
@@ -61,6 +61,14 @@ class VieFundRemoteService
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator
     {
         return $this->repository->fetchDailySettlementFundTransactions($date, $perPage, $page);
+    }
+
+    /**
+     * @return array{items: LengthAwarePaginator, transaction_count: int, net_total: float}
+     */
+    public function fetchDailyTransactions(CarbonInterface $date, array $statusIds, array $trustStatusNames, int $perPage = 250, int $page = 1, string $basis = 'settlement_date', ?bool $hideZeroAmount = null): array
+    {
+        return $this->repository->fetchDailyTransactions($date, $statusIds, $trustStatusNames, $perPage, $page, $basis, $hideZeroAmount);
     }
 
     public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator

@@ -54,14 +54,17 @@
     <form method="POST" action="{{ route('reports.viefund-daily-balance.run') }}" id="viefund-report-form" data-inception-dates='@json($inceptionDates)'>
         @csrf
         @php
-            $reportSelectedStatusGroups = array_values(array_intersect(
-                (array) old('status_group', $selectedStatusGroups ?? ['completed']),
-                array_keys($statusGroupOptions ?? [])
+            $reportSelectedStatuses = array_values(array_filter(
+                array_map('intval', (array) old('status', $selectedStatuses ?? [6])),
+                fn($id) => array_key_exists($id, $fundStatusOptions ?? [])
             ));
-            if (empty($reportSelectedStatusGroups)) {
-                $reportSelectedStatusGroups = ['completed'];
+            if (empty($reportSelectedStatuses)) {
+                $reportSelectedStatuses = [6];
             }
-            $reportIncludeTrust = old('include_trust', ($includeTrust ?? true) ? '1' : '0') === '1';
+            $reportSelectedTrustStatuses = array_values(array_intersect(
+                $trustStatusOptions ?? [],
+                (array) old('trust_status', $selectedTrustStatuses ?? ['Settled'])
+            ));
         @endphp
         <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
             <div style="flex: 1 1 820px; min-width: 0;">
@@ -101,27 +104,28 @@
                 </div>
 
                 <div style="margin-top: 10px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 6px; background: #f7fafc; width: 100%;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
                         <div>
-                            <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Status Group</div>
+                            <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Fund Status</div>
                             <div style="display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #2d3748;">
-                                @foreach($statusGroupOptions as $value => $label)
+                                @foreach($fundStatusOptions as $value => $label)
                                     <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-                                        <input type="checkbox" name="status_group[]" value="{{ $value }}" {{ in_array($value, $reportSelectedStatusGroups, true) ? 'checked' : '' }}>
+                                        <input type="checkbox" name="status[]" value="{{ $value }}" {{ in_array($value, $reportSelectedStatuses, true) ? 'checked' : '' }}>
                                         <span>{{ $label }}</span>
                                     </label>
                                 @endforeach
                             </div>
                         </div>
 
-                        <div style="display: flex; align-items: flex-start; justify-content: flex-start;">
-                            <div>
-                                <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Trust Transactions</div>
-                                <input type="hidden" name="include_trust" value="0">
-                                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #2d3748;">
-                                    <input type="checkbox" name="include_trust" value="1" {{ $reportIncludeTrust ? 'checked' : '' }}>
-                                    <span>Included</span>
-                                </label>
+                        <div>
+                            <div style="font-size: 12px; font-weight: 700; color: #4a5568; margin-bottom: 6px;">Trust Status</div>
+                            <div style="display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #2d3748;">
+                                @foreach($trustStatusOptions as $name)
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" name="trust_status[]" value="{{ $name }}" {{ in_array($name, $reportSelectedTrustStatuses, true) ? 'checked' : '' }}>
+                                        <span>{{ $name }}</span>
+                                    </label>
+                                @endforeach
                             </div>
                         </div>
                     </div>

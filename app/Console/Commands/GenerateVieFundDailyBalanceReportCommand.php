@@ -25,14 +25,39 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         'open' => 'Open',
         'not_completed' => 'Not Completed',
     ];
+    private const FUND_STATUS_LABELS = [
+        0 => 'Deleted',
+        1 => 'Rejected',
+        2 => 'Cancelled',
+        3 => 'Pending',
+        4 => 'Accepted',
+        5 => 'Contracted',
+        6 => 'Confirmed',
+    ];
+    private const TRUST_STATUS_NAMES = ['Deleted', 'Unsettled', 'Settled'];
+    /** Legacy status-group → fund status IDs / trust status names, for back-compat. */
+    private const STATUS_GROUP_IDS = [
+        'not_completed' => [0, 1, 2],
+        'open' => [3, 4],
+        'completed' => [5, 6],
+    ];
+    private const STATUS_GROUP_TRUST_NAMES = [
+        'not_completed' => ['Deleted'],
+        'open' => ['Unsettled'],
+        'completed' => ['Settled'],
+    ];
+    private const DEFAULT_STATUSES = [6];
+    private const DEFAULT_TRUST_STATUSES = ['Settled'];
 
     protected $signature = 'report:viefund-daily-balance
         {--date-from= : Report start date (YYYY-MM-DD)}
         {--date-to= : Report end date (YYYY-MM-DD)}
         {--date-basis=create_date : create_date|trade_date|processing_date|settlement_date}
         {--output-order=asc : asc|desc}
-        {--status-group=* : completed|open|not_completed}
-        {--include-trust=1 : 1 to include trust transactions, 0 to exclude}
+        {--status=* : Fund status IDs 0-6 (Deleted..Confirmed). Falls back to legacy --status-group}
+        {--trust-status=* : Trust status names (Deleted|Unsettled|Settled). Empty excludes trust}
+        {--status-group=* : DEPRECATED: completed|open|not_completed (mapped to --status when --status is absent)}
+        {--include-trust=1 : DEPRECATED: 1/0 (used with --status-group when --trust-status is absent)}
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
@@ -79,8 +104,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         $dateToRaw = $this->resolveString($this->option('date-to'));
         $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'create_date';
         $outputOrder = $this->resolveString($this->option('output-order')) ?? 'asc';
-        $statusGroups = $this->resolveStatusGroups($this->option('status-group'));
-        $includeTrust = $this->resolveBoolean($this->option('include-trust'), true);
+        [$statuses, $trustStatuses] = $this->resolveStatusFilters();
         $format = $this->resolveString($this->option('format')) ?? 'csv';
         $outputRelativePath = $this->resolveString($this->option('output-file'));
 
@@ -102,10 +126,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         $outputOrderLabel = self::OUTPUT_ORDER_LABELS[$outputOrder];
-        $statusGroupLabel = implode(', ', array_map(
-            fn(string $group): string => self::STATUS_GROUP_LABELS[$group] ?? $group,
-            $statusGroups
-        ));
+        $statusLabel = $this->describeStatuses($statuses);
+        $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
 
         if (!in_array($format, ['csv', 'excel'], true)) {
             $this->error('Invalid --format value.');
@@ -142,8 +164,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_to' => $dateTo->toDateString(),
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
-            'status_group' => $statusGroupLabel,
-            'include_trust' => $includeTrust,
+            'status' => $statusLabel,
+            'trust_status' => $trustLabel,
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => $totalDays,
@@ -165,8 +187,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             }
 
             $chunkRows = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
-                'status_group' => $statusGroups,
-                'include_trust' => $includeTrust,
+                'status_ids' => $statuses,
+                'trust_status_names' => $trustStatuses,
             ]);
             foreach ($chunkRows as $row) {
                 $key = Carbon::parse($row->total_date)->toDateString();
@@ -193,8 +215,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasisLabel,
                 'output_order' => $outputOrderLabel,
-                'status_group' => $statusGroupLabel,
-                'include_trust' => $includeTrust,
+                'status' => $statusLabel,
+                'trust_status' => $trustLabel,
                 'format' => strtoupper($format),
                 'processed_days' => min($totalDays, $processedEquivalent),
                 'total_days' => $totalDays,
@@ -240,8 +262,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasisLabel,
                 'output_order' => $outputOrderLabel,
-                'status_group' => $statusGroupLabel,
-                'include_trust' => $includeTrust,
+                'status' => $statusLabel,
+                'trust_status' => $trustLabel,
                 'format' => strtoupper($format),
                 'processed_days' => min($totalDays, $processedEquivalent),
                 'total_days' => $totalDays,
@@ -264,8 +286,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
-            ['Status Group', $statusGroupLabel],
-            ['Include Trust Transactions', $includeTrust ? 'Yes' : 'No'],
+            ['Fund Statuses', $statusLabel],
+            ['Trust Statuses', $trustLabel],
             ['Generated At', now()->toDateTimeString()],
             ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
         ];
@@ -288,8 +310,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_to' => $dateTo->toDateString(),
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
-            'status_group' => $statusGroupLabel,
-            'include_trust' => $includeTrust,
+            'status' => $statusLabel,
+            'trust_status' => $trustLabel,
             'format' => strtoupper($format),
             'processed_days' => $totalDays,
             'total_days' => $totalDays,
@@ -380,6 +402,60 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         return $groups;
+    }
+
+    /**
+     * Resolve fund status IDs + trust status names. Prefers the explicit
+     * --status / --trust-status options; an explicit run (any --status given)
+     * treats an empty trust list as "exclude trust". With no --status, falls
+     * back to mapping the legacy --status-group / --include-trust options.
+     *
+     * @return array{0: int[], 1: string[]}
+     */
+    private function resolveStatusFilters(): array
+    {
+        $statusOption = array_values(array_filter((array) $this->option('status'), fn($v) => $v !== null && $v !== ''));
+        $trustOption = array_values(array_filter((array) $this->option('trust-status'), fn($v) => $v !== null && $v !== ''));
+        $statusExplicit = !empty($statusOption);
+
+        if ($statusExplicit) {
+            $statuses = array_map('intval', $statusOption);
+        } else {
+            $statuses = [];
+            foreach ($this->resolveStatusGroups($this->option('status-group')) as $group) {
+                $statuses = array_merge($statuses, self::STATUS_GROUP_IDS[$group] ?? []);
+            }
+        }
+        $statuses = array_values(array_unique(array_filter(
+            $statuses,
+            fn($id) => array_key_exists($id, self::FUND_STATUS_LABELS)
+        )));
+        if (empty($statuses)) {
+            $statuses = self::DEFAULT_STATUSES;
+        }
+
+        if (!empty($trustOption)) {
+            $trustStatuses = array_values(array_intersect(self::TRUST_STATUS_NAMES, $trustOption));
+        } elseif ($statusExplicit) {
+            $trustStatuses = [];
+        } elseif ($this->resolveBoolean($this->option('include-trust'), true)) {
+            $trustStatuses = [];
+            foreach ($this->resolveStatusGroups($this->option('status-group')) as $group) {
+                $trustStatuses = array_merge($trustStatuses, self::STATUS_GROUP_TRUST_NAMES[$group] ?? []);
+            }
+            $trustStatuses = array_values(array_unique($trustStatuses));
+        } else {
+            $trustStatuses = [];
+        }
+
+        return [$statuses, $trustStatuses];
+    }
+
+    private function describeStatuses(array $statuses): string
+    {
+        $labels = array_map(fn($id) => self::FUND_STATUS_LABELS[$id] ?? $id, $statuses);
+
+        return $labels ? implode(', ', $labels) : 'None';
     }
 
     private function resolveBoolean(mixed $value, bool $default = false): bool

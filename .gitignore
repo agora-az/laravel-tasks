@@ -30,4 +30,6 @@ azure.yaml
 resources/data/viefund_db_schema
 /storage/app/bank-entries-sync-status.json
 /storage/app/viefund-daily-totals-sync-status.json
+/storage/app/*.lock
 storage/app/reports
+/resources/data/

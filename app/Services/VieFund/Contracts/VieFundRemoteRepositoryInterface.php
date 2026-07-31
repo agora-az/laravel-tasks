@@ -28,9 +28,14 @@ interface VieFundRemoteRepositoryInterface
 
     public function exportTransactions(?string $search = null, array $filters = []): Collection;
 
-    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate): Collection;
+    public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection;
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator;
+
+    /**
+     * @return array{items: LengthAwarePaginator, transaction_count: int, net_total: float}
+     */
+    public function fetchDailyTransactions(CarbonInterface $date, array $statusIds, array $trustStatusNames, int $perPage = 250, int $page = 1, string $basis = 'settlement_date', ?bool $hideZeroAmount = null): array;
 
     public function fetchDailySettlementTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator;
 
