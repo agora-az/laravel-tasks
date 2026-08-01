@@ -75,6 +75,13 @@ The application will be available at [http://127.0.0.1:8000](http://127.0.0.1:80
 - `resources/views/reconciliations/` - Report views
 - `routes/web.php` - Application routes
 
+## VieFund Report Notes
+
+- Customer balances reconciliation criteria and run recipes:
+   - `docs/viefund_customer_balances_report_criteria.md`
+- Exclusion investigation notes for historic outlier analysis:
+   - `docs/viefund_customer_balances_exclusion_review.md`
+
 ## License
 
 This project is open-sourced software.

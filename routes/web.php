@@ -61,6 +61,10 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/reports/viefund-daily-balance/status', [VieFundReportsController::class, 'reportStatus'])->name('reports.viefund-daily-balance.status');
     Route::get('/reports/viefund-daily-balance/download-latest', [VieFundReportsController::class, 'downloadLatestReport'])->name('reports.viefund-daily-balance.download-latest');
     Route::post('/reports/viefund-daily-balance/dismiss-latest', [VieFundReportsController::class, 'dismissLatestReport'])->name('reports.viefund-daily-balance.dismiss-latest');
+    Route::post('/reports/viefund-customer-balances/run', [VieFundReportsController::class, 'runCustomerBalancesReport'])->name('reports.viefund-customer-balances.run');
+    Route::get('/reports/viefund-customer-balances/status', [VieFundReportsController::class, 'customerBalancesReportStatus'])->name('reports.viefund-customer-balances.status');
+    Route::get('/reports/viefund-customer-balances/download-latest', [VieFundReportsController::class, 'downloadLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.download-latest');
+    Route::post('/reports/viefund-customer-balances/dismiss-latest', [VieFundReportsController::class, 'dismissLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.dismiss-latest');
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');

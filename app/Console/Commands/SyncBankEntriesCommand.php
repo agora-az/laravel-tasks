@@ -215,9 +215,9 @@ class SyncBankEntriesCommand extends Command
         $toDownload = $force
             ? $candidateFiles->reject(fn($name) => $localCandidates->contains($name))->values()
             : $candidateFiles
-                ->reject(fn($name) => in_array($name, $processedNames, true))
-                ->reject(fn($name) => $localCandidates->contains($name))
-                ->values();
+            ->reject(fn($name) => in_array($name, $processedNames, true))
+            ->reject(fn($name) => $localCandidates->contains($name))
+            ->values();
 
         if ($dryRun) {
             $localPendingCount = $localPending->count();

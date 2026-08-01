@@ -121,4 +121,34 @@ return [
         return in_array($value, $allowed, true) ? $value : 'settlement_date';
     })(),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Experimental Cash-Account Scope For Balance Reports
+    |--------------------------------------------------------------------------
+    | Optional account-universe gates for customer balance reports. These are
+    | intentionally off by default and can be enabled ad hoc when trying to
+    | reproduce the client-side cash-account inquiry behavior.
+    |
+    | VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE
+    |   Restrict eligible cash accounts by CurrencyCode (for example "00" for
+    |   CAD or "01" for USD).
+    |
+    | VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE
+    |   Restrict eligible cash accounts to rows whose dtOpen is before the
+    |   supplied timestamp. Example: "2026-07-30 20:00:00".
+    |
+    | VIEFUND_BALANCE_REPORT_EXCLUDED_PLAN_ACCOUNTS
+    |   Comma-separated DealerAccountID values to exclude from the report
+    |   universe during reconciliation experiments.
+    */
+
+    'balance_report_cash_account_scope' => [
+        'currency_code' => trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '')) ?: null,
+        'opened_before' => trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', '')) ?: null,
+        'excluded_plan_accounts' => array_values(array_filter(array_map(
+            static fn ($value) => trim((string) $value),
+            explode(',', (string) env('VIEFUND_BALANCE_REPORT_EXCLUDED_PLAN_ACCOUNTS', ''))
+        ))),
+    ],
+
 ];

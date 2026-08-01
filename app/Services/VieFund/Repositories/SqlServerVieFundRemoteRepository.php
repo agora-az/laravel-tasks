@@ -14,6 +14,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 {
     private const CONNECTION = 'viefund_sqlsrv';
     private const CASH_COMPLETED_STATUS_IDS = [5, 6];
+    private const INTERNAL_AGORA_CUSTOMER_ID = 28;
 
     public function ping(): bool
     {
@@ -541,6 +542,155 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->orderBy('plan_account_id', 'asc')
             ->orderBy('customer_id', 'asc')
             ->get();
+    }
+
+    public function fetchCustomerBalancesByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $to = $asOfDate->copy()->addDay()->startOfDay()->toDateTimeString();
+        $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
+
+        $fundDateColumn = $this->fundDateColumn($dateColumn);
+        $trustDateColumn = $this->trustDateColumn($dateColumn);
+        $cashStatusIds = $this->resolveFundStatusIds($filters);
+        $trustStatusNames = $this->resolveTrustStatusNames($filters);
+        $includeTrust = !empty($trustStatusNames);
+
+        $planAccounts = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_Plan as p")
+            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->whereNotNull('p.DealerAccountID')
+            ->where('p.DealerAccountID', '<>', '')
+            ->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID)
+            ->when(!empty($cashAccountScope['excluded_plan_accounts']), function ($query) use ($cashAccountScope) {
+                $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']);
+            })
+            ->whereExists(function ($query) use ($schema, $cashAccountScope) {
+                $query->selectRaw('1')
+                    ->from("{$schema}.UB_CashAccount as ca")
+                    ->whereColumn('ca.iPlanID', 'p.ID')
+                    ->whereNotNull('ca.AccountID')
+                    ->where('ca.AccountID', '<>', '');
+
+                $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca');
+            })
+            ->selectRaw(
+                "p.ID AS plan_id, " .
+                "p.DealerAccountID AS plan_account_id, " .
+                "TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))) AS client_name, " .
+                "(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'AccountID') . ") AS account_id, " .
+                "(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'AccountStatus') . ") AS account_status"
+            )
+            ->selectRaw("p.dtStartDate AS plan_start_date, p.dtEndDate AS plan_end_date");
+
+        $fundDistinct = $this->buildBaseQuery($schema)
+            ->where($fundDateColumn, '<', $to)
+            ->whereNotNull($fundDateColumn)
+            ->whereNotNull('ct.mAmount')
+            ->when(!empty($cashStatusIds), function ($query) use ($cashStatusIds) {
+                $query->whereIn('ct.iStatus', $cashStatusIds);
+            })
+            ->whereIn('ct.iType', [22, 45])
+            ->selectRaw("\n                p.ID AS plan_id,\n                ct.ID AS cash_id,\n                MAX(ct.mAmount) AS cash_amount,\n                MAX(l.DealerRepCode) AS rep_code\n            ")
+            ->groupBy('p.ID', 'ct.ID');
+
+        $fundBalances = DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($fundDistinct, 'fund_distinct')
+            ->selectRaw('plan_id, COUNT(*) AS fund_transaction_count, SUM(cash_amount) AS fund_balance, MAX(rep_code) AS rep_code')
+            ->groupBy('plan_id');
+
+        $trustBalances = $this->buildTrustBaseQuery($schema)
+            ->where($trustDateColumn, '<', $to)
+            ->whereNotNull($trustDateColumn)
+            ->whereNotNull('tr.mAmount')
+            ->when(!empty($trustStatusNames), function ($query) use ($trustStatusNames) {
+                $query->whereIn('ts.NameEN', $trustStatusNames);
+            })
+            ->selectRaw('p.ID AS plan_id, COUNT(*) AS trust_transaction_count, SUM(tr.mAmount) AS trust_balance')
+            ->groupBy('p.ID');
+
+        $query = DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($planAccounts, 'plans')
+            ->leftJoinSub($fundBalances, 'fund_balances', 'fund_balances.plan_id', '=', 'plans.plan_id');
+
+        if ($includeTrust) {
+            $query->leftJoinSub($trustBalances, 'trust_balances', 'trust_balances.plan_id', '=', 'plans.plan_id');
+        }
+
+        $query->selectRaw("\n            plans.client_name,\n            COALESCE(fund_balances.rep_code, '') AS rep_code,\n            plans.plan_account_id,\n            COALESCE(plans.account_id, plans.plan_account_id) AS account_id,\n            COALESCE(plans.account_status, '') AS account_status,\n            COALESCE(fund_balances.fund_transaction_count, 0) AS fund_transaction_count,\n            COALESCE(fund_balances.fund_balance, 0) AS fund_balance,\n            " . ($includeTrust
+                ? "COALESCE(trust_balances.trust_transaction_count, 0)"
+                : '0') . " AS trust_transaction_count,\n            " . ($includeTrust
+                ? "COALESCE(trust_balances.trust_balance, 0)"
+                : '0') . " AS trust_balance\n        ");
+
+        return $query
+            ->selectRaw("\n                COALESCE(fund_balances.fund_balance, 0) + " . ($includeTrust
+                    ? 'COALESCE(trust_balances.trust_balance, 0)'
+                    : '0') . " AS total_balance\n            ")
+            ->orderBy('plans.plan_account_id')
+            ->get();
+    }
+
+    private function resolveBalanceReportCashAccountScope(): array
+    {
+        $scope = config('viefund.balance_report_cash_account_scope', []);
+
+        return [
+            'currency_code' => !empty($scope['currency_code']) ? (string) $scope['currency_code'] : null,
+            'opened_before' => !empty($scope['opened_before']) ? (string) $scope['opened_before'] : null,
+            'excluded_plan_accounts' => array_values(array_filter(array_map(
+                static fn ($value) => trim((string) $value),
+                (array) ($scope['excluded_plan_accounts'] ?? [])
+            ))),
+        ];
+    }
+
+    private function applyBalanceReportCashAccountScope($query, array $scope, string $alias = 'ca'): void
+    {
+        if (!empty($scope['currency_code'])) {
+            $query->where("{$alias}.CurrencyCode", '=', $scope['currency_code']);
+        }
+
+        if (!empty($scope['opened_before'])) {
+            $query->whereNotNull("{$alias}.dtOpen")
+                ->where("{$alias}.dtOpen", '<=', $scope['opened_before']);
+        }
+    }
+
+    private function buildBalanceReportCashAccountSelectSubquery(string $schema, array $scope, string $column): string
+    {
+        $allowedColumns = ['AccountID', 'AccountStatus'];
+        if (!in_array($column, $allowedColumns, true)) {
+            throw new InvalidArgumentException('Unsupported cash-account column requested.');
+        }
+
+        $normalizedAccountId = "CASE WHEN LEFT(ca.AccountID, 1) = '#' THEN SUBSTRING(ca.AccountID, 2, LEN(ca.AccountID) - 1) ELSE ca.AccountID END";
+        $selectColumn = $column === 'AccountID' ? $normalizedAccountId : "ca.{$column}";
+
+        $parts = [
+            "SELECT TOP 1 {$selectColumn}",
+            "FROM {$schema}.UB_CashAccount ca",
+            "WHERE ca.iPlanID = p.ID",
+            "AND ca.AccountID IS NOT NULL",
+            "AND ca.AccountID <> ''",
+        ];
+
+        if (!empty($scope['currency_code'])) {
+            $currency = str_replace("'", "''", $scope['currency_code']);
+            $parts[] = "AND ca.CurrencyCode = '{$currency}'";
+        }
+
+        if (!empty($scope['opened_before'])) {
+            $openedBefore = str_replace("'", "''", $scope['opened_before']);
+            $parts[] = 'AND ca.dtOpen IS NOT NULL';
+            $parts[] = "AND ca.dtOpen <= '{$openedBefore}'";
+        }
+
+        $parts[] = "ORDER BY CASE WHEN {$normalizedAccountId} = p.ThirdPartyAccount THEN 0 ELSE 1 END, CASE WHEN {$normalizedAccountId} = p.DealerAccountID THEN 0 ELSE 1 END, CASE WHEN ca.AccountStatus IN ('A', 'Active') THEN 0 WHEN ca.AccountStatus IN ('T', 'Terminated') THEN 1 ELSE 2 END, ISNULL(ca.dtCreated, '1900-01-01') ASC, {$normalizedAccountId} ASC";
+
+        return implode(' ', $parts);
     }
 
     public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
