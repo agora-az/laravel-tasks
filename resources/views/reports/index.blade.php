@@ -190,11 +190,20 @@
                 $trustStatusOptions ?? [],
                 (array) old('customer_balance_trust_status', $customerBalanceTrustStatuses ?? ['Settled'])
             ));
+            $customerBalanceOpenedBeforeRaw = (string) old('customer_balance_opened_before', $customerBalanceOpenedBefore ?? '');
+            $customerBalanceOpenedBeforeInput = '';
+            if ($customerBalanceOpenedBeforeRaw !== '') {
+                try {
+                    $customerBalanceOpenedBeforeInput = \Carbon\Carbon::parse($customerBalanceOpenedBeforeRaw)->format('Y-m-d\TH:i');
+                } catch (\Throwable) {
+                    $customerBalanceOpenedBeforeInput = '';
+                }
+            }
         @endphp
 
         <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
             <div style="flex: 1 1 820px; min-width: 0;">
-                <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end;">
+                <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end;">
                     <div>
                         <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Reporting Date</label>
                         <input type="date" name="customer_balance_date" value="{{ old('customer_balance_date', $customerBalanceDate) }}" required style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
@@ -207,6 +216,24 @@
                                 <option value="{{ $key }}" @selected(old('customer_balance_date_basis', $customerBalanceDateBasis) === $key)>{{ $label }}</option>
                             @endforeach
                         </select>
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Currency Code</label>
+                        <select name="customer_balance_currency_code" style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;">
+                            <option value="CAD" @selected(old('customer_balance_currency_code', $customerBalanceCurrencyLabel ?? 'CAD') === 'CAD')>CAD</option>
+                            <option value="USD" @selected(old('customer_balance_currency_code', $customerBalanceCurrencyLabel ?? 'CAD') === 'USD')>USD</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Simulated Report Generation Time (optional)</label>
+                        <input
+                            type="datetime-local"
+                            name="customer_balance_opened_before"
+                            value="{{ $customerBalanceOpenedBeforeInput }}"
+                            style="padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; width: 100%; font-size: 13px;"
+                        >
                     </div>
                 </div>
 

@@ -38,6 +38,12 @@ Set these before running the report command:
 - `VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE='2026-07-30 20:00:00'`
 - `VIEFUND_BALANCE_REPORT_EXCLUDED_PLAN_ACCOUNTS='39697'`
 
+Important: `VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE` must match the client report run timestamp (not just the report date). Accounts opened after that run time can appear as report-only rows.
+
+For the June 24, 2026 client file run on July 30 around 8:00 AM Pacific, this value reconciled exactly:
+
+- `VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE='2026-07-30 08:00:00'`
+
 ## Reconciliation Comparison Rules
 
 When comparing report output to client CSV:
@@ -55,6 +61,7 @@ Using the criteria above, reconciliation matched exactly:
 - 2020-02-18 trade-date: `report_only=0`, `client_only=0`
 - 2020-07-21 settlement-date: `report_only=0`, `client_only=0`
 - 2020-07-21 trade-date: `report_only=0`, `client_only=0`
+- 2026-06-24 settlement-date (client run ~8:00 AM PT on 2026-07-30): `report_only=0`, `client_only=0`
 
 ## Run Commands
 

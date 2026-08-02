@@ -58,6 +58,16 @@ class VieFundRemoteService
         return $this->repository->fetchCustomerBalancesByDate($asOfDate, $dateColumn, $filters);
     }
 
+    public function fetchCustomerCashBalanceTotal(): float
+    {
+        return $this->repository->fetchCustomerCashBalanceTotal();
+    }
+
+    public function fetchCustomerCashBalancesSnapshot(): Collection
+    {
+        return $this->repository->fetchCustomerCashBalancesSnapshot();
+    }
+
     public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
     {
         return $this->repository->fetchInceptionDateByDateColumn($dateColumn);

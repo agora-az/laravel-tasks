@@ -90,6 +90,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function fetchTransactions(?string $search = null, array $filters = []): LengthAwarePaginator
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $validPerPage = [50, 100, 250];
         $perPage = in_array((int) request()->query('per_page', 250), $validPerPage)
             ? (int) request()->query('per_page', 250)
@@ -97,7 +98,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $page = LengthAwarePaginator::resolveCurrentPage();
 
         $fundBase  = $this->buildBaseQuery($schema);
-        $trustBase = $this->buildTrustBaseQuery($schema);
+        $trustBase = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
@@ -228,6 +229,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function fetchDistinctTrxTypes(array $filters = []): array
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
 
         $fundTypes = DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_FundTrxLookup as l")
@@ -241,7 +243,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->distinct()
             ->pluck('tt.NameEN');
 
-        $trustQuery = $this->buildTrustBaseQuery($schema);
+        $trustQuery = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyTrustFiltersAndSearch($trustQuery, null, $filters, $schema);
 
         $trustTypeNames = (clone $trustQuery)
@@ -406,8 +408,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function exportTransactions(?string $search = null, array $filters = []): Collection
     {
         $schema     = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $fundQuery  = $this->buildBaseQuery($schema);
-        $trustQuery = $this->buildTrustBaseQuery($schema);
+        $trustQuery = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyFiltersAndSearch($fundQuery, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustQuery, $search, $filters, $schema);
 
@@ -630,6 +633,52 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                     ? 'COALESCE(trust_balances.trust_balance, 0)'
                     : '0') . " AS total_balance\n            ")
             ->orderBy('plans.plan_account_id')
+            ->get();
+    }
+
+    public function fetchCustomerCashBalanceTotal(): float
+    {
+        return (float) $this->fetchCustomerCashBalancesSnapshot()
+            ->sum(fn($row) => (float) ($row->cash_balance ?? 0));
+    }
+
+    public function fetchCustomerCashBalancesSnapshot(): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
+        $normalizedAccountId = "CASE WHEN LEFT(ca.AccountID, 1) = '#' THEN SUBSTRING(ca.AccountID, 2, LEN(ca.AccountID) - 1) ELSE ca.AccountID END";
+
+        $rankedCashAccounts = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_Plan as p")
+            ->join("{$schema}.UB_CashAccount as ca", 'ca.iPlanID', '=', 'p.ID')
+            ->whereNotNull('ca.AccountID')
+            ->where('ca.AccountID', '<>', '')
+            ->whereNotNull('p.DealerAccountID')
+            ->where('p.DealerAccountID', '<>', '')
+            ->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID)
+            ->when(!empty($cashAccountScope['excluded_plan_accounts']), function ($query) use ($cashAccountScope) {
+                $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']);
+            })
+            ->tap(function ($query) use ($cashAccountScope) {
+                $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca');
+            })
+            ->selectRaw(
+                "p.DealerAccountID AS plan_account_id, " .
+                "{$normalizedAccountId} AS account_id, " .
+                "CAST(ISNULL(ca.mBalance, 0) AS decimal(38,2)) AS cash_balance, " .
+                "ROW_NUMBER() OVER (PARTITION BY p.ID ORDER BY " .
+                "CASE WHEN {$normalizedAccountId} = p.ThirdPartyAccount THEN 0 ELSE 1 END, " .
+                "CASE WHEN {$normalizedAccountId} = p.DealerAccountID THEN 0 ELSE 1 END, " .
+                "CASE WHEN ca.AccountStatus IN ('A', 'Active') THEN 0 WHEN ca.AccountStatus IN ('T', 'Terminated') THEN 1 ELSE 2 END, " .
+                "ISNULL(ca.dtCreated, '1900-01-01') ASC, {$normalizedAccountId} ASC" .
+                ") AS cash_rank"
+            );
+
+        return DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($rankedCashAccounts, 'ranked_cash')
+            ->where('cash_rank', '=', 1)
+            ->selectRaw('plan_account_id, account_id, cash_balance')
             ->get();
     }
 
@@ -895,8 +944,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function countTransactions(): int
     {
         $schema     = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $fundCount  = (int) $this->buildBaseQuery($schema)->distinct()->count('l.iTrxID');
-        $trustCount = (int) $this->buildTrustBaseQuery($schema)->count();
+        $trustCount = (int) $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes)->count();
 
         return $fundCount + $trustCount;
     }
@@ -904,6 +954,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function getLatestBalance(array $filters = []): ?float
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $query  = $this->buildBaseQuery($schema);
         $this->applyFiltersAndSearch($query, null, $filters, $schema);
 
@@ -966,6 +1017,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
 
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
 
         // Get all distinct iTrxIDs for this scope
         $fundBase = $this->buildBaseQuery($schema);
@@ -973,7 +1025,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $trxIds = $fundBase->distinct()->pluck('l.iTrxID')->map(fn($v) => (int) $v)->toArray();
         $fundSum = $this->sumFundAmountsForIds($schema, $trxIds, $filters);
 
-        $trustBase = $this->buildTrustBaseQuery($schema);
+        $trustBase = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyTrustFiltersAndSearch($trustBase, null, $filters, $schema);
         $trustSum = (float) $trustBase->sum('tr.mAmount');
 
@@ -987,8 +1039,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
 
         $schema    = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $fundBase  = $this->buildBaseQuery($schema);
-        $trustBase = $this->buildTrustBaseQuery($schema);
+        $trustBase = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
@@ -1051,6 +1104,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
         $result = \Illuminate\Support\Facades\Cache::rememberForever($cacheKey, function () use ($filters) {
             $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+            $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
 
             // Fund balance: use deduplicated subquery to avoid overcounting when
             // UB_FundTrxLookup has multiple rows per iTrxID (one per allocation type).
@@ -1081,7 +1135,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ";
             $fundRows = DB::connection(self::CONNECTION)->select($fundSql, $bindings);
 
-            $trustBase = $this->buildTrustBaseQuery($schema);
+            $trustBase = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
             $this->applyTrustFiltersAndSearch($trustBase, null, $filters, $schema);
             $trustRows = (clone $trustBase)
                 ->select([DB::raw('p.DealerAccountID AS account_id'), DB::raw('SUM(tr.mAmount) AS total')])
@@ -1115,8 +1169,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
 
         $schema    = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
         $fundBase  = $this->buildBaseQuery($schema);
-        $trustBase = $this->buildTrustBaseQuery($schema);
+        $trustBase = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
         $this->applyFiltersAndSearch($fundBase, $search, $filters, $schema);
         $this->applyTrustFiltersAndSearch($trustBase, $search, $filters, $schema);
 
@@ -1255,7 +1310,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         // (e.g. transfer-only / terminated cash accounts) have no fund lookups, so
         // they'd otherwise be invisible here even though their transactions and
         // balances are available on drill-in.
-        $trustQuery = $this->buildTrustBaseQuery($schema);
+        $trustQuery = $this->buildTrustBaseQuery($schema, null, $this->cashBalanceExcludedStandaloneTrustTypes());
         $this->applyTrustFiltersAndSearch($trustQuery, $search ?: null, $filters, $schema);
         $trustRows = $trustQuery
             ->select([
@@ -1292,7 +1347,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     // ── Trust transaction helpers ────────────────────────────────────────────
 
-    private function buildTrustBaseQuery(string $schema, ?bool $hideZeroAmount = null): \Illuminate\Database\Query\Builder
+    private function buildTrustBaseQuery(string $schema, ?bool $hideZeroAmount = null, array $excludedStandaloneTrustTypes = []): \Illuminate\Database\Query\Builder
     {
         return DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_TrustTrx as tr")
@@ -1331,9 +1386,23 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             // When iTrxID > 0 the trust row is linked to an existing UB_FundTrx record
             // and will appear with merged data via buildBaseQuery instead.
             ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
+            ->when(!empty($excludedStandaloneTrustTypes), function ($query) use ($excludedStandaloneTrustTypes) {
+                $query->where(function ($nested) use ($excludedStandaloneTrustTypes) {
+                    $nested->whereNotIn('ttype.NameEN', $excludedStandaloneTrustTypes)
+                        ->orWhereNull('ttype.NameEN');
+                });
+            })
             ->when($hideZeroAmount ?? config('viefund.hide_zero_amount', false), function ($q) {
                 $q->whereNotNull('tr.mAmount')->where('tr.mAmount', '!=', 0);
             });
+    }
+
+    private function cashBalanceExcludedStandaloneTrustTypes(): array
+    {
+        return array_values(array_filter(array_map(
+            static fn ($value) => trim((string) $value),
+            (array) config('viefund.cash_balance_excluded_standalone_trust_types', [])
+        )));
     }
 
     private function applyTrustFiltersAndSearch(\Illuminate\Database\Query\Builder $query, ?string $search, array $filters, string $schema): void

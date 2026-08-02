@@ -52,7 +52,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
     protected $signature = 'report:viefund-daily-balance
         {--date-from= : Report start date (YYYY-MM-DD)}
         {--date-to= : Report end date (YYYY-MM-DD)}
-        {--date-basis=create_date : create_date|trade_date|processing_date|settlement_date}
+        {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
         {--output-order=asc : asc|desc}
         {--status=* : Fund status IDs 0-6 (Deleted..Confirmed). Falls back to legacy --status-group}
         {--trust-status=* : Trust status names (Deleted|Unsettled|Settled). Empty excludes trust}
@@ -102,7 +102,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
     {
         $dateFromRaw = $this->resolveString($this->option('date-from'));
         $dateToRaw = $this->resolveString($this->option('date-to'));
-        $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'create_date';
+        $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'settlement_date';
         $outputOrder = $this->resolveString($this->option('output-order')) ?? 'asc';
         [$statuses, $trustStatuses] = $this->resolveStatusFilters();
         $format = $this->resolveString($this->option('format')) ?? 'csv';
@@ -349,6 +349,9 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         if ($format === 'csv') {
+            // Prefix CSV with UTF-8 BOM so Excel auto-detects encoding correctly.
+            fwrite($handle, "\xEF\xBB\xBF");
+
             return function (?array $row) use ($handle): void {
                 if ($row === null) {
                     fclose($handle);

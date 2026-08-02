@@ -51,6 +51,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Standalone Trust Type Exclusions For Cash-Balance Modeling
+    |--------------------------------------------------------------------------
+    | These trust types are excluded when reconstructing customer cash balances
+    | from fund + standalone trust rows (customer transactions page and parity
+    | diagnostics). Keep this list narrow; broad exclusions can regress parity.
+    |
+    | VIEFUND_CASH_BALANCE_EXCLUDED_STANDALONE_TRUST_TYPES
+    |   Comma-separated trust type names. Example:
+    |   "GIC Accrued Interest"
+    */
+
+    'cash_balance_excluded_standalone_trust_types' => (static function () {
+        $configured = trim((string) env(
+            'VIEFUND_CASH_BALANCE_EXCLUDED_STANDALONE_TRUST_TYPES',
+            'GIC Accrued Interest'
+        ));
+
+        if ($configured === '') {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            static fn ($value) => trim((string) $value),
+            explode(',', $configured)
+        )));
+    })(),
+
+    /*
+    |--------------------------------------------------------------------------
     | Default Status Filters (Daily Totals Sync + Reports)
     |--------------------------------------------------------------------------
     | Used whenever no explicit selection is supplied: the scheduled

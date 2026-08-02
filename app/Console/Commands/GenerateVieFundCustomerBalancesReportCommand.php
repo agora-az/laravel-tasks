@@ -25,12 +25,17 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
     ];
     private const TRUST_STATUS_NAMES = ['Deleted', 'Unsettled', 'Settled'];
     private const DEFAULT_STATUSES = [6];
+    private const BALANCE_SOURCE_LABELS = [
+        'transaction_rollup' => 'Transaction Rollup',
+        'cash_snapshot' => 'Cash Snapshot',
+    ];
 
     protected $signature = 'report:viefund-customer-balances
         {--report-date= : Report date (YYYY-MM-DD)}
-        {--date-basis=create_date : create_date|trade_date|processing_date|settlement_date}
+        {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
         {--status=* : Fund status IDs 0-6}
         {--trust-status=* : Trust status names (Deleted|Unsettled|Settled). Empty excludes trust}
+        {--balance-source=transaction_rollup : transaction_rollup|cash_snapshot}
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
@@ -74,9 +79,10 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
     private function runReport(?string $statusFile): int
     {
         $reportDateRaw = $this->resolveString($this->option('report-date'));
-        $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'create_date';
+        $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'settlement_date';
         $statuses = $this->resolveStatuses($this->option('status'));
         $trustStatuses = $this->resolveTrustStatuses($this->option('trust-status'));
+        $balanceSource = $this->resolveString($this->option('balance-source')) ?? 'transaction_rollup';
         $format = $this->resolveString($this->option('format')) ?? 'csv';
         $outputRelativePath = $this->resolveString($this->option('output-file'));
 
@@ -95,10 +101,16 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             return self::FAILURE;
         }
 
+        if (!isset(self::BALANCE_SOURCE_LABELS[$balanceSource])) {
+            $this->error('Invalid --balance-source value.');
+            return self::FAILURE;
+        }
+
         $reportDate = Carbon::parse($reportDateRaw)->startOfDay();
         $dateBasisLabel = self::DATE_BASIS_LABELS[$dateBasis];
         $statusLabel = $this->describeStatuses($statuses);
         $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
+        $simulatedGenerationTime = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', ''));
 
         $outputRelativePath = ltrim($outputRelativePath, '/');
         if (!str_starts_with($outputRelativePath, 'reports/')) {
@@ -136,11 +148,34 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'trust_status_names' => $trustStatuses,
         ]);
 
+        $cashSnapshotByAccountId = collect();
+        $cashSnapshotByPlanId = collect();
+        if ($balanceSource === 'cash_snapshot') {
+            $cashSnapshots = $this->vieFundRemoteService->fetchCustomerCashBalancesSnapshot();
+            $cashSnapshotByAccountId = $cashSnapshots->keyBy(fn($row) => $this->normalizeAccountIdentifier((string) ($row->account_id ?? '')));
+            $cashSnapshotByPlanId = $cashSnapshots->keyBy(fn($row) => $this->normalizeAccountIdentifier((string) ($row->plan_account_id ?? '')));
+        }
+
         $totalAccounts = $balances->count();
-        $totalBalance = (float) $balances->sum(fn($row) => (float) ($row->total_balance ?? 0));
+        $simulatedClientCashTotal = $this->vieFundRemoteService->fetchCustomerCashBalanceTotal();
+        $totalBalance = 0.0;
         $rows = [];
 
         foreach ($balances->values() as $index => $row) {
+            $computedBalance = (float) ($row->total_balance ?? 0);
+            if ($balanceSource === 'cash_snapshot') {
+                $normalizedAccountId = $this->normalizeAccountIdentifier((string) ($row->account_id ?? ''));
+                $normalizedPlanId = $this->normalizeAccountIdentifier((string) ($row->plan_account_id ?? ''));
+                $snapshotRow = $cashSnapshotByAccountId->get($normalizedAccountId)
+                    ?? $cashSnapshotByPlanId->get($normalizedPlanId);
+                if ($snapshotRow !== null) {
+                    $computedBalance = (float) ($snapshotRow->cash_balance ?? 0);
+                } else {
+                    $computedBalance = 0.0;
+                }
+            }
+
+            $totalBalance += $computedBalance;
             $rows[] = [
                 trim((string) ($row->client_name ?? '')),
                 (string) ($row->rep_code ?? ''),
@@ -151,7 +186,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                 number_format((int) ($row->trust_transaction_count ?? 0)),
                 $this->formatAccountingCurrency((float) ($row->fund_balance ?? 0)),
                 $this->formatAccountingCurrency((float) ($row->trust_balance ?? 0)),
-                $this->formatAccountingCurrency((float) ($row->total_balance ?? 0)),
+                $this->formatAccountingCurrency($computedBalance),
             ];
 
             $processedAccounts = $index + 1;
@@ -181,10 +216,13 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ['Report', 'VieFund Customer Balances'],
             ['Report Date', $reportDate->toDateString()],
             ['Date Basis', $dateBasisLabel],
+            ['Balance Source', self::BALANCE_SOURCE_LABELS[$balanceSource]],
             ['Fund Statuses', $statusLabel],
             ['Trust Statuses', $trustLabel],
+            ['Simulated Generation Time', $simulatedGenerationTime !== '' ? $simulatedGenerationTime : 'Not set'],
             ['Plan Accounts', number_format($totalAccounts)],
             ['Generated At', now()->toDateTimeString()],
+            ['Simulated Client Cash Total', $this->formatAccountingCurrency($simulatedClientCashTotal)],
             ['Total Balance', $this->formatAccountingCurrency($totalBalance)],
         ];
 
@@ -254,6 +292,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         }
 
         if ($format === 'csv') {
+            // Prefix CSV with UTF-8 BOM so Excel auto-detects encoding correctly.
+            fwrite($handle, "\xEF\xBB\xBF");
+
             return function (?array $row) use ($handle): void {
                 if ($row === null) {
                     fclose($handle);
@@ -329,6 +370,16 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $labels = array_map(fn($id) => self::FUND_STATUS_LABELS[$id] ?? $id, $statuses);
 
         return $labels ? implode(', ', $labels) : 'None';
+    }
+
+    private function normalizeAccountIdentifier(string $value): string
+    {
+        $normalized = trim($value);
+        if (str_starts_with($normalized, '#')) {
+            $normalized = substr($normalized, 1);
+        }
+
+        return trim($normalized);
     }
 
     private function formatAccountingCurrency(float $amount): string

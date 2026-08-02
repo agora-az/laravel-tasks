@@ -62,9 +62,9 @@ class VieFundReportsController extends Controller
 
     public function index(Request $request): View
     {
-        $selectedDateBasis = $request->query('date_basis', 'create_date');
+        $selectedDateBasis = $request->query('date_basis', 'settlement_date');
         if (!isset(self::DATE_BASIS_OPTIONS[$selectedDateBasis])) {
-            $selectedDateBasis = 'create_date';
+            $selectedDateBasis = 'settlement_date';
         }
 
         $inceptionDates = [];
@@ -81,13 +81,25 @@ class VieFundReportsController extends Controller
 
         $selectedStatuses = $this->resolveStatuses($request->query('status'));
         $selectedTrustStatuses = $this->resolveTrustStatuses($request->query('trust_status'));
-        $customerBalanceDateBasis = $request->query('customer_balance_date_basis', 'create_date');
+        $customerBalanceDateBasis = $request->query('customer_balance_date_basis', 'settlement_date');
         if (!isset(self::DATE_BASIS_OPTIONS[$customerBalanceDateBasis])) {
-            $customerBalanceDateBasis = 'create_date';
+            $customerBalanceDateBasis = 'settlement_date';
         }
 
         $customerBalanceStatuses = $this->resolveStatuses($request->query('customer_balance_status'));
         $customerBalanceTrustStatuses = $this->resolveTrustStatuses($request->query('customer_balance_trust_status'));
+        $customerBalanceCurrencyCode = strtoupper(trim((string) $request->query(
+            'customer_balance_currency_code',
+            'CAD'
+        )));
+        $customerBalanceCurrencyCode = $this->normalizeCustomerBalanceCurrencyCode($customerBalanceCurrencyCode);
+        if ($customerBalanceCurrencyCode === null) {
+            $customerBalanceCurrencyCode = '00';
+        }
+        $customerBalanceOpenedBefore = trim((string) $request->query(
+            'customer_balance_opened_before',
+            (string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', '')
+        ));
 
         return view('reports.index', [
             'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
@@ -104,6 +116,9 @@ class VieFundReportsController extends Controller
             'customerBalanceDateBasis' => $customerBalanceDateBasis,
             'customerBalanceStatuses' => $customerBalanceStatuses,
             'customerBalanceTrustStatuses' => $customerBalanceTrustStatuses,
+            'customerBalanceCurrencyCode' => $customerBalanceCurrencyCode,
+            'customerBalanceCurrencyLabel' => $this->customerBalanceCurrencyLabelFromCode($customerBalanceCurrencyCode),
+            'customerBalanceOpenedBefore' => $customerBalanceOpenedBefore,
             'inceptionDates' => $inceptionDates,
         ]);
     }
@@ -354,6 +369,8 @@ class VieFundReportsController extends Controller
             'customer_balance_status.*' => ['integer', 'between:0,6'],
             'customer_balance_trust_status' => ['sometimes', 'array'],
             'customer_balance_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'customer_balance_currency_code' => ['required', 'in:CAD,USD'],
+            'customer_balance_opened_before' => ['nullable', 'date'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -374,6 +391,15 @@ class VieFundReportsController extends Controller
         $dateBasis = $validated['customer_balance_date_basis'];
         $statuses = $this->resolveStatuses($validated['customer_balance_status'] ?? null);
         $trustStatuses = $this->resolveTrustStatuses($validated['customer_balance_trust_status'] ?? null, []);
+        $selectedCurrency = strtoupper(trim((string) $validated['customer_balance_currency_code']));
+        $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($selectedCurrency);
+        if ($currencyCode === null) {
+            $currencyCode = '00';
+        }
+        $openedBefore = null;
+        if (!empty($validated['customer_balance_opened_before'])) {
+            $openedBefore = Carbon::parse((string) $validated['customer_balance_opened_before'])->format('Y-m-d H:i:s');
+        }
         $format = $validated['format'];
 
         $extension = $format === 'excel' ? 'xls' : 'csv';
@@ -399,6 +425,9 @@ class VieFundReportsController extends Controller
             'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
             'status' => $this->describeStatuses($statuses),
             'trust_status' => $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded',
+            'cash_currency_code' => $currencyCode ?: 'Not set',
+            'cash_currency_label' => $this->customerBalanceCurrencyLabelFromCode($currencyCode) ?: 'Not set',
+            'cash_opened_before' => $openedBefore ?: 'Not set',
             'format' => strtoupper($format),
             'processed_accounts' => 0,
             'total_accounts' => null,
@@ -418,8 +447,18 @@ class VieFundReportsController extends Controller
             $trustStatuses
         ));
 
+        $envAssignments = [];
+        if ($currencyCode !== null) {
+            $envAssignments[] = 'VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE=' . escapeshellarg($currencyCode);
+        }
+        if ($openedBefore !== null) {
+            $envAssignments[] = 'VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE=' . escapeshellarg($openedBefore);
+        }
+        $envPrefix = $envAssignments ? implode(' ', $envAssignments) . ' ' : '';
+
         $command = sprintf(
-            '%s %s report:viefund-customer-balances --report-date=%s --date-basis=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-customer-balances --report-date=%s --date-basis=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg($reportDate),
@@ -800,6 +839,27 @@ class VieFundReportsController extends Controller
         }
 
         return $formatted;
+    }
+
+    private function normalizeCustomerBalanceCurrencyCode(string $value): ?string
+    {
+        $normalized = strtoupper(trim($value));
+
+        return match ($normalized) {
+            'CAD', '00' => '00',
+            'USD', '01' => '01',
+            '' => null,
+            default => null,
+        };
+    }
+
+    private function customerBalanceCurrencyLabelFromCode(?string $code): ?string
+    {
+        return match ($code) {
+            '00' => 'CAD',
+            '01' => 'USD',
+            default => null,
+        };
     }
 
     /**
