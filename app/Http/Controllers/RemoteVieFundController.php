@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\VieFundReportSheetExport;
 use App\Models\RemoteVieFundCustomerTransaction;
 use App\Services\VieFund\VieFundRemoteService;
 use Exception;
@@ -10,6 +11,9 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Excel as ExcelWriter;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Illuminate\View\View;
 
@@ -168,7 +172,7 @@ class RemoteVieFundController extends Controller
         ));
     }
 
-    public function export(Request $request): StreamedResponse
+    public function export(Request $request): BinaryFileResponse|StreamedResponse
     {
         $format = $request->query('format', 'csv');
         $search = trim((string) $request->query('search', ''));
@@ -233,9 +237,54 @@ class RemoteVieFundController extends Controller
         ];
 
         if ($format === 'excel') {
-            return $this->streamExcel($filename, $headers, $rows);
+            return Excel::download(
+                new VieFundReportSheetExport(
+                    $this->buildExportSheetRows($headers, $rows),
+                    'Transactions'
+                ),
+                $filename . '.xlsx',
+                ExcelWriter::XLSX
+            );
         }
         return $this->streamCsv($filename, $headers, $rows);
+    }
+
+    /**
+     * @param array<int, string> $headers
+     * @param iterable<object> $rows
+     * @return array<int, array<int, string|int|float|null>>
+     */
+    private function buildExportSheetRows(array $headers, iterable $rows): array
+    {
+        $sheetRows = [$headers];
+
+        foreach ($rows as $row) {
+            $amount  = (float) $row->amount;
+            $balance = $row->calculated_balance !== null ? (float) $row->calculated_balance : null;
+            $sheetRows[] = [
+                $row->display_trx_id,
+                $row->fund_trx_id,
+                $row->row_source === 'fund' ? $row->cash_trx_id : '',
+                $row->trust_trx_id ?? $row->linked_trust_trx_id ?? '',
+                $row->source_id,
+                trim($row->client_name),
+                $row->rep_code,
+                $row->plan_dealer_account_id,
+                $row->trx_type,
+                $row->cash_trx_type,
+                $row->status ?? '',
+                $row->created_date,
+                $row->trade_date,
+                $row->processing_date,
+                $row->settlement_date,
+                $amount < 0 ? number_format(abs($amount), 2) : '',
+                $amount >= 0 ? number_format($amount, 2) : '',
+                $balance !== null ? number_format($balance, 2) : '',
+                $row->notes ?? '',
+            ];
+        }
+
+        return $sheetRows;
     }
 
     private function streamCsv(string $filename, array $headers, $rows): StreamedResponse
@@ -272,57 +321,6 @@ class RemoteVieFundController extends Controller
             }
             fclose($out);
         }, $filename . '.csv', ['Content-Type' => 'text/csv; charset=UTF-8']);
-    }
-
-    private function streamExcel(string $filename, array $headers, $rows): StreamedResponse
-    {
-        return response()->streamDownload(function () use ($headers, $rows) {
-            echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
-            echo '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"' . "\n";
-            echo '  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' . "\n";
-            echo '<Worksheet ss:Name="Transactions"><Table>' . "\n";
-
-            // Header row
-            echo '<Row>';
-            foreach ($headers as $h) {
-                echo '<Cell><Data ss:Type="String">' . htmlspecialchars($h, ENT_XML1) . '</Data></Cell>';
-            }
-            echo '</Row>' . "\n";
-
-            foreach ($rows as $row) {
-                $amount  = (float) $row->amount;
-                $balance = $row->calculated_balance !== null ? (float) $row->calculated_balance : null;
-                $cells = [
-                    ['String', $row->display_trx_id],
-                    ['String', $row->fund_trx_id],
-                    ['String', $row->row_source === 'fund' ? $row->cash_trx_id : ''],
-                    ['String', $row->trust_trx_id ?? $row->linked_trust_trx_id ?? ''],
-                    ['String', $row->source_id],
-                    ['String', trim($row->client_name)],
-                    ['String', $row->rep_code],
-                    ['String', $row->plan_dealer_account_id],
-                    ['String', $row->trx_type],
-                    ['String', $row->cash_trx_type],
-                    ['String', $row->status ?? ''],
-                    ['String', $row->created_date],
-                    ['String', $row->trade_date],
-                    ['String', $row->processing_date],
-                    ['String', $row->settlement_date],
-                    ['Number', $amount < 0  ? number_format(abs($amount), 2) : ''],
-                    ['Number', $amount >= 0 ? number_format($amount, 2) : ''],
-                    ['Number', $balance !== null ? number_format($balance, 2) : ''],
-                    ['String', $row->notes ?? ''],
-                ];
-                echo '<Row>';
-                foreach ($cells as [$type, $val]) {
-                    $safeVal = htmlspecialchars((string) $val, ENT_XML1);
-                    echo "<Cell><Data ss:Type=\"{$type}\">{$safeVal}</Data></Cell>";
-                }
-                echo '</Row>' . "\n";
-            }
-
-            echo '</Table></Worksheet></Workbook>';
-        }, $filename . '.xls', ['Content-Type' => 'application/vnd.ms-excel; charset=UTF-8']);
     }
 
     private function buildDisplayTrxId(object $row): string

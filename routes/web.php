@@ -10,6 +10,7 @@ use App\Http\Controllers\DailyTotalsComparisonController;
 use App\Http\Controllers\DailyTotalsDrilldownController;
 use App\Http\Controllers\BankStatementEntryController;
 use App\Http\Controllers\VieFundReportsController;
+use App\Http\Controllers\DocumentationController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -36,6 +37,9 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
 
+    Route::get('/docs', [DocumentationController::class, 'index'])->name('docs.index');
+    Route::get('/docs/{document}', [DocumentationController::class, 'show'])->name('docs.show');
+
     // Remote VieFund live data
     Route::get('/remote-viefund', [RemoteVieFundController::class, 'index'])->name('remote-viefund.index');
     Route::get('/remote-viefund/export', [RemoteVieFundController::class, 'export'])->name('remote-viefund.export');
@@ -57,10 +61,15 @@ Route::middleware('auth.check')->group(function () {
 
     Route::get('/reports', [VieFundReportsController::class, 'index'])->name('reports.index');
     Route::get('/reports/viefund-daily-balance/export', [VieFundReportsController::class, 'exportDailyBalance'])->name('reports.viefund-daily-balance.export');
+    Route::post('/reports/viefund-daily-balance-legacy/run', [VieFundReportsController::class, 'runLegacyDailyBalanceReport'])->name('reports.viefund-daily-balance-legacy.run');
+    Route::get('/reports/viefund-daily-balance-legacy/status', [VieFundReportsController::class, 'legacyDailyBalanceReportStatus'])->name('reports.viefund-daily-balance-legacy.status');
+    Route::get('/reports/viefund-daily-balance-legacy/download-latest', [VieFundReportsController::class, 'downloadLatestLegacyDailyBalanceReport'])->name('reports.viefund-daily-balance-legacy.download-latest');
+    Route::post('/reports/viefund-daily-balance-legacy/dismiss-latest', [VieFundReportsController::class, 'dismissLatestLegacyDailyBalanceReport'])->name('reports.viefund-daily-balance-legacy.dismiss-latest');
     Route::post('/reports/viefund-daily-balance/run', [VieFundReportsController::class, 'runDailyBalanceReport'])->name('reports.viefund-daily-balance.run');
     Route::get('/reports/viefund-daily-balance/status', [VieFundReportsController::class, 'reportStatus'])->name('reports.viefund-daily-balance.status');
     Route::get('/reports/viefund-daily-balance/download-latest', [VieFundReportsController::class, 'downloadLatestReport'])->name('reports.viefund-daily-balance.download-latest');
     Route::post('/reports/viefund-daily-balance/dismiss-latest', [VieFundReportsController::class, 'dismissLatestReport'])->name('reports.viefund-daily-balance.dismiss-latest');
+    Route::post('/reports/viefund-cash-snapshots/{snapshot}/acknowledge', [VieFundReportsController::class, 'acknowledgeCashSnapshotChange'])->name('reports.viefund-cash-snapshots.acknowledge');
     Route::post('/reports/viefund-customer-balances/run', [VieFundReportsController::class, 'runCustomerBalancesReport'])->name('reports.viefund-customer-balances.run');
     Route::get('/reports/viefund-customer-balances/status', [VieFundReportsController::class, 'customerBalancesReportStatus'])->name('reports.viefund-customer-balances.status');
     Route::get('/reports/viefund-customer-balances/download-latest', [VieFundReportsController::class, 'downloadLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.download-latest');
@@ -72,6 +81,7 @@ Route::middleware('auth.check')->group(function () {
         Route::post('/daily-totals/sync', [DailyTotalsComparisonController::class, 'sync'])->name('reconciliations.daily-totals.sync');
         Route::get('/daily-totals/sync-status', [DailyTotalsComparisonController::class, 'syncStatus'])->name('reconciliations.daily-totals.sync-status');
         Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
+        Route::get('/daily-totals/{date}/bank/export', [DailyTotalsDrilldownController::class, 'bankDayExport'])->name('reconciliations.daily-totals.bank-day.export');
         Route::get('/daily-totals/{date}/viefund', [DailyTotalsDrilldownController::class, 'viefundDay'])->name('reconciliations.daily-totals.viefund-day');
         Route::get('/daily-totals/{date}/viefund/export', [DailyTotalsDrilldownController::class, 'viefundDayExport'])->name('reconciliations.daily-totals.viefund-day.export');
         Route::get('/daily-totals/{date}/variance', [DailyTotalsDrilldownController::class, 'varianceDay'])->name('reconciliations.daily-totals.variance-day');

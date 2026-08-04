@@ -778,14 +778,42 @@
                     <div style="font-size: 13px; font-weight: 700; color: #4a5568; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px;">{{ count($planAccounts) }} Plan Account{{ count($planAccounts) !== 1 ? 's' : '' }}</div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;">
                         @foreach($planAccounts as $pa)
-                            <a href="{{ route('remote-viefund.index', array_merge(request()->query(), ['filter_account_id' => $pa['account_id'], 'filter_customer_name' => $pa['customer_name']])) }}"
-                               style="display:block;text-decoration:none;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px 18px;transition:box-shadow 0.15s,border-color 0.15s;"
-                               onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)';this.style.borderColor='#90cdf4';"
-                               onmouseout="this.style.boxShadow='';this.style.borderColor='#e2e8f0';">
-                                <div style="font-family:monospace;font-size:14px;font-weight:700;color:#2b6cb0;margin-bottom:4px;">{{ $pa['account_id'] }}</div>
-                                <div style="font-size:13px;color:#4a5568;margin-bottom:8px;">{{ $pa['customer_name'] ?: '—' }}</div>
-                                <div style="font-size:11px;color:#718096;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">{{ number_format($pa['txn_count']) }} transaction{{ $pa['txn_count'] !== 1 ? 's' : '' }}</div>
-                            </a>
+                            <div style="display:flex;flex-direction:column;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:16px 18px;">
+                                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">
+                                    <div style="font-family:monospace;font-size:14px;font-weight:700;color:#2b6cb0;">{{ $pa['account_id'] }}</div>
+                                    @php
+                                        $accountStatus = $pa['cash_account_status'] ?? null;
+                                        $accountStatusLabel = $pa['cash_account_status_label'] ?? 'Status unavailable';
+                                        $cashCurrencyLabel = $pa['cash_currency_label'] ?? null;
+                                        $accountStatusStyle = match (strtoupper((string) $accountStatus)) {
+                                            'A', 'ACTIVE' => 'background:#e6fffa;color:#276749;border-color:#9ae6b4;',
+                                            'T', 'TERMINATED' => 'background:#edf2f7;color:#4a5568;border-color:#cbd5e0;',
+                                            default => 'background:#fffaf0;color:#975a16;border-color:#fbd38d;',
+                                        };
+                                    @endphp
+                                    <div style="display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px;">
+                                        <span title="Current cash-account status used by the Customer Balances report"
+                                              style="flex:0 0 auto;border:1px solid;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;text-transform:uppercase;white-space:nowrap;{{ $accountStatusStyle }}">
+                                            {{ $accountStatusLabel }}
+                                        </span>
+                                        @if($cashCurrencyLabel)
+                                            <span title="Cash-account currency"
+                                                  style="flex:0 0 auto;border:1px solid #bee3f8;border-radius:4px;padding:2px 6px;background:#ebf8ff;color:#2c5282;font-size:10px;font-weight:700;text-transform:uppercase;white-space:nowrap;">
+                                                {{ $cashCurrencyLabel }}
+                                            </span>
+                                        @endif
+                                    </div>
+                                </div>
+                                <div style="font-size:13px;color:#4a5568;margin-bottom:14px;">{{ $pa['customer_name'] ?: '—' }}</div>
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:auto;padding-top:10px;border-top:1px solid #edf2f7;">
+                                    <div style="font-size:11px;color:#718096;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;white-space:nowrap;">{{ number_format($pa['txn_count']) }} transaction{{ $pa['txn_count'] !== 1 ? 's' : '' }}</div>
+                                    <a href="{{ route('remote-viefund.index', array_merge(request()->query(), ['filter_account_id' => $pa['account_id'], 'filter_customer_name' => $pa['customer_name']])) }}"
+                                       aria-label="View transactions for {{ $pa['account_id'] }}"
+                                       style="flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;border:1px solid #90cdf4;border-radius:4px;padding:4px 10px;background:#ebf8ff;color:#2b6cb0;font-size:11px;font-weight:700;text-decoration:none;white-space:nowrap;">
+                                        View
+                                    </a>
+                                </div>
+                            </div>
                         @endforeach
                     </div>
                 </div>
@@ -830,12 +858,27 @@
                                     <a href="{{ route('remote-viefund.export', array_merge(request()->query(), ['format' => 'csv'])) }}"
                                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; text-decoration: none; border-bottom: 1px solid #f0f4f8;"
                                        onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
-                                        ↓ CSV
+                                        <span style="display:inline-flex; align-items:center; gap:8px;">
+                                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
+                                                <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                                <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                                <path d="M5 9.25h6M5 11.75h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                            </svg>
+                                            <span>CSV</span>
+                                        </span>
                                     </a>
                                     <a href="{{ route('remote-viefund.export', array_merge(request()->query(), ['format' => 'excel'])) }}"
                                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; text-decoration: none;"
                                        onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
-                                        ↓ Excel (.xls)
+                                        <span style="display:inline-flex; align-items:center; gap:8px;">
+                                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
+                                                <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                                <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                                <path d="M4.75 9.25h6.5M4.75 11.75h6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                                <path d="M6 7.75h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                            </svg>
+                                            <span>Excel</span>
+                                        </span>
                                     </a>
                                 </div>
                             </div>

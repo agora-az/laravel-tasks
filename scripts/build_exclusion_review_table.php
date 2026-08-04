@@ -73,7 +73,7 @@ while (($header = fgetcsv($handle)) !== false) {
 fclose($handle);
 
 $keys = array_keys($reportOnly);
-$quoted = array_map(fn (string $value): string => "'" . str_replace("'", "''", $value) . "'", $keys);
+$quoted = array_map(fn(string $value): string => "'" . str_replace("'", "''", $value) . "'", $keys);
 $chunks = array_chunk($quoted, 50);
 
 $sourceRows = collect();

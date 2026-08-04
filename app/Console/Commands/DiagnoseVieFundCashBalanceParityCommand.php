@@ -14,11 +14,13 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         {--report-date= : Report date (YYYY-MM-DD)}
         {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
         {--cutoff= : Cash account opened-before cutoff (YYYY-MM-DD HH:MM:SS)}
+        {--data-cutoff= : Latest transaction creation timestamp available to the historical report; defaults to --cutoff}
         {--currency=00 : Cash account currency code (00=CAD)}
         {--exclude-plan-accounts=39697 : Comma-separated DealerAccountID values to exclude}
         {--account-id=* : Optional normalized account IDs to focus diagnostics on}
         {--account-file= : Optional newline-delimited file of normalized account IDs to focus diagnostics on}
         {--output-file= : Optional CSV output path under storage/app for per-account diagnostics}
+        {--direct-only : Run only the direct settled CashTrx rollup}
         {--status=6 : Comma-separated cash status IDs for as-of methods (e.g. 6 or 5,6)}
         {--exclude-standalone-trust-types= : Comma-separated standalone trust type names to exclude from customer_transactions_model}';
 
@@ -30,6 +32,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         $reportDateRaw = trim((string) $this->option('report-date'));
         $dateBasis = trim((string) $this->option('date-basis')) ?: 'settlement_date';
         $cutoff = trim((string) $this->option('cutoff'));
+        $dataCutoff = trim((string) $this->option('data-cutoff')) ?: $cutoff;
         $currency = trim((string) $this->option('currency'));
         $excludePlanAccounts = $this->parseCsvOption((string) $this->option('exclude-plan-accounts'));
         $statusIds = $this->parseIntCsvOption((string) $this->option('status'));
@@ -37,13 +40,13 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         $excludedStandaloneTrustTypes = $excludedStandaloneTrustTypesOption !== ''
             ? $this->parseCsvOption($excludedStandaloneTrustTypesOption)
             : array_values(array_filter(array_map(
-                static fn ($value) => trim((string) $value),
+                static fn($value) => trim((string) $value),
                 (array) config('viefund.cash_balance_excluded_standalone_trust_types', [])
             )));
         $outputFile = trim((string) $this->option('output-file'));
         $accountFile = trim((string) $this->option('account-file'));
         $focusAccounts = collect((array) $this->option('account-id'))
-            ->map(fn ($value) => $this->normalizeAccountIdentifier((string) $value))
+            ->map(fn($value) => $this->normalizeAccountIdentifier((string) $value))
             ->filter()
             ->values();
 
@@ -55,7 +58,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
             }
 
             $fileAccounts = collect(file($accountFilePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [])
-                ->map(fn ($value) => $this->normalizeAccountIdentifier((string) $value))
+                ->map(fn($value) => $this->normalizeAccountIdentifier((string) $value))
                 ->filter();
 
             $focusAccounts = $focusAccounts
@@ -93,19 +96,33 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         if ($focusAccounts->isNotEmpty()) {
             $focusLookup = $focusAccounts->flip();
             $clientBalances = $clientBalances
-                ->filter(fn ($_, $accountId) => $focusLookup->has($accountId));
+                ->filter(fn($_, $accountId) => $focusLookup->has($accountId));
             $scopedAccounts = $scopedAccounts
-                ->filter(fn ($row) => $focusLookup->has($this->scopedAccountKey($row)))
+                ->filter(fn($row) => $focusLookup->has($this->scopedAccountKey($row)))
                 ->values();
         }
 
         $this->info('Computing diagnostic methods...');
-        $snapshotBalances = $scopedAccounts->mapWithKeys(fn ($row) => [
+        $snapshotBalances = $scopedAccounts->mapWithKeys(fn($row) => [
             $this->scopedAccountKey($row) => (float) $row->cash_snapshot_balance,
         ]);
 
         $txRollupBalances = $this->loadTransactionRollupBalances($asOfUpperBound, $fundDateColumn, [6], [22, 45], $currency, $scopedAccounts);
         $txAllTypeBalances = $this->loadTransactionRollupBalances($asOfUpperBound, $fundDateColumn, $statusIds ?: [6], null, $currency, $scopedAccounts);
+        $directCashTrxBalances = $this->loadDirectCashTrxRollupBalances(
+            $asOfUpperBound,
+            $dataCutoff,
+            $statusIds ?: [6],
+            $currency,
+            $scopedAccounts
+        );
+
+        if ((bool) $this->option('direct-only')) {
+            $this->compareMethod('direct_cashtrx_rollup', $clientBalances, $directCashTrxBalances);
+
+            return self::SUCCESS;
+        }
+
         $asOfLatestBalances = $this->loadAsOfLatestCashTrxBalances($asOfUpperBound, $fundDateColumn, $statusIds ?: [6], $currency, $scopedAccounts);
         $customerTransactionsModelBalances = $this->loadCustomerTransactionsModelBalances(
             $asOfUpperBound,
@@ -126,6 +143,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         $this->compareMethod('cash_snapshot_now', $clientBalances, $snapshotBalances);
         $this->compareMethod('tx_rollup_types_22_45_status_6', $clientBalances, $txRollupBalances);
         $this->compareMethod('tx_rollup_all_types_status_filter', $clientBalances, $txAllTypeBalances);
+        $this->compareMethod('direct_cashtrx_rollup', $clientBalances, $directCashTrxBalances);
         $this->compareMethod('asof_latest_cashtrx_mBalance', $clientBalances, $asOfLatestBalances);
         $this->compareMethod('customer_transactions_model', $clientBalances, $customerTransactionsModelBalances);
 
@@ -149,6 +167,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
                 'cash_snapshot_now' => $snapshotBalances,
                 'tx_rollup_types_22_45_status_6' => $txRollupBalances,
                 'tx_rollup_all_types_status_filter' => $txAllTypeBalances,
+                'direct_cashtrx_rollup' => $directCashTrxBalances,
                 'asof_latest_cashtrx_mBalance' => $asOfLatestBalances,
                 'customer_transactions_model' => $customerTransactionsModelBalances,
             ], $cashCurrencyProfiles, $trustCurrencyProfiles, $standaloneTrustGicProfiles);
@@ -189,7 +208,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
             ];
         }
 
-        usort($different, fn ($a, $b) => $b['abs_delta'] <=> $a['abs_delta']);
+        usort($different, fn($a, $b) => $b['abs_delta'] <=> $a['abs_delta']);
 
         $clientTotal = $clientBalances->sum();
         $methodTotal = $methodBalances->sum();
@@ -240,7 +259,8 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
             }
 
             $accountId = $this->normalizeAccountIdentifier($accountRaw);
-            $balances[$accountId] = $this->parseMoney($row[7] ?? '0');
+            $balances[$accountId] = (float) $balances->get($accountId, 0.0)
+                + $this->parseMoney($row[7] ?? '0');
         }
 
         fclose($handle);
@@ -272,12 +292,12 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         $ranked = $query
             ->selectRaw(
                 "p.ID AS plan_id, p.DealerAccountID AS plan_account_id, {$normalizedAccountId} AS account_id, CAST(ISNULL(ca.mBalance, 0) AS decimal(38,2)) AS cash_snapshot_balance, " .
-                "ROW_NUMBER() OVER (PARTITION BY p.ID ORDER BY " .
-                "CASE WHEN {$normalizedAccountId} = p.ThirdPartyAccount THEN 0 ELSE 1 END, " .
-                "CASE WHEN {$normalizedAccountId} = p.DealerAccountID THEN 0 ELSE 1 END, " .
-                "CASE WHEN ca.AccountStatus IN ('A', 'Active') THEN 0 WHEN ca.AccountStatus IN ('T', 'Terminated') THEN 1 ELSE 2 END, " .
-                "ISNULL(ca.dtCreated, '1900-01-01') ASC, {$normalizedAccountId} ASC" .
-                ") AS cash_rank"
+                    "ROW_NUMBER() OVER (PARTITION BY p.ID ORDER BY " .
+                    "CASE WHEN {$normalizedAccountId} = p.ThirdPartyAccount THEN 0 ELSE 1 END, " .
+                    "CASE WHEN {$normalizedAccountId} = p.DealerAccountID THEN 0 ELSE 1 END, " .
+                    "CASE WHEN ca.AccountStatus IN ('A', 'Active') THEN 0 WHEN ca.AccountStatus IN ('T', 'Terminated') THEN 1 ELSE 2 END, " .
+                    "ISNULL(ca.dtCreated, '1900-01-01') ASC, {$normalizedAccountId} ASC" .
+                    ") AS cash_rank"
             );
 
         return DB::connection('viefund_sqlsrv')
@@ -291,7 +311,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     private function loadTransactionRollupBalances(string $asOfUpperBound, string $fundDateColumn, array $statusIds, ?array $typeIds, string $currencyCode, Collection $scopedAccounts): Collection
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn ($id) => (int) $id)->values()->all();
+        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn($id) => (int) $id)->values()->all();
 
         if (empty($scopedPlanIds)) {
             return collect();
@@ -342,10 +362,72 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         });
     }
 
+    private function loadDirectCashTrxRollupBalances(string $asOfUpperBound, string $dataCutoff, array $statusIds, string $currencyCode, Collection $scopedAccounts): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn($id) => (int) $id)->values()->all();
+
+        if (empty($scopedPlanIds)) {
+            return collect();
+        }
+
+        $deletedAfterCutoffIds = DB::connection('viefund_sqlsrv')
+            ->table("{$schema}.UB_CashTrx as deleted_ct")
+            ->leftJoin("{$schema}.UB_FundTrxCash as deleted_fc", 'deleted_fc.iCashTrxID', '=', 'deleted_ct.ID')
+            ->leftJoin("{$schema}.UB_FundTrx as deleted_ft", 'deleted_ft.ID', '=', 'deleted_fc.iTrxID')
+            ->leftJoin("{$schema}.UB_TrustTrx as deleted_tr", 'deleted_tr.ID', '=', 'deleted_ct.iTrustTrxID')
+            ->where('deleted_ct.iStatus', 0)
+            ->where('deleted_ct.dtCreated', '<=', $dataCutoff)
+            ->where(function ($linkedChange) use ($dataCutoff) {
+                $linkedChange->where('deleted_ft.dtLastModified', '>', $dataCutoff)
+                    ->orWhere('deleted_tr.dtLastModified', '>', $dataCutoff);
+            })
+            ->distinct()
+            ->pluck('deleted_ct.ID')
+            ->map(fn($id) => (int) $id)
+            ->all();
+
+        $perPlanSums = [];
+        foreach (array_chunk($scopedPlanIds, 1800) as $planIdChunk) {
+            $chunkRows = DB::connection('viefund_sqlsrv')
+                ->table("{$schema}.UB_CashTrx as ct")
+                ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
+                ->whereIn('ct.iPlanID', $planIdChunk)
+                ->where('ca.CurrencyCode', '=', $currencyCode)
+                ->whereNotNull('ct.dtSettlement')
+                ->where('ct.dtSettlement', '<', $asOfUpperBound)
+                ->whereNotNull('ct.dtCreated')
+                ->where('ct.dtCreated', '<=', $dataCutoff)
+                ->whereNotNull('ct.mAmount')
+                ->when(!empty($statusIds), function ($query) use ($statusIds, $deletedAfterCutoffIds) {
+                    $query->where(function ($statusQuery) use ($statusIds, $deletedAfterCutoffIds) {
+                        $statusQuery->whereIn('ct.iStatus', $statusIds)
+                            ->when(!empty($deletedAfterCutoffIds), fn($deletedQuery) => $deletedQuery->orWhereIn('ct.ID', $deletedAfterCutoffIds));
+                    });
+                })
+                ->selectRaw('ct.iPlanID AS plan_id, SUM(ct.mAmount) AS balance')
+                ->groupBy('ct.iPlanID')
+                ->get();
+
+            foreach ($chunkRows as $row) {
+                $perPlanSums[(int) $row->plan_id] = (float) ($row->balance ?? 0.0);
+            }
+        }
+
+        return $scopedAccounts->reduce(function (Collection $balances, $row) use ($perPlanSums) {
+            $accountId = $this->scopedAccountKey($row);
+            $planId = (int) $row->plan_id;
+            $balances[$accountId] = (float) $balances->get($accountId, 0.0)
+                + (float) ($perPlanSums[$planId] ?? 0.0);
+
+            return $balances;
+        }, collect());
+    }
+
     private function loadAsOfLatestCashTrxBalances(string $asOfUpperBound, string $fundDateColumn, array $statusIds, string $currencyCode, Collection $scopedAccounts): Collection
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn ($id) => (int) $id)->values()->all();
+        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn($id) => (int) $id)->values()->all();
 
         if (empty($scopedPlanIds)) {
             return collect();
@@ -369,7 +451,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
                 })
                 ->selectRaw("l.iPlanID AS plan_id, CAST(ISNULL(ct.mBalance, 0) AS decimal(38,2)) AS cash_balance, ROW_NUMBER() OVER (PARTITION BY l.iPlanID ORDER BY {$fundDateColumn} DESC, ct.ID DESC) AS rn")
                 ->get()
-                ->filter(fn ($row) => (int) ($row->rn ?? 0) === 1);
+                ->filter(fn($row) => (int) ($row->rn ?? 0) === 1);
 
             foreach ($chunkRows as $row) {
                 $latestPerPlan[(int) $row->plan_id] = (float) ($row->cash_balance ?? 0.0);
@@ -421,10 +503,9 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         string $currencyCode,
         array $excludedStandaloneTrustTypes,
         Collection $scopedAccounts
-    ): Collection
-    {
+    ): Collection {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn ($id) => (int) $id)->values()->all();
+        $scopedPlanIds = $scopedAccounts->pluck('plan_id')->map(fn($id) => (int) $id)->values()->all();
 
         if (empty($scopedPlanIds)) {
             return collect();
@@ -533,7 +614,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     private function parseCsvOption(string $value): array
     {
         return array_values(array_filter(array_map(
-            static fn ($item) => trim($item),
+            static fn($item) => trim($item),
             explode(',', $value)
         )));
     }
@@ -541,9 +622,9 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     private function parseIntCsvOption(string $value): array
     {
         return array_values(array_filter(array_map(
-            static fn ($item) => (int) trim($item),
+            static fn($item) => (int) trim($item),
             explode(',', $value)
-        ), static fn ($id) => $id >= 0));
+        ), static fn($id) => $id >= 0));
     }
 
     private function normalizeAccountIdentifier(string $value): string
@@ -607,8 +688,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
         Collection $cashCurrencyProfiles,
         Collection $trustCurrencyProfiles,
         Collection $standaloneTrustGicProfiles
-    ): void
-    {
+    ): void {
         $methodOrder = [
             'cash_snapshot_now',
             'tx_rollup_types_22_45_status_6',
@@ -705,7 +785,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $planToAccount = $scopedAccounts
-            ->mapWithKeys(fn ($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
+            ->mapWithKeys(fn($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
         $scopedPlanIds = $planToAccount->keys()->values()->all();
 
         if (empty($scopedPlanIds)) {
@@ -751,7 +831,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     ): Collection {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $planToAccount = $scopedAccounts
-            ->mapWithKeys(fn ($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
+            ->mapWithKeys(fn($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
         $scopedPlanIds = $planToAccount->keys()->values()->all();
 
         if (empty($scopedPlanIds)) {
@@ -809,7 +889,7 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
     ): Collection {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $planToAccount = $scopedAccounts
-            ->mapWithKeys(fn ($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
+            ->mapWithKeys(fn($row) => [(int) $row->plan_id => $this->scopedAccountKey($row)]);
         $scopedPlanIds = $planToAccount->keys()->values()->all();
 
         if (empty($scopedPlanIds)) {
@@ -887,5 +967,4 @@ class DiagnoseVieFundCashBalanceParityCommand extends Command
             return $profile;
         });
     }
-
 }

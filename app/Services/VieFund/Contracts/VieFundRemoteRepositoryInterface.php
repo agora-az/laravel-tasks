@@ -30,6 +30,13 @@ interface VieFundRemoteRepositoryInterface
 
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection;
 
+    public function fetchCustomerCashDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection;
+
+    /**
+     * @return array{items: LengthAwarePaginator, transaction_count: int, net_total: float}
+     */
+    public function fetchCustomerCashTransactionsByDateColumn(CarbonInterface $date, string $dateColumn, array $filters = [], int $perPage = 250, int $page = 1, bool $hideZeroAmount = false): array;
+
     public function fetchCustomerBalancesByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection;
 
     public function fetchCustomerCashBalanceTotal(): float;

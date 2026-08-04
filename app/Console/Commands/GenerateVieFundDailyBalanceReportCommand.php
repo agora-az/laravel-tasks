@@ -2,9 +2,13 @@
 
 namespace App\Console\Commands;
 
+use App\Exports\VieFundDailyBalanceWorkbookExport;
+use App\Services\VieFund\VieFundCashSnapshotService;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Excel as ExcelWriter;
 
 class GenerateVieFundDailyBalanceReportCommand extends Command
 {
@@ -54,8 +58,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         {--date-to= : Report end date (YYYY-MM-DD)}
         {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
         {--output-order=asc : asc|desc}
-        {--status=* : Fund status IDs 0-6 (Deleted..Confirmed). Falls back to legacy --status-group}
-        {--trust-status=* : Trust status names (Deleted|Unsettled|Settled). Empty excludes trust}
+        {--status=* : Cash transaction status IDs 0-6 (Deleted..Confirmed). Falls back to legacy --status-group}
+        {--trust-status=* : DEPRECATED: ignored by the direct cash-ledger report}
         {--status-group=* : DEPRECATED: completed|open|not_completed (mapped to --status when --status is absent)}
         {--include-trust=1 : DEPRECATED: 1/0 (used with --status-group when --trust-status is absent)}
         {--format=csv : csv|excel}
@@ -66,7 +70,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
     protected $description = 'Generate VieFund daily net + running balance report asynchronously';
 
     public function __construct(
-        private readonly VieFundRemoteService $vieFundRemoteService
+        private readonly VieFundRemoteService $vieFundRemoteService,
+        private readonly VieFundCashSnapshotService $snapshotService
     ) {
         parent::__construct();
     }
@@ -104,7 +109,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         $dateToRaw = $this->resolveString($this->option('date-to'));
         $dateBasis = $this->resolveString($this->option('date-basis')) ?? 'settlement_date';
         $outputOrder = $this->resolveString($this->option('output-order')) ?? 'asc';
-        [$statuses, $trustStatuses] = $this->resolveStatusFilters();
+        [$statuses] = $this->resolveStatusFilters();
         $format = $this->resolveString($this->option('format')) ?? 'csv';
         $outputRelativePath = $this->resolveString($this->option('output-file'));
 
@@ -127,7 +132,6 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
 
         $outputOrderLabel = self::OUTPUT_ORDER_LABELS[$outputOrder];
         $statusLabel = $this->describeStatuses($statuses);
-        $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
 
         if (!in_array($format, ['csv', 'excel'], true)) {
             $this->error('Invalid --format value.');
@@ -165,7 +169,6 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
             'status' => $statusLabel,
-            'trust_status' => $trustLabel,
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => $totalDays,
@@ -175,65 +178,73 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'updated_at' => now()->toIso8601String(),
         ]);
 
+        $simulatedGenerationTime = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', ''));
+        $currencyCode = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '')) ?: '00';
+        $snapshotResult = $simulatedGenerationTime === ''
+            ? $this->snapshotService->completeSeries($dateFrom, $dateTo, $dateBasis, $currencyCode, $statuses)
+            : null;
         $dailyMap = [];
-        $fetchCursor = $dateFrom->copy();
-        $fetchedDays = 0;
+        $balanceSource = 'Direct Cash Ledger (Live)';
+        $snapshotLastVerifiedAt = null;
+        $changedDays = 0;
 
-        while ($fetchCursor->lte($dateTo)) {
-            $chunkStart = $fetchCursor->copy();
-            $chunkEnd = $chunkStart->copy()->addDays(self::FETCH_CHUNK_DAYS - 1);
-            if ($chunkEnd->gt($dateTo)) {
-                $chunkEnd = $dateTo->copy();
+        if ($snapshotResult) {
+            foreach ($snapshotResult['rows'] as $snapshot) {
+                $dailyMap[$snapshot->total_date->toDateString()] = [
+                    'transaction_count' => $snapshot->transaction_count,
+                    'net_total' => (float) $snapshot->net_total,
+                ];
             }
+            $openingBalance = $snapshotResult['opening_balance'];
+            $endingBalance = $snapshotResult['ending_balance'];
+            $balanceSource = 'Audited Daily Cash Snapshots';
+            $snapshotLastVerifiedAt = $snapshotResult['last_verified_at'];
+            $changedDays = $snapshotResult['changed_days'];
+        } else {
+            $fetchCursor = $dateFrom->copy();
+            $fetchedDays = 0;
 
-            $chunkRows = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
-                'status_ids' => $statuses,
-                'trust_status_names' => $trustStatuses,
-            ]);
-            foreach ($chunkRows as $row) {
-                $key = Carbon::parse($row->total_date)->toDateString();
-                if (!isset($dailyMap[$key])) {
-                    $dailyMap[$key] = [
-                        'transaction_count' => 0,
-                        'net_total' => 0.0,
+            while ($fetchCursor->lte($dateTo)) {
+                $chunkStart = $fetchCursor->copy();
+                $chunkEnd = $chunkStart->copy()->addDays(self::FETCH_CHUNK_DAYS - 1)->min($dateTo);
+                $chunkRows = $this->vieFundRemoteService->fetchCustomerCashDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
+                    'status_ids' => $statuses,
+                    'availability_as_of' => $dateTo->toDateString(),
+                ]);
+                foreach ($chunkRows as $row) {
+                    $dailyMap[Carbon::parse($row->total_date)->toDateString()] = [
+                        'transaction_count' => (int) $row->transaction_count,
+                        'net_total' => (float) $row->net_total,
                     ];
                 }
-                $dailyMap[$key]['transaction_count'] += (int) $row->transaction_count;
-                $dailyMap[$key]['net_total'] += (float) $row->net_total;
+
+                $fetchedDays += $chunkStart->diffInDays($chunkEnd) + 1;
+                $fetchProgress = (int) floor((min($totalDays, $fetchedDays) / max(1, $totalDays)) * (self::FETCH_WEIGHT * 100));
+                $this->writeStatus($statusFile, [
+                    'inProgress' => true,
+                    'success' => null,
+                    'message' => sprintf('Fetching live totals (%s to %s)...', $chunkStart->toDateString(), $chunkEnd->toDateString()),
+                    'processed_days' => min($totalDays, $fetchedDays),
+                    'total_days' => $totalDays,
+                    'progress_pct' => min(99, $fetchProgress),
+                    'updated_at' => now()->toIso8601String(),
+                ]);
+
+                $fetchCursor = $chunkEnd->copy()->addDay();
             }
 
-            $chunkDays = $chunkStart->diffInDays($chunkEnd) + 1;
-            $fetchedDays += $chunkDays;
-            $fetchProgress = (int) floor((min($totalDays, $fetchedDays) / max(1, $totalDays)) * (self::FETCH_WEIGHT * 100));
-            $processedEquivalent = (int) floor((min($totalDays, $fetchedDays) / max(1, $totalDays)) * (self::FETCH_WEIGHT * $totalDays));
-
-            $this->writeStatus($statusFile, [
-                'inProgress' => true,
-                'success' => null,
-                'message' => sprintf('Fetching source totals (%s to %s)...', $chunkStart->toDateString(), $chunkEnd->toDateString()),
-                'date_from' => $dateFrom->toDateString(),
-                'date_to' => $dateTo->toDateString(),
-                'date_basis' => $dateBasisLabel,
-                'output_order' => $outputOrderLabel,
-                'status' => $statusLabel,
-                'trust_status' => $trustLabel,
-                'format' => strtoupper($format),
-                'processed_days' => min($totalDays, $processedEquivalent),
-                'total_days' => $totalDays,
-                'progress_pct' => min(99, $fetchProgress),
-                'output_relative_path' => $outputRelativePath,
-                'started_at' => $startedAtIso,
-                'updated_at' => now()->toIso8601String(),
-            ]);
-
-            $fetchCursor = $chunkEnd->copy()->addDay();
+            $periodNetTotal = array_sum(array_column($dailyMap, 'net_total'));
+            $endingBalance = (float) $this->vieFundRemoteService
+                ->fetchCustomerBalancesByDate($dateTo, $dateBasis, ['status_ids' => $statuses])
+                ->sum(fn($row) => (float) ($row->total_balance ?? 0));
+            $openingBalance = $endingBalance - $periodNetTotal;
         }
 
         $rows = [];
 
         $cursor = $dateFrom->copy();
         $processedDays = 0;
-        $runningBalance = 0.0;
+        $runningBalance = $openingBalance;
 
         while ($cursor->lte($dateTo)) {
             $dateKey = $cursor->toDateString();
@@ -244,9 +255,9 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
 
             $rows[] = [
                 $dateKey,
-                number_format((int) $day['transaction_count']),
-                $this->formatAccountingCurrency($dailyNet),
-                $this->formatAccountingCurrency($runningBalance),
+                $format === 'excel' ? (int) $day['transaction_count'] : number_format((int) $day['transaction_count']),
+                $format === 'excel' ? $dailyNet : $this->formatAccountingCurrency($dailyNet),
+                $format === 'excel' ? $runningBalance : $this->formatAccountingCurrency($runningBalance),
             ];
 
             $processedDays++;
@@ -263,7 +274,6 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
                 'date_basis' => $dateBasisLabel,
                 'output_order' => $outputOrderLabel,
                 'status' => $statusLabel,
-                'trust_status' => $trustLabel,
                 'format' => strtoupper($format),
                 'processed_days' => min($totalDays, $processedEquivalent),
                 'total_days' => $totalDays,
@@ -286,19 +296,42 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
-            ['Fund Statuses', $statusLabel],
-            ['Trust Statuses', $trustLabel],
+            ['Balance Source', $balanceSource],
+            ['Cash Transaction Statuses', $statusLabel],
+            ['Simulated Generation Time', $simulatedGenerationTime ?: 'Not set'],
+            ['Snapshot Last Verified At', $snapshotLastVerifiedAt ?: 'Not applicable'],
+            ['Unreviewed Changed Days', $format === 'excel' ? $changedDays : number_format($changedDays)],
             ['Generated At', now()->toDateTimeString()],
-            ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
+            ['Opening Balance', $format === 'excel' ? $openingBalance : $this->formatAccountingCurrency($openingBalance)],
+            ['Final Balance', $format === 'excel' ? $finalBalance : $this->formatAccountingCurrency($finalBalance)],
         ];
 
-        $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
-        $writer = $this->openWriter($outputAbsolutePath, $format);
-        foreach ($sheetRows as $sheetRow) {
-            $writer($sheetRow);
-        }
+        $headers = [
+            'Report Date',
+            'Cash Transactions',
+            'Daily Net Transactions',
+            'Running Daily Balance',
+        ];
 
-        $writer(null);
+        if ($format === 'excel') {
+            Excel::store(
+                new VieFundDailyBalanceWorkbookExport(
+                    [$headers, ...$rows],
+                    [['Summary Item', 'Value'], ...$metadataRows]
+                ),
+                $outputRelativePath,
+                null,
+                ExcelWriter::XLSX
+            );
+        } else {
+            $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
+            $writer = $this->openWriter($outputAbsolutePath, $format);
+            foreach ($sheetRows as $sheetRow) {
+                $writer($sheetRow);
+            }
+
+            $writer(null);
+        }
 
         $duration = round(microtime(true) - $startedAt, 2);
 
@@ -311,7 +344,6 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'date_basis' => $dateBasisLabel,
             'output_order' => $outputOrderLabel,
             'status' => $statusLabel,
-            'trust_status' => $trustLabel,
             'format' => strtoupper($format),
             'processed_days' => $totalDays,
             'total_days' => $totalDays,
@@ -362,24 +394,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             };
         }
 
-        return function (?array $row) use ($handle): void {
-            if ($row === null) {
-                fclose($handle);
-                return;
-            }
-
-            if (empty($row)) {
-                fwrite($handle, "\r\n");
-                return;
-            }
-
-            $escaped = array_map(function ($value): string {
-                $text = (string) $value;
-                return str_replace(["\t", "\r", "\n"], ' ', $text);
-            }, $row);
-
-            fwrite($handle, implode("\t", $escaped) . "\r\n");
-        };
+        throw new \InvalidArgumentException('Unsupported writer format.');
     }
 
     private function resolveString(mixed $value): ?string

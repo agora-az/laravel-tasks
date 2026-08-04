@@ -20,33 +20,33 @@ A Laravel web application for generating and managing reconciliation reports.
 
 1. **Install Dependencies**
 
-   ```bash
-   composer install
-   ```
+    ```bash
+    composer install
+    ```
 
 2. **Configure Environment**
 
-   Copy the `.env.example` file to `.env` and update the database settings:
+    Copy the `.env.example` file to `.env` and update the database settings:
 
-   ```
-   DB_CONNECTION=mysql
-   DB_HOST=127.0.0.1
-   DB_PORT=3306
-   DB_DATABASE=opus_reconciliation
-   DB_USERNAME=root
-   DB_PASSWORD=your_password
-   ```
+    ```
+    DB_CONNECTION=mysql
+    DB_HOST=127.0.0.1
+    DB_PORT=3306
+    DB_DATABASE=opus_reconciliation
+    DB_USERNAME=root
+    DB_PASSWORD=your_password
+    ```
 
 3. **Generate Application Key**
 
-   ```bash
-   php artisan key:generate
-   ```
+    ```bash
+    php artisan key:generate
+    ```
 
 4. **Run Migrations**
-   ```bash
-   php artisan migrate
-   ```
+    ```bash
+    php artisan migrate
+    ```
 
 ## Running the Application
 
@@ -78,9 +78,13 @@ The application will be available at [http://127.0.0.1:8000](http://127.0.0.1:80
 ## VieFund Report Notes
 
 - Customer balances reconciliation criteria and run recipes:
-   - `docs/viefund_customer_balances_report_criteria.md`
+    - `docs/viefund_customer_balances_report_criteria.md`
+- Customer balances report overview and operating guide:
+    - `docs/viefund_customer_balances_report_guide.md`
+- Cash daily snapshot architecture and operations:
+    - `docs/viefund_cash_daily_snapshots.md`
 - Exclusion investigation notes for historic outlier analysis:
-   - `docs/viefund_customer_balances_exclusion_review.md`
+    - `docs/viefund_customer_balances_exclusion_review.md`
 
 ## License
 

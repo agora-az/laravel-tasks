@@ -2,19 +2,28 @@
 
 namespace App\Http\Controllers;
 
+use App\Exports\VieFundDailyBalanceWorkbookExport;
+use App\Models\VieFundCashDailySnapshot;
+use App\Models\VieFundCashDailySnapshotChange;
+use App\Models\VieFundCashSnapshotRun;
+use App\Services\VieFund\VieFundCashSnapshotService;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
+use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Excel as ExcelWriter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class VieFundReportsController extends Controller
 {
     private const LOCK_TTL_SECONDS = 43200;
+    private const LEGACY_FETCH_CHUNK_DAYS = 31;
 
     private const DATE_BASIS_OPTIONS = [
         'create_date' => 'Created date',
@@ -57,7 +66,8 @@ class VieFundReportsController extends Controller
     public const TRUST_STATUS_OPTIONS = ['Deleted', 'Unsettled', 'Settled'];
 
     public function __construct(
-        private readonly VieFundRemoteService $vieFundRemoteService
+        private readonly VieFundRemoteService $vieFundRemoteService,
+        private readonly VieFundCashSnapshotService $snapshotService
     ) {}
 
     public function index(Request $request): View
@@ -67,9 +77,21 @@ class VieFundReportsController extends Controller
             $selectedDateBasis = 'settlement_date';
         }
 
+        $dailyBalanceCurrencyCode = $this->normalizeCustomerBalanceCurrencyCode((string) $request->query('daily_balance_currency_code', 'CAD')) ?? '00';
+        $dailyBalanceOpenedBefore = trim((string) $request->query(
+            'daily_balance_opened_before',
+            (string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', '')
+        ));
+        config([
+            'viefund.balance_report_cash_account_scope.currency_code' => $dailyBalanceCurrencyCode,
+            'viefund.balance_report_cash_account_scope.opened_before' => $dailyBalanceOpenedBefore !== '' ? $dailyBalanceOpenedBefore : null,
+        ]);
+
         $inceptionDates = [];
+        $legacyInceptionDates = [];
         foreach (array_keys(self::DATE_BASIS_OPTIONS) as $basisKey) {
             $inceptionDates[$basisKey] = $this->resolveInceptionDate($basisKey);
+            $legacyInceptionDates[$basisKey] = $this->resolveLegacyInceptionDate($basisKey);
         }
 
         $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
@@ -80,7 +102,6 @@ class VieFundReportsController extends Controller
         }
 
         $selectedStatuses = $this->resolveStatuses($request->query('status'));
-        $selectedTrustStatuses = $this->resolveTrustStatuses($request->query('trust_status'));
         $customerBalanceDateBasis = $request->query('customer_balance_date_basis', 'settlement_date');
         if (!isset(self::DATE_BASIS_OPTIONS[$customerBalanceDateBasis])) {
             $customerBalanceDateBasis = 'settlement_date';
@@ -100,6 +121,16 @@ class VieFundReportsController extends Controller
             'customer_balance_opened_before',
             (string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', '')
         ));
+        $cashSnapshotChanges = VieFundCashDailySnapshotChange::query()
+            ->with('snapshot')
+            ->whereHas('snapshot', fn($query) => $query->where('has_unreviewed_change', true))
+            ->latest('detected_at')
+            ->limit(20)
+            ->get();
+        $cashSnapshotRuns = VieFundCashSnapshotRun::query()
+            ->latest('started_at')
+            ->limit(8)
+            ->get();
 
         return view('reports.index', [
             'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
@@ -111,7 +142,8 @@ class VieFundReportsController extends Controller
             'fundStatusOptions' => self::FUND_STATUS_OPTIONS,
             'trustStatusOptions' => self::TRUST_STATUS_OPTIONS,
             'selectedStatuses' => $selectedStatuses,
-            'selectedTrustStatuses' => $selectedTrustStatuses,
+            'dailyBalanceCurrencyLabel' => $this->customerBalanceCurrencyLabelFromCode($dailyBalanceCurrencyCode),
+            'dailyBalanceOpenedBefore' => $dailyBalanceOpenedBefore,
             'customerBalanceDate' => $request->query('customer_balance_date', Carbon::today()->toDateString()),
             'customerBalanceDateBasis' => $customerBalanceDateBasis,
             'customerBalanceStatuses' => $customerBalanceStatuses,
@@ -119,8 +151,25 @@ class VieFundReportsController extends Controller
             'customerBalanceCurrencyCode' => $customerBalanceCurrencyCode,
             'customerBalanceCurrencyLabel' => $this->customerBalanceCurrencyLabelFromCode($customerBalanceCurrencyCode),
             'customerBalanceOpenedBefore' => $customerBalanceOpenedBefore,
+            'cashSnapshotChanges' => $cashSnapshotChanges,
+            'cashSnapshotRuns' => $cashSnapshotRuns,
             'inceptionDates' => $inceptionDates,
+            'legacyInceptionDates' => $legacyInceptionDates,
         ]);
+    }
+
+    public function acknowledgeCashSnapshotChange(Request $request, VieFundCashDailySnapshot $snapshot): RedirectResponse
+    {
+        $snapshot->update([
+            'has_unreviewed_change' => false,
+            'reviewed_at' => now(),
+            'reviewed_by' => null,
+            'reviewed_by_label' => (string) $request->session()->get('user', 'authenticated user'),
+        ]);
+
+        return redirect()
+            ->route('reports.index')
+            ->with('snapshot_review_success', 'Snapshot change acknowledged. Its audit history was retained.');
     }
 
     private function resolveInceptionDate(string $dateBasis): ?string
@@ -142,17 +191,26 @@ class VieFundReportsController extends Controller
         return $this->vieFundRemoteService->fetchInceptionDateByDateColumn($dateBasis);
     }
 
-    public function exportDailyBalance(Request $request): StreamedResponse
+    private function resolveLegacyInceptionDate(string $dateBasis): ?string
+    {
+        return Cache::remember(
+            "viefund:legacy-inception-date:{$dateBasis}",
+            now()->addDay(),
+            fn() => $this->vieFundRemoteService->fetchLegacyInceptionDateByDateColumn($dateBasis)
+        );
+    }
+
+    public function exportDailyBalance(Request $request): BinaryFileResponse|StreamedResponse
     {
         $validated = $request->validate([
-            'date_from' => ['required', 'date'],
-            'date_to' => ['required', 'date', 'after_or_equal:date_from'],
+            'date_from' => ['required', 'date', 'before_or_equal:today'],
+            'date_to' => ['required', 'date', 'after_or_equal:date_from', 'before_or_equal:today'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'output_order' => ['required', 'in:asc,desc'],
             'status' => ['sometimes', 'array'],
             'status.*' => ['integer', 'between:0,6'],
-            'trust_status' => ['sometimes', 'array'],
-            'trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'daily_balance_currency_code' => ['required', 'in:CAD,USD'],
+            'daily_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -161,13 +219,32 @@ class VieFundReportsController extends Controller
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
         $statuses = $this->resolveStatuses($validated['status'] ?? null);
-        $trustStatuses = $this->resolveTrustStatuses($validated['trust_status'] ?? null, []);
         $format = $validated['format'];
 
-        $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis, [
-            'status_ids' => $statuses,
-            'trust_status_names' => $trustStatuses,
+        config([
+            'viefund.balance_report_cash_account_scope.currency_code' => $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']),
+            'viefund.balance_report_cash_account_scope.opened_before' => !empty($validated['daily_balance_opened_before'])
+                ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+                : null,
         ]);
+
+        $openedBefore = !empty($validated['daily_balance_opened_before'])
+            ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+            : null;
+        $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']) ?? '00';
+        $snapshotResult = $openedBefore === null
+            ? $this->snapshotService->completeSeries($dateFrom, $dateTo, $dateBasis, $currencyCode, $statuses)
+            : null;
+        $dailyTotals = $snapshotResult
+            ? $snapshotResult['rows']->map(fn($snapshot) => (object) [
+                'total_date' => $snapshot->total_date,
+                'transaction_count' => $snapshot->transaction_count,
+                'net_total' => $snapshot->net_total,
+            ])
+            : $this->vieFundRemoteService->fetchCustomerCashDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis, [
+                'status_ids' => $statuses,
+                'availability_as_of' => $dateTo->toDateString(),
+            ]);
 
         $byDate = [];
         foreach ($dailyTotals as $row) {
@@ -184,7 +261,17 @@ class VieFundReportsController extends Controller
         }
 
         $rows = [];
-        $runningBalance = 0.0;
+        if ($snapshotResult) {
+            $openingBalance = $snapshotResult['opening_balance'];
+            $endingBalance = $snapshotResult['ending_balance'];
+        } else {
+            $periodNetTotal = array_sum(array_column($byDate, 'net_total'));
+            $endingBalance = (float) $this->vieFundRemoteService
+                ->fetchCustomerBalancesByDate($dateTo, $dateBasis, ['status_ids' => $statuses])
+                ->sum(fn($row) => (float) ($row->total_balance ?? 0));
+            $openingBalance = $endingBalance - $periodNetTotal;
+        }
+        $runningBalance = $openingBalance;
         $cursor = $dateFrom->copy();
 
         while ($cursor->lte($dateTo)) {
@@ -222,27 +309,161 @@ class VieFundReportsController extends Controller
         $dateBasisLabel = self::DATE_BASIS_OPTIONS[$dateBasis];
         $outputOrderLabel = self::OUTPUT_ORDER_OPTIONS[$outputOrder];
         $statusLabel = $this->describeStatuses($statuses);
-        $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
 
         $metadataRows = [
             ['Report', 'VieFund Daily Net + Running Balance'],
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
-            ['Fund Statuses', $statusLabel],
-            ['Trust Statuses', $trustLabel],
+            ['Balance Source', $snapshotResult ? 'Audited Daily Cash Snapshots' : 'Direct Cash Ledger (Live)'],
+            ['Cash Transaction Statuses', $statusLabel],
+            ['Simulated Generation Time', !empty($validated['daily_balance_opened_before']) ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s') : 'Not set'],
+            ['Snapshot Last Verified At', $snapshotResult['last_verified_at'] ?? 'Not applicable'],
+            ['Unreviewed Changed Days', $snapshotResult['changed_days'] ?? 0],
             ['Generated At', now()->toDateTimeString()],
-            ['Final Balance', $this->formatAccountingCurrency($finalBalance)],
+            ['Opening Balance', $openingBalance],
+            ['Final Balance', $finalBalance],
         ];
 
         if ($format === 'excel') {
-            return $this->streamExcelTsv($rows, $baseName . '.xls', $metadataRows);
+            return Excel::download(
+                new VieFundDailyBalanceWorkbookExport(
+                    [[
+                        'Report Date',
+                        'Cash Transactions',
+                        'Daily Net Transactions',
+                        'Running Daily Balance',
+                    ], ...array_map(fn(array $row) => array_values($row), $rows)],
+                    [['Summary Item', 'Value'], ...$metadataRows]
+                ),
+                $baseName . '.xlsx',
+                ExcelWriter::XLSX
+            );
         }
 
         return $this->streamCsv($rows, $baseName . '.csv', $metadataRows);
     }
 
-    public function runDailyBalanceReport(Request $request): RedirectResponse
+    public function exportLegacyDailyBalance(Request $request): BinaryFileResponse|StreamedResponse
+    {
+        $validated = $request->validate([
+            'legacy_date_from' => ['required', 'date', 'before_or_equal:today'],
+            'legacy_date_to' => ['required', 'date', 'after_or_equal:legacy_date_from', 'before_or_equal:today'],
+            'legacy_date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
+            'legacy_output_order' => ['required', 'in:asc,desc'],
+            'legacy_status' => ['sometimes', 'array'],
+            'legacy_status.*' => ['integer', 'between:0,6'],
+            'legacy_trust_status' => ['sometimes', 'array'],
+            'legacy_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'legacy_format' => ['required', 'in:csv,excel'],
+        ]);
+
+        $dateFrom = Carbon::parse($validated['legacy_date_from'])->startOfDay();
+        $dateTo = Carbon::parse($validated['legacy_date_to'])->startOfDay();
+        $dateBasis = $validated['legacy_date_basis'];
+        $outputOrder = $validated['legacy_output_order'];
+        $statuses = $this->resolveStatuses($validated['legacy_status'] ?? null);
+        $trustStatuses = $this->resolveTrustStatuses($validated['legacy_trust_status'] ?? null, []);
+        $format = $validated['legacy_format'];
+
+        $byDate = [];
+        $fetchCursor = $dateFrom->copy();
+        while ($fetchCursor->lte($dateTo)) {
+            $chunkEnd = $fetchCursor->copy()
+                ->addDays(self::LEGACY_FETCH_CHUNK_DAYS - 1)
+                ->min($dateTo);
+            $dailyTotals = $this->vieFundRemoteService->fetchDailyNetTotalsByDateColumn(
+                $fetchCursor,
+                $chunkEnd,
+                $dateBasis,
+                [
+                    'status_ids' => $statuses,
+                    'trust_status_names' => $trustStatuses,
+                ]
+            );
+
+            foreach ($dailyTotals as $row) {
+                $dateKey = Carbon::parse($row->total_date)->toDateString();
+                $byDate[$dateKey] ??= [
+                    'transaction_count' => 0,
+                    'net_total' => 0.0,
+                ];
+                $byDate[$dateKey]['transaction_count'] += (int) $row->transaction_count;
+                $byDate[$dateKey]['net_total'] += (float) $row->net_total;
+            }
+
+            $fetchCursor = $chunkEnd->copy()->addDay();
+        }
+
+        $rows = [];
+        $runningBalance = 0.0;
+        $cursor = $dateFrom->copy();
+
+        while ($cursor->lte($dateTo)) {
+            $dateKey = $cursor->toDateString();
+            $day = $byDate[$dateKey] ?? [
+                'transaction_count' => 0,
+                'net_total' => 0.0,
+            ];
+            $dailyNet = (float) $day['net_total'];
+            $runningBalance += $dailyNet;
+
+            $rows[] = [
+                'report_date' => $dateKey,
+                'transaction_count' => (int) $day['transaction_count'],
+                'daily_net_transactions' => $dailyNet,
+                'running_daily_balance' => $runningBalance,
+            ];
+
+            $cursor->addDay();
+        }
+
+        if ($outputOrder === 'desc') {
+            $rows = array_reverse($rows);
+        }
+
+        $baseName = sprintf(
+            'viefund_legacy_bal_report_%s-%s_%s',
+            $dateFrom->format('Ymd'),
+            $dateTo->format('Ymd'),
+            self::DATE_BASIS_FILE_CODES[$dateBasis]
+        );
+        $trustStatusLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
+        $metadataRows = [
+            ['Report', 'Legacy VieFund Daily Net + Running Balance'],
+            ['Date Basis', self::DATE_BASIS_OPTIONS[$dateBasis]],
+            ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
+            ['Output Order', self::OUTPUT_ORDER_OPTIONS[$outputOrder]],
+            ['Balance Source', 'Legacy Fund + Trust Reconstruction (Live)'],
+            ['Fund Statuses', $this->describeStatuses($statuses)],
+            ['Trust Statuses', $trustStatusLabel],
+            ['Opening Balance Method', 'Zero at selected start date'],
+            ['Snapshot Cache', 'Not used'],
+            ['Generated At', now()->toDateTimeString()],
+            ['Opening Balance', 0.0],
+            ['Final Balance', $runningBalance],
+        ];
+
+        if ($format === 'excel') {
+            return Excel::download(
+                new VieFundDailyBalanceWorkbookExport(
+                    [[
+                        'Report Date',
+                        'Legacy Transactions',
+                        'Daily Net Transactions',
+                        'Running Daily Balance',
+                    ], ...array_map(fn(array $row) => array_values($row), $rows)],
+                    [['Summary Item', 'Value'], ...$metadataRows]
+                ),
+                $baseName . '.xlsx',
+                ExcelWriter::XLSX
+            );
+        }
+
+        return $this->streamCsv($rows, $baseName . '.csv', $metadataRows);
+    }
+
+    public function runDailyBalanceReport(Request $request): JsonResponse|RedirectResponse
     {
         $validated = $request->validate([
             'date_from' => ['required', 'date'],
@@ -251,8 +472,8 @@ class VieFundReportsController extends Controller
             'output_order' => ['required', 'in:asc,desc'],
             'status' => ['sometimes', 'array'],
             'status.*' => ['integer', 'between:0,6'],
-            'trust_status' => ['sometimes', 'array'],
-            'trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'daily_balance_currency_code' => ['required', 'in:CAD,USD'],
+            'daily_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -264,6 +485,13 @@ class VieFundReportsController extends Controller
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A VieFund daily balance report is already running.',
+                ], 409);
+            }
+
             return redirect()
                 ->route('reports.index')
                 ->with('report_error', 'A VieFund daily balance report is already running.');
@@ -274,10 +502,13 @@ class VieFundReportsController extends Controller
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
         $statuses = $this->resolveStatuses($validated['status'] ?? null);
-        $trustStatuses = $this->resolveTrustStatuses($validated['trust_status'] ?? null, []);
+        $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']) ?? '00';
+        $openedBefore = !empty($validated['daily_balance_opened_before'])
+            ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+            : null;
         $format = $validated['format'];
 
-        $extension = $format === 'excel' ? 'xls' : 'csv';
+        $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputFileName = sprintf(
             'viefund_bal_report_%s-%s_%s.%s',
             Carbon::parse($dateFrom)->format('Ymd'),
@@ -302,7 +533,9 @@ class VieFundReportsController extends Controller
             'date_basis' => self::DATE_BASIS_OPTIONS[$dateBasis],
             'output_order' => self::OUTPUT_ORDER_OPTIONS[$outputOrder],
             'status' => $this->describeStatuses($statuses),
-            'trust_status' => $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded',
+            'cash_currency_code' => $currencyCode,
+            'cash_currency_label' => $this->customerBalanceCurrencyLabelFromCode($currencyCode),
+            'cash_opened_before' => $openedBefore ?: 'Not set',
             'format' => strtoupper($format),
             'processed_days' => 0,
             'total_days' => null,
@@ -317,13 +550,17 @@ class VieFundReportsController extends Controller
             $statuses
         ));
 
-        $trustStatusArgs = implode(' ', array_map(
-            fn(string $name): string => '--trust-status=' . escapeshellarg($name),
-            $trustStatuses
-        ));
+        $envAssignments = [
+            'VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE=' . escapeshellarg($currencyCode),
+        ];
+        if ($openedBefore !== null) {
+            $envAssignments[] = 'VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE=' . escapeshellarg($openedBefore);
+        }
+        $envPrefix = implode(' ', $envAssignments) . ' ';
 
         $command = sprintf(
-            '%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg($dateFrom),
@@ -331,7 +568,6 @@ class VieFundReportsController extends Controller
             escapeshellarg($dateBasis),
             escapeshellarg($outputOrder),
             $statusArgs,
-            $trustStatusArgs,
             escapeshellarg($format),
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
@@ -355,22 +591,128 @@ class VieFundReportsController extends Controller
             proc_close($process);
         }
 
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'VieFund daily balance report started.',
+            ], 202);
+        }
+
         return redirect()
             ->route('reports.index')
             ->with('report_success', 'VieFund daily balance report started in background.');
     }
 
-    public function runCustomerBalancesReport(Request $request): RedirectResponse
+    public function runLegacyDailyBalanceReport(Request $request): JsonResponse|RedirectResponse
     {
         $validated = $request->validate([
-            'customer_balance_date' => ['required', 'date'],
+            'legacy_date_from' => ['required', 'date', 'before_or_equal:today'],
+            'legacy_date_to' => ['required', 'date', 'after_or_equal:legacy_date_from', 'before_or_equal:today'],
+            'legacy_date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
+            'legacy_output_order' => ['required', 'in:asc,desc'],
+            'legacy_status' => ['sometimes', 'array'],
+            'legacy_status.*' => ['integer', 'between:0,6'],
+            'legacy_trust_status' => ['sometimes', 'array'],
+            'legacy_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
+            'legacy_format' => ['required', 'in:csv,excel'],
+        ]);
+
+        $lockFile = storage_path('app/reports/viefund-daily-balance-legacy.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
+        $logPath = storage_path('logs/viefund-daily-balance-legacy-report.log');
+        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        if ($hasLiveLock) {
+            $message = 'A legacy VieFund daily balance report is already running.';
+            return $request->expectsJson()
+                ? response()->json(['success' => false, 'message' => $message], 409)
+                : redirect()->route('reports.index')->with('legacy_report_error', $message);
+        }
+
+        $dateFrom = Carbon::parse($validated['legacy_date_from'])->toDateString();
+        $dateTo = Carbon::parse($validated['legacy_date_to'])->toDateString();
+        $dateBasis = $validated['legacy_date_basis'];
+        $outputOrder = $validated['legacy_output_order'];
+        $statuses = $this->resolveStatuses($validated['legacy_status'] ?? null);
+        $trustStatuses = $this->resolveTrustStatuses($validated['legacy_trust_status'] ?? null, []);
+        $format = $validated['legacy_format'];
+        $extension = $format === 'excel' ? 'xlsx' : 'csv';
+        $outputRelativePath = sprintf(
+            'reports/viefund_legacy_bal_report_%s-%s_%s.%s',
+            Carbon::parse($dateFrom)->format('Ymd'),
+            Carbon::parse($dateTo)->format('Ymd'),
+            self::DATE_BASIS_FILE_CODES[$dateBasis],
+            $extension
+        );
+
+        if (!is_dir(dirname($statusFile))) {
+            @mkdir(dirname($statusFile), 0775, true);
+        }
+        file_put_contents($lockFile, date('c'));
+        file_put_contents($statusFile, json_encode([
+            'inProgress' => true,
+            'success' => null,
+            'message' => 'Legacy VieFund daily balance report queued...',
+            'processed_days' => 0,
+            'total_days' => Carbon::parse($dateFrom)->diffInDays(Carbon::parse($dateTo)) + 1,
+            'progress_pct' => 0,
+            'output_relative_path' => $outputRelativePath,
+            'started_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+        ], JSON_PRETTY_PRINT));
+
+        $statusArgs = implode(' ', array_map(
+            fn(int $id): string => '--status=' . escapeshellarg((string) $id),
+            $statuses
+        ));
+        $trustStatusArgs = implode(' ', array_map(
+            fn(string $name): string => '--trust-status=' . escapeshellarg($name),
+            $trustStatuses
+        ));
+        $command = sprintf(
+            '%s %s report:viefund-daily-balance-legacy --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            escapeshellarg((string) env('PHP_PATH', PHP_BINARY)),
+            escapeshellarg(base_path('artisan')),
+            escapeshellarg($dateFrom),
+            escapeshellarg($dateTo),
+            escapeshellarg($dateBasis),
+            escapeshellarg($outputOrder),
+            $statusArgs,
+            $trustStatusArgs,
+            escapeshellarg($format),
+            escapeshellarg($outputRelativePath),
+            escapeshellarg($statusFile),
+            escapeshellarg($lockFile),
+            escapeshellarg($logPath)
+        );
+        Log::info('Dispatching background legacy VieFund daily balance report: ' . $command);
+        $process = proc_open($command, [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ], $pipes);
+        if (is_resource($process)) {
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            proc_close($process);
+        }
+
+        return $request->expectsJson()
+            ? response()->json(['success' => true, 'message' => 'Legacy VieFund daily balance report started.'], 202)
+            : redirect()->route('reports.index')->with('legacy_report_success', 'Legacy report started in background.');
+    }
+
+    public function runCustomerBalancesReport(Request $request): JsonResponse|RedirectResponse
+    {
+        $validated = $request->validate([
+            'customer_balance_date' => ['required', 'date', 'before_or_equal:today'],
             'customer_balance_date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
             'customer_balance_status' => ['sometimes', 'array'],
             'customer_balance_status.*' => ['integer', 'between:0,6'],
             'customer_balance_trust_status' => ['sometimes', 'array'],
             'customer_balance_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
             'customer_balance_currency_code' => ['required', 'in:CAD,USD'],
-            'customer_balance_opened_before' => ['nullable', 'date'],
+            'customer_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -382,6 +724,13 @@ class VieFundReportsController extends Controller
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A VieFund customer balances report is already running.',
+                ], 409);
+            }
+
             return redirect()
                 ->route('reports.index')
                 ->with('customer_balance_report_error', 'A VieFund customer balances report is already running.');
@@ -402,7 +751,7 @@ class VieFundReportsController extends Controller
         }
         $format = $validated['format'];
 
-        $extension = $format === 'excel' ? 'xls' : 'csv';
+        $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputFileName = sprintf(
             'viefund_customer_balances_%s_%s.%s',
             Carbon::parse($reportDate)->format('Ymd'),
@@ -488,6 +837,13 @@ class VieFundReportsController extends Controller
             proc_close($process);
         }
 
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'VieFund customer balances report started.',
+            ], 202);
+        }
+
         return redirect()
             ->route('reports.index')
             ->with('customer_balance_report_success', 'VieFund customer balances report started in background.');
@@ -538,6 +894,41 @@ class VieFundReportsController extends Controller
             $outputPath = storage_path('app/' . ltrim((string) $payload['output_relative_path'], '/'));
             if (is_file($outputPath)) {
                 $payload['download_url'] = route('reports.viefund-daily-balance.download-latest');
+            }
+        }
+
+        return response()->json($payload);
+    }
+
+    public function legacyDailyBalanceReportStatus(): JsonResponse
+    {
+        $lockFile = storage_path('app/reports/viefund-daily-balance-legacy.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
+        $inProgress = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        $payload = [
+            'inProgress' => $inProgress,
+            'success' => null,
+            'message' => $inProgress ? 'Legacy report in progress...' : 'Idle',
+            'processed_days' => null,
+            'total_days' => null,
+            'progress_pct' => null,
+            'download_url' => null,
+        ];
+        $parsed = file_exists($statusFile)
+            ? json_decode((string) file_get_contents($statusFile), true)
+            : null;
+        if (is_array($parsed)) {
+            $payload = array_merge($payload, $parsed);
+            $payload['inProgress'] = $inProgress;
+        }
+        if (!$inProgress && is_array($parsed) && ($parsed['inProgress'] ?? false) && ($parsed['success'] ?? null) === null) {
+            $payload['success'] = false;
+            $payload['message'] = 'Legacy report stopped before completion. Check logs and retry.';
+        }
+        if (($payload['success'] ?? null) === true && !empty($payload['output_relative_path'])) {
+            $outputPath = storage_path('app/' . ltrim((string) $payload['output_relative_path'], '/'));
+            if (is_file($outputPath)) {
+                $payload['download_url'] = route('reports.viefund-daily-balance-legacy.download-latest');
             }
         }
 
@@ -621,6 +1012,26 @@ class VieFundReportsController extends Controller
         return response()->download($absolutePath, basename($absolutePath));
     }
 
+    public function downloadLatestLegacyDailyBalanceReport(): BinaryFileResponse|RedirectResponse
+    {
+        $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
+        if (!file_exists($statusFile)) {
+            return redirect()->route('reports.index')->with('legacy_report_error', 'No legacy report output found.');
+        }
+        $parsed = json_decode((string) file_get_contents($statusFile), true);
+        $relativePath = is_array($parsed) ? ($parsed['output_relative_path'] ?? null) : null;
+        $relativePath = $relativePath ? ltrim((string) $relativePath, '/') : null;
+        if (!$relativePath || !str_starts_with($relativePath, 'reports/')) {
+            return redirect()->route('reports.index')->with('legacy_report_error', 'Invalid legacy report output path.');
+        }
+        $absolutePath = storage_path('app/' . $relativePath);
+        if (!is_file($absolutePath)) {
+            return redirect()->route('reports.index')->with('legacy_report_error', 'Legacy report file was not found.');
+        }
+
+        return response()->download($absolutePath, basename($absolutePath));
+    }
+
     public function downloadLatestCustomerBalancesReport(): BinaryFileResponse|RedirectResponse
     {
         $statusFile = storage_path('app/reports/viefund-customer-balances-status.json');
@@ -687,6 +1098,27 @@ class VieFundReportsController extends Controller
         ]);
     }
 
+    public function dismissLatestLegacyDailyBalanceReport(): JsonResponse
+    {
+        $lockFile = storage_path('app/reports/viefund-daily-balance-legacy.lock');
+        $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
+        if (file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS) {
+            return response()->json(['success' => false, 'message' => 'Cannot dismiss while the legacy report is running.'], 409);
+        }
+        $deletedOutput = false;
+        if (file_exists($statusFile)) {
+            $parsed = json_decode((string) file_get_contents($statusFile), true);
+            $relativePath = is_array($parsed) ? ($parsed['output_relative_path'] ?? null) : null;
+            if ($relativePath && str_starts_with(ltrim((string) $relativePath, '/'), 'reports/')) {
+                $absolutePath = storage_path('app/' . ltrim((string) $relativePath, '/'));
+                $deletedOutput = is_file($absolutePath) ? @unlink($absolutePath) : false;
+            }
+            @unlink($statusFile);
+        }
+
+        return response()->json(['success' => true, 'deleted_output' => $deletedOutput]);
+    }
+
     public function dismissLatestCustomerBalancesReport(): JsonResponse
     {
         $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
@@ -740,32 +1172,6 @@ class VieFundReportsController extends Controller
             fclose($out);
         }, $filename, [
             'Content-Type' => 'text/csv; charset=UTF-8',
-        ]);
-    }
-
-    private function streamExcelTsv(array $rows, string $filename, array $metadataRows): StreamedResponse
-    {
-        return response()->streamDownload(function () use ($rows, $metadataRows) {
-            $out = fopen('php://output', 'w');
-
-            $writeTsv = function (array $values) use ($out): void {
-                $escaped = array_map(function ($value): string {
-                    $text = (string) $value;
-                    $text = str_replace(["\t", "\r", "\n"], ' ', $text);
-                    return $text;
-                }, $values);
-
-                fwrite($out, implode("\t", $escaped) . "\r\n");
-            };
-
-            $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
-            foreach ($sheetRows as $sheetRow) {
-                $writeTsv($sheetRow);
-            }
-
-            fclose($out);
-        }, $filename, [
-            'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
         ]);
     }
 

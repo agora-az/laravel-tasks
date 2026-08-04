@@ -73,7 +73,7 @@ return [
         }
 
         return array_values(array_filter(array_map(
-            static fn ($value) => trim((string) $value),
+            static fn($value) => trim((string) $value),
             explode(',', $configured)
         )));
     })(),
@@ -98,10 +98,10 @@ return [
     'default_fund_status' => (static function () {
         $ids = array_values(array_unique(array_filter(
             array_map(
-                static fn ($v) => (int) trim($v),
+                static fn($v) => (int) trim($v),
                 explode(',', (string) env('VIEFUND_DEFAULT_FUND_STATUS', '6'))
             ),
-            static fn ($id) => $id >= 0 && $id <= 6
+            static fn($id) => $id >= 0 && $id <= 6
         )));
 
         return $ids ?: [6];
@@ -175,7 +175,7 @@ return [
         'currency_code' => trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '')) ?: null,
         'opened_before' => trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', '')) ?: null,
         'excluded_plan_accounts' => array_values(array_filter(array_map(
-            static fn ($value) => trim((string) $value),
+            static fn($value) => trim((string) $value),
             explode(',', (string) env('VIEFUND_BALANCE_REPORT_EXCLUDED_PLAN_ACCOUNTS', ''))
         ))),
     ],

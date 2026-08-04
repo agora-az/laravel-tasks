@@ -33,6 +33,30 @@ Schedule::command('viefund:sync-daily-totals --days=90')
     ->withoutOverlapping()
     ->runInBackground();
 
+Schedule::command('viefund:sync-cash-daily-snapshots --days=90 --date-basis=settlement_date --currency=00 --statuses=6')
+    ->dailyAt('21:15')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
+Schedule::command('viefund:sync-cash-daily-snapshots --days=90 --date-basis=trade_date --currency=00 --statuses=6')
+    ->dailyAt('21:30')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
+Schedule::command('viefund:sync-cash-daily-snapshots --full --date-basis=settlement_date --currency=00 --statuses=6')
+    ->weeklyOn(1, '22:00')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
+Schedule::command('viefund:sync-cash-daily-snapshots --full --date-basis=trade_date --currency=00 --statuses=6')
+    ->weeklyOn(1, '22:15')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
 Schedule::command('viefund:sync-customers')
     ->dailyAt('22:00')
     ->timezone('America/Toronto')

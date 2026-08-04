@@ -53,6 +53,19 @@ class VieFundRemoteService
         return $this->repository->fetchDailyNetTotalsByDateColumn($fromDate, $toDate, $dateColumn, $filters);
     }
 
+    public function fetchCustomerCashDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection
+    {
+        return $this->repository->fetchCustomerCashDailyNetTotalsByDateColumn($fromDate, $toDate, $dateColumn, $filters);
+    }
+
+    /**
+     * @return array{items: LengthAwarePaginator, transaction_count: int, net_total: float}
+     */
+    public function fetchCustomerCashTransactionsByDateColumn(CarbonInterface $date, string $dateColumn, array $filters = [], int $perPage = 250, int $page = 1, bool $hideZeroAmount = false): array
+    {
+        return $this->repository->fetchCustomerCashTransactionsByDateColumn($date, $dateColumn, $filters, $perPage, $page, $hideZeroAmount);
+    }
+
     public function fetchCustomerBalancesByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
     {
         return $this->repository->fetchCustomerBalancesByDate($asOfDate, $dateColumn, $filters);
@@ -71,6 +84,11 @@ class VieFundRemoteService
     public function fetchInceptionDateByDateColumn(string $dateColumn): ?string
     {
         return $this->repository->fetchInceptionDateByDateColumn($dateColumn);
+    }
+
+    public function fetchLegacyInceptionDateByDateColumn(string $dateColumn): ?string
+    {
+        return $this->repository->fetchLegacyInceptionDateByDateColumn($dateColumn);
     }
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator

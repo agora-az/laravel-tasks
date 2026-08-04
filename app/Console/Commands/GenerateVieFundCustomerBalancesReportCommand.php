@@ -2,9 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Exports\VieFundCustomerBalancesWorkbookExport;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Maatwebsite\Excel\Facades\Excel;
+use Maatwebsite\Excel\Excel as ExcelWriter;
 
 class GenerateVieFundCustomerBalancesReportCommand extends Command
 {
@@ -26,7 +29,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
     private const TRUST_STATUS_NAMES = ['Deleted', 'Unsettled', 'Settled'];
     private const DEFAULT_STATUSES = [6];
     private const BALANCE_SOURCE_LABELS = [
-        'transaction_rollup' => 'Transaction Rollup',
+        'transaction_rollup' => 'Direct Cash Ledger',
         'cash_snapshot' => 'Cash Snapshot',
     ];
 
@@ -157,8 +160,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         }
 
         $totalAccounts = $balances->count();
-        $simulatedClientCashTotal = $this->vieFundRemoteService->fetchCustomerCashBalanceTotal();
         $totalBalance = 0.0;
+        $totalFutureSettlementCash = 0.0;
+        $totalClientEligibleFutureSettlementCash = 0.0;
         $rows = [];
 
         foreach ($balances->values() as $index => $row) {
@@ -176,17 +180,27 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             }
 
             $totalBalance += $computedBalance;
+            $futureSettlementCount = (int) ($row->future_settlement_transaction_count ?? 0);
+            $futureSettlementCash = (float) ($row->future_settlement_cash ?? 0);
+            $nextSettlementDate = !empty($row->next_settlement_date)
+                ? Carbon::parse($row->next_settlement_date)->toDateString()
+                : '';
+            $totalFutureSettlementCash += $futureSettlementCash;
+            $totalClientEligibleFutureSettlementCash += (float) ($row->client_eligible_future_settlement_cash ?? 0);
             $rows[] = [
                 trim((string) ($row->client_name ?? '')),
                 (string) ($row->rep_code ?? ''),
                 (string) ($row->plan_account_id ?? ''),
                 (string) ($row->account_id ?? ''),
                 (string) ($row->account_status ?? ''),
-                number_format((int) ($row->fund_transaction_count ?? 0)),
-                number_format((int) ($row->trust_transaction_count ?? 0)),
-                $this->formatAccountingCurrency((float) ($row->fund_balance ?? 0)),
-                $this->formatAccountingCurrency((float) ($row->trust_balance ?? 0)),
-                $this->formatAccountingCurrency($computedBalance),
+                $format === 'excel' ? (int) ($row->cash_transaction_count ?? 0) : number_format((int) ($row->cash_transaction_count ?? 0)),
+                $format === 'excel' ? $computedBalance : $this->formatAccountingCurrency($computedBalance),
+                $format === 'excel' ? $futureSettlementCount : number_format($futureSettlementCount),
+                $format === 'excel' ? $futureSettlementCash : $this->formatAccountingCurrency($futureSettlementCash),
+                $nextSettlementDate,
+                $futureSettlementCount > 0
+                    ? 'Positive confirmed cash linked to unsettled trust; excluded from settled balance pending clarification.'
+                    : '',
             ];
 
             $processedAccounts = $index + 1;
@@ -212,38 +226,63 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ]);
         }
 
+        $futureSettlementCashIncludedInEstimate = $balanceSource === 'transaction_rollup'
+            && $dateBasis === 'settlement_date'
+                ? $totalClientEligibleFutureSettlementCash
+                : 0.0;
+        $potentialClientVieFundBalance = $totalBalance + $futureSettlementCashIncludedInEstimate;
+        $totalClientExcludedFutureSettlementCash = $totalFutureSettlementCash
+            - $futureSettlementCashIncludedInEstimate;
+
         $metadataRows = [
             ['Report', 'VieFund Customer Balances'],
             ['Report Date', $reportDate->toDateString()],
             ['Date Basis', $dateBasisLabel],
             ['Balance Source', self::BALANCE_SOURCE_LABELS[$balanceSource]],
-            ['Fund Statuses', $statusLabel],
-            ['Trust Statuses', $trustLabel],
+            ['Cash Statuses', $statusLabel],
+            ['Future Settlement Review', 'Positive confirmed cash linked to Unsettled trust'],
             ['Simulated Generation Time', $simulatedGenerationTime !== '' ? $simulatedGenerationTime : 'Not set'],
-            ['Plan Accounts', number_format($totalAccounts)],
+            ['Plan Accounts', $format === 'excel' ? $totalAccounts : number_format($totalAccounts)],
             ['Generated At', now()->toDateTimeString()],
-            ['Simulated Client Cash Total', $this->formatAccountingCurrency($simulatedClientCashTotal)],
-            ['Total Balance', $this->formatAccountingCurrency($totalBalance)],
+            ['Total Settled Balance', $format === 'excel' ? $totalBalance : $this->formatAccountingCurrency($totalBalance)],
+            ['Future Settlement Cash (Info)', $format === 'excel' ? $totalFutureSettlementCash : $this->formatAccountingCurrency($totalFutureSettlementCash)],
+            ['Future Settlement Cash Included in Client Estimate', $format === 'excel' ? $futureSettlementCashIncludedInEstimate : $this->formatAccountingCurrency($futureSettlementCashIncludedInEstimate)],
+            ['Future Settlement Cash Excluded from Client Estimate', $format === 'excel' ? $totalClientExcludedFutureSettlementCash : $this->formatAccountingCurrency($totalClientExcludedFutureSettlementCash)],
+            ['Potential Client VieFund Balance (Estimate)', $format === 'excel' ? $potentialClientVieFundBalance : $this->formatAccountingCurrency($potentialClientVieFundBalance)],
         ];
 
-        $sheetRows = $this->buildSheetRowsWithSideMetadata([
+        $headers = [
             'Client Name',
             'Rep Code',
             'Plan Account ID',
             'Account ID',
             'Account Status',
-            'Fund Transactions',
-            'Trust Transactions',
-            'Fund Balance',
-            'Trust Balance',
-            'Balance (CAD)',
-        ], $rows, $metadataRows);
+            'Cash Transactions',
+            'Settled Balance (CAD)',
+            'Future Settlement Transactions',
+            'Future Settlement Cash (Info)',
+            'Next Settlement Date',
+            'Clarification Note',
+        ];
 
-        $writer = $this->openWriter($outputAbsolutePath, $format);
-        foreach ($sheetRows as $sheetRow) {
-            $writer($sheetRow);
+        if ($format === 'excel') {
+            Excel::store(
+                new VieFundCustomerBalancesWorkbookExport(
+                    [$headers, ...$rows],
+                    [['Summary Item', 'Value'], ...$metadataRows]
+                ),
+                $outputRelativePath,
+                null,
+                ExcelWriter::XLSX
+            );
+        } else {
+            $sheetRows = $this->buildSheetRowsWithSideMetadata($headers, $rows, $metadataRows);
+            $writer = $this->openWriter($outputAbsolutePath, $format);
+            foreach ($sheetRows as $sheetRow) {
+                $writer($sheetRow);
+            }
+            $writer(null);
         }
-        $writer(null);
 
         $duration = round(microtime(true) - $startedAt, 2);
 
@@ -305,19 +344,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             };
         }
 
-        return function (?array $row) use ($handle): void {
-            if ($row === null) {
-                fclose($handle);
-                return;
-            }
-
-            $escaped = array_map(function ($value): string {
-                $text = (string) $value;
-                return str_replace(["\t", "\r", "\n"], ' ', $text);
-            }, $row);
-
-            fwrite($handle, implode("\t", $escaped) . "\r\n");
-        };
+        throw new \InvalidArgumentException('Unsupported writer format.');
     }
 
     private function buildSheetRowsWithSideMetadata(array $headers, array $rows, array $metadataRows): array

@@ -92,8 +92,7 @@
         <div style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #2f855a; margin-bottom: 6px;">Criteria</div>
         <ul style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px; font-weight: 400; line-height: 1.5; color: #4a5568;">
             <li>Date basis: <strong>{{ $basisLabel ?? 'Settlement date' }}</strong></li>
-            <li>Fund purchase/redemption transactions with status: <strong>{{ $fundCriteria ?? 'Confirmed' }}</strong></li>
-            <li>Trust transactions: <strong>{{ $trustCriteria ?? 'excluded' }}</strong></li>
+            <li>Audited CAD direct cash transactions with status: <strong>{{ $fundCriteria ?? 'Confirmed' }}</strong></li>
         </ul>
         @if($viefundTransactions->count())
             @php

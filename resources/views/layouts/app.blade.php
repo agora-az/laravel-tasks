@@ -29,6 +29,7 @@
                     @if(!in_array('reports', config('app.nav_hide')))
                     <a href="{{ route('reports.index') }}">Reports</a>
                     @endif
+                    <a href="{{ route('docs.index') }}">Docs</a>
                     <form method="POST" action="{{ route('logout') }}" style="margin: 0;">
                         @csrf
                         <button type="submit" class="top-nav-logout-btn">Logout</button>

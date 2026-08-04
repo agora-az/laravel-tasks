@@ -10,7 +10,7 @@
 @section('content')
 <div style="margin: 20px 0;">
     <h2 style="margin: 0;">Daily Totals Comparison</h2>
-    <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. cached VieFund daily net total</div>
+    <div style="color: #718096; font-size: 13px; margin-top: 4px;">Bank net total vs. audited VieFund CAD direct cash total</div>
     <div id="daily-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
         <span id="daily-sync-status"></span>
         <button type="button" id="daily-sync-status-dismiss" aria-label="Dismiss sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
@@ -159,15 +159,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const applyBtn = document.getElementById('daily-apply-btn');
     const resyncBtn = document.getElementById('daily-resync-btn');
 
-    const sig = (basis, statuses, trust) =>
-        JSON.stringify([basis, statuses.map(Number).sort((a, b) => a - b), trust.slice().sort()]);
+    const sig = (basis, statuses) =>
+        JSON.stringify([basis, statuses.map(Number).sort((a, b) => a - b)]);
 
-    const loadedSig = sig(cfg.loadedBasis, cfg.loadedStatuses, cfg.loadedTrust);
+    const loadedSig = sig(cfg.loadedBasis, cfg.loadedStatuses);
 
     const currentSelection = () => ({
         basis: form.querySelector('[name="date_basis"]').value,
         statuses: Array.from(form.querySelectorAll('input[name="statuses[]"]:checked')).map(el => Number(el.value)),
-        trust: Array.from(form.querySelectorAll('input[name="trust_statuses[]"]:checked')).map(el => el.value),
     });
 
     const refreshButtons = () => {
@@ -178,7 +177,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         const sel = currentSelection();
-        const changed = sig(sel.basis, sel.statuses, sel.trust) !== loadedSig;
+        const changed = sig(sel.basis, sel.statuses) !== loadedSig;
         // Changed selection → Apply (loads/auto-builds it). Unchanged + cached → Resync.
         if (applyBtn) applyBtn.style.display = (changed || !cfg.cached) ? '' : 'none';
         if (resyncBtn) resyncBtn.style.display = (!changed && cfg.cached) ? '' : 'none';
@@ -222,17 +221,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     @endforeach
                 </div>
             </fieldset>
-            <fieldset style="border:1px solid #e2e8f0; border-radius:8px; padding:8px 12px; margin:0;">
-                <legend style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:#4a5568; padding:0 4px;">Trust status <span style="font-weight:400; text-transform:none; letter-spacing:0; color:#718096;">(none = excluded)</span></legend>
-                <div style="display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#2d3748;">
-                    @foreach($trustStatusOptions as $name)
-                        <label style="display:flex; align-items:center; gap:4px; white-space:nowrap; cursor:pointer;">
-                            <input type="checkbox" name="trust_statuses[]" value="{{ $name }}" @checked(in_array($name, $selectedTrustStatuses, true))>
-                            {{ $name }}
-                        </label>
-                    @endforeach
-                </div>
-            </fieldset>
+            <div style="font-size:12px;color:#4a5568;">
+                Source: <strong>Audited CAD direct cash snapshots</strong>
+            </div>
         </div>
         <div style="display:flex; gap:12px; align-items:center;">
             <div id="daily-last-updated" style="font-size:11px; color:#718096; white-space:nowrap; text-align:right;">
@@ -255,7 +246,6 @@ document.addEventListener('DOMContentLoaded', function () {
         $dailyVariantConfig = [
             'loadedBasis' => $selectedBasis,
             'loadedStatuses' => array_values($selectedStatuses),
-            'loadedTrust' => array_values($selectedTrustStatuses),
             'cached' => (bool) $viefundVariantSynced,
             'autoSync' => (bool) $autoSync,
             'syncInProgress' => (bool) $syncInProgress,
@@ -300,9 +290,6 @@ document.addEventListener('DOMContentLoaded', function () {
         <input type="hidden" name="date_basis" value="{{ $selectedBasis }}">
         @foreach($selectedStatuses as $sid)
             <input type="hidden" name="statuses[]" value="{{ $sid }}">
-        @endforeach
-        @foreach($selectedTrustStatuses as $tname)
-            <input type="hidden" name="trust_statuses[]" value="{{ $tname }}">
         @endforeach
         <div>
             <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Date From</label>
@@ -351,12 +338,14 @@ document.addEventListener('DOMContentLoaded', function () {
         </div>
         <div style="margin-left: auto; max-width: 760px; width: 100%; display: flex; flex-direction: column; align-items: flex-end; text-align: right;">
         <details style="display: block; width: 100%; text-align: right;">
-            <summary title="Calculating VieFund purchase or redemption cash transactions that are confirmed. {{ $onlyFundservBank ? 'Calculating only bank transactions where counterparty contains fundserv.' : 'Calculating all bank transactions.' }}" style="cursor: pointer; color: #2c5282; font-size: 13px; font-weight: 600; text-decoration: underline;">
+            <summary title="Comparing audited VieFund CAD direct cash totals with bank transactions by day." style="cursor: pointer; color: #2c5282; font-size: 13px; font-weight: 600; text-decoration: underline;">
                 Transaction Criteria
             </summary>
             <div style="margin-top: 8px; color: #4a5568; font-size: 13px; line-height: 1.5; text-align: left; display: inline-block;">
                 <ul style="margin: 0; padding-left: 20px;">
-                    <li>Calculating VieFund purchase or redemption cash transactions that are confirmed.</li>
+                    <li>VieFund totals use the same audited CAD direct cash snapshots as the Daily Net + Running Balance report.</li>
+                    <li>Date basis: <strong>{{ $dateBasisOptions[$selectedBasis] ?? $selectedBasis }}</strong>.</li>
+                    <li>Cash transaction status: <strong>{{ collect($selectedStatuses)->map(fn($id) => $fundStatusOptions[$id] ?? $id)->implode(', ') }}</strong>.</li>
                     <li>
                         @if($onlyFundservBank)
                             Calculating only bank transactions where counterparty contains "fundserv".
@@ -433,7 +422,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 </a>
                             </td>
                             <td style="text-align: right;font-weight: 500; color: {{ abs($row['variance']) < 0.01 ? '#276749' : '#e53e3e' }};">
-                                <a href="{{ route('reconciliations.daily-totals.variance-day', ['date' => $row['total_date'], 'only_fundserv_bank' => $onlyFundservBank ? 1 : 0]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
+                                <a href="{{ route('reconciliations.daily-totals.variance-day', ['date' => $row['total_date'], 'only_fundserv_bank' => $onlyFundservBank ? 1 : 0, 'variant' => $variantKey]) }}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">
                                     {{ $row['variance'] < 0 ? '($'.number_format(abs($row['variance']),2).')' : '$'.number_format($row['variance'],2) }}
                                 </a>
                             </td>
