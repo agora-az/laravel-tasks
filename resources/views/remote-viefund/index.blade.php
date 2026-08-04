@@ -626,6 +626,14 @@
                     }
                 });
 
+                const form = document.getElementById('viefund-filter-form');
+                if (form) {
+                    form.addEventListener('submit', () => {
+                        input.value.split(',').forEach(v => addTag(v));
+                        input.value = '';
+                    });
+                }
+
                 syncHidden();
             }
 

@@ -5,11 +5,12 @@ namespace App\Exports;
 use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Concerns\WithColumnWidths;
+use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
 use Maatwebsite\Excel\Concerns\WithTitle;
 use Maatwebsite\Excel\Events\AfterSheet;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
-class VieFundReportSheetExport implements FromArray, WithColumnWidths, WithEvents, WithTitle
+class VieFundReportSheetExport implements FromArray, WithColumnWidths, WithEvents, WithStrictNullComparison, WithTitle
 {
     /**
      * @param array<int, array<int, string|int|float|null>> $rows

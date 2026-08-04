@@ -366,10 +366,21 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         }
         if (!empty($filters['trx_id'])) {
             $trxIds = array_values(array_filter(array_map('trim', explode(',', $filters['trx_id']))));
+            $normalizedTrxIds = array_map(
+                static fn($id) => preg_replace('/^[CFT]-?/i', '', $id),
+                $trxIds
+            );
             if (count($trxIds) === 1) {
-                $query->whereRaw("CAST(l.iTrxID AS NVARCHAR) LIKE ?", ['%' . $trxIds[0] . '%']);
+                $query->where(function ($trxQuery) use ($normalizedTrxIds) {
+                    $trxQuery->whereRaw("CAST(l.iTrxID AS NVARCHAR) LIKE ?", ['%' . $normalizedTrxIds[0] . '%'])
+                        ->orWhereRaw("CAST(ct.ID AS NVARCHAR) LIKE ?", ['%' . $normalizedTrxIds[0] . '%']);
+                });
             } else {
-                $query->whereIn('l.iTrxID', array_map('intval', $trxIds));
+                $numericTrxIds = array_map('intval', $normalizedTrxIds);
+                $query->where(function ($trxQuery) use ($numericTrxIds) {
+                    $trxQuery->whereIn('l.iTrxID', $numericTrxIds)
+                        ->orWhereIn('ct.ID', $numericTrxIds);
+                });
             }
         }
         if (!empty($filters['source_id'])) {
@@ -1568,15 +1579,22 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if (!empty($byAccount)) {
             $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
             $cashAccountScope['currency_code'] ??= '00';
-            $accountStatuses = DB::connection(self::CONNECTION)
+            $accountStatusQuery = DB::connection(self::CONNECTION)
                 ->table("{$schema}.UB_Plan as p")
                 ->leftJoin("{$schema}.UB_Customer as plan_owner", 'plan_owner.ID', '=', 'p.iClientID')
-                ->whereIn('p.DealerAccountID', array_keys($byAccount))
+                ->whereNotNull('p.DealerAccountID')
+                ->where('p.DealerAccountID', '<>', '')
                 ->selectRaw('p.DealerAccountID AS account_id')
                 ->selectRaw('p.iClientID AS plan_owner_id')
                 ->selectRaw("TRIM(CONCAT(ISNULL(plan_owner.FirstName, ''), ' ', ISNULL(plan_owner.LastName, ''))) AS plan_owner_name")
                 ->selectRaw("(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'AccountStatus') . ") AS cash_account_status")
-                ->selectRaw("(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'CurrencyCode') . ") AS cash_currency_code")
+                ->selectRaw("(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'CurrencyCode') . ") AS cash_currency_code");
+
+            if (count($byAccount) <= 1000) {
+                $accountStatusQuery->whereIn('p.DealerAccountID', array_keys($byAccount));
+            }
+
+            $accountStatuses = $accountStatusQuery
                 ->get()
                 ->keyBy(fn($row) => trim((string) $row->account_id));
 

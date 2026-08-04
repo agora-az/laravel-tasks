@@ -246,8 +246,8 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ['Generated At', now()->toDateTimeString()],
             ['Total Settled Balance', $format === 'excel' ? $totalBalance : $this->formatAccountingCurrency($totalBalance)],
             ['Future Settlement Cash (Info)', $format === 'excel' ? $totalFutureSettlementCash : $this->formatAccountingCurrency($totalFutureSettlementCash)],
-            ['Future Settlement Cash Included in Client Estimate', $format === 'excel' ? $futureSettlementCashIncludedInEstimate : $this->formatAccountingCurrency($futureSettlementCashIncludedInEstimate)],
-            ['Future Settlement Cash Excluded from Client Estimate', $format === 'excel' ? $totalClientExcludedFutureSettlementCash : $this->formatAccountingCurrency($totalClientExcludedFutureSettlementCash)],
+            ['FSC Linked to Used Trust (Client Reported)', $format === 'excel' ? $futureSettlementCashIncludedInEstimate : $this->formatAccountingCurrency($futureSettlementCashIncludedInEstimate)],
+            ['FSC Linked to Unused Trust', $format === 'excel' ? $totalClientExcludedFutureSettlementCash : $this->formatAccountingCurrency($totalClientExcludedFutureSettlementCash)],
             ['Potential Client VieFund Balance (Estimate)', $format === 'excel' ? $potentialClientVieFundBalance : $this->formatAccountingCurrency($potentialClientVieFundBalance)],
         ];
 

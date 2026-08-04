@@ -62,7 +62,9 @@ When supplied, the report:
 
 - excludes cash accounts opened after that timestamp
 - excludes transactions created after that timestamp
-- narrowly reconstructs a currently Deleted cash transaction as Confirmed when a linked fund or trust record proves the deletion occurred after the timestamp
+- may reconstruct a currently Deleted cash transaction as Confirmed when a linked fund or trust record has a last-modified time after the simulated generation time
+
+The linked timestamps come from `UB_FundTrx.dtLastModified` and `UB_TrustTrx.dtLastModified`, not from the cash transaction's status history. A cash transaction reaches `UB_FundTrx` through `UB_FundTrxCash`; it reaches `UB_TrustTrx` through `UB_CashTrx.iTrustTrxID`. These fields show that a related record changed after the simulated generation time, but they do not identify what changed or prove that the change was the deletion. The reconstruction is therefore an inference used to reproduce a validated historical report, not independently verified status history.
 
 Enter the client report's actual generation time when known. If only an email or delivery time is known, it can be used as an upper bound, but the Summary sheet should be reviewed to confirm the timestamp used. VieFund timestamps and validated report times are interpreted in Eastern time.
 
@@ -79,10 +81,10 @@ The main report flags positive Confirmed cash linked to an Unsettled trust trans
 
 Future-settlement cash is not automatically added to the settled balance.
 
-The report classifies each flagged cash transaction from the current linked Unsettled trust state:
+The report classifies each flagged cash transaction from the current linked Unsettled trust state. The Summary labels refer to the full future-settlement cash amount linked to each trust transaction, not the numeric value stored in `mAmountUsed`:
 
-- **Included in Client Estimate** on a Direct Cash Ledger settlement-date report when the linked trust has an amount used (`mAmountUsed > 0`) or no amount left (`mAmountLeft <= 0`). This indicates that the trust transaction has been used at least partly or has no remaining amount awaiting use.
-- **Excluded from Client Estimate** when the linked trust has nothing used (`mAmountUsed = 0`) and still has an amount left (`mAmountLeft > 0`). This indicates that the trust transaction remains wholly unused.
+- **FSC Linked to Used Trust (Client Reported)** on a Direct Cash Ledger settlement-date report when the linked trust has an amount used (`mAmountUsed > 0`) or no amount left (`mAmountLeft <= 0`). This cash is added to the client-compatible estimate because the validated client report included it.
+- **FSC Linked to Unused Trust** when the linked trust has nothing used (`mAmountUsed = 0`) and still has an amount left (`mAmountLeft > 0`). This cash remains excluded from the client-compatible estimate.
 
 For trade-date and other report modes, no separate future amount is added to the estimate, so the Summary classifies all informational future cash as excluded from the estimate. On a trade-date report, eligible future-settling cash is already included in the report total. This reproduces the observed VieFund client-report treatment without using an account-specific exception.
 
@@ -98,12 +100,12 @@ The Summary sheet exposes the reconciliation directly:
 
 ```text
 Future Settlement Cash (Info)
-	= Future Settlement Cash Included in Client Estimate
-	+ Future Settlement Cash Excluded from Client Estimate
+	= FSC Linked to Used Trust (Client Reported)
+	+ FSC Linked to Unused Trust
 
 Potential Client VieFund Balance (Estimate)
 	= Total Settled Balance
-	+ Future Settlement Cash Included in Client Estimate  [Settlement date only]
+	+ FSC Linked to Used Trust (Client Reported)  [Settlement date only]
 ```
 
 This value is derived from the current ledger and linked trust state. It is an estimate of what the client VieFund report may display, not a stored VieFund report total and not a substitute for account-level reconciliation.
@@ -206,8 +208,8 @@ Confirm these values before comparing totals:
 - **Plan Accounts**
 - **Total Settled Balance**
 - **Future Settlement Cash (Info)**
-- **Future Settlement Cash Included in Client Estimate**
-- **Future Settlement Cash Excluded from Client Estimate**
+- **FSC Linked to Used Trust (Client Reported)**
+- **FSC Linked to Unused Trust**
 - **Potential Client VieFund Balance (Estimate)**
 
 The generated-at time records when this application completed the export. It is different from the simulated generation time.
@@ -220,7 +222,7 @@ The VieFund replica is refreshed from production. Current balances, statuses, an
 
 ### Historical status reconstruction is intentionally narrow
 
-The report does not generally include Deleted transactions. It reconstructs a currently deleted transaction only when linked modification timestamps support that it was deleted after the simulated report generation time. This avoids overstating balances by treating all current deletions as historically confirmed.
+The report does not generally include Deleted transactions. With a simulated generation time, it currently includes a deleted cash transaction when a linked `UB_FundTrx.dtLastModified` or `UB_TrustTrx.dtLastModified` is later than that time. This indicates that a related record changed later; it does not prove which field changed or when the cash status became Deleted. Without a later linked timestamp, the deleted transaction remains excluded unless Deleted was explicitly selected.
 
 ### Future-settlement information is not a settled balance
 

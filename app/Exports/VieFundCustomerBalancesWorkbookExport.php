@@ -6,7 +6,7 @@ use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 
 class VieFundCustomerBalancesWorkbookExport implements WithMultipleSheets
 {
-    private const ACCOUNTING_CURRENCY_FORMAT = '$#,##0.00;[Red]($#,##0.00)';
+    private const ACCOUNTING_CURRENCY_FORMAT = '$#,##0.00;[Red]($#,##0.00);$0.00';
 
     /**
      * @param array<int, array<int, string|int|float|null>> $reportRows
