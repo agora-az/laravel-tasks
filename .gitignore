@@ -35,3 +35,4 @@ resources/data/viefund_db_schema
 /storage/app/*.lock
 storage/app/reports
 /resources/data/
+*.pfx
