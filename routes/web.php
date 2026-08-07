@@ -70,6 +70,8 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/reports/viefund-daily-balance/download-latest', [VieFundReportsController::class, 'downloadLatestReport'])->name('reports.viefund-daily-balance.download-latest');
     Route::post('/reports/viefund-daily-balance/dismiss-latest', [VieFundReportsController::class, 'dismissLatestReport'])->name('reports.viefund-daily-balance.dismiss-latest');
     Route::post('/reports/viefund-cash-snapshots/{snapshot}/acknowledge', [VieFundReportsController::class, 'acknowledgeCashSnapshotChange'])->name('reports.viefund-cash-snapshots.acknowledge');
+    Route::post('/reports/viefund-cash-snapshots/acknowledge-all', [VieFundReportsController::class, 'acknowledgeAllCashSnapshotChanges'])->name('reports.viefund-cash-snapshots.acknowledge-all');
+    Route::get('/reports/viefund-cash-snapshots/unreviewed.csv', [VieFundReportsController::class, 'exportUnreviewedCashSnapshotChanges'])->name('reports.viefund-cash-snapshots.export-unreviewed');
     Route::post('/reports/viefund-customer-balances/run', [VieFundReportsController::class, 'runCustomerBalancesReport'])->name('reports.viefund-customer-balances.run');
     Route::get('/reports/viefund-customer-balances/status', [VieFundReportsController::class, 'customerBalancesReportStatus'])->name('reports.viefund-customer-balances.status');
     Route::get('/reports/viefund-customer-balances/download-latest', [VieFundReportsController::class, 'downloadLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.download-latest');

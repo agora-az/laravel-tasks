@@ -237,6 +237,13 @@ class SyncVieFundCustomersCommand extends Command
         $this->line("  → {$syncedTrx} transactions synced.");
         $this->info('Sync complete.');
 
+        file_put_contents(
+            storage_path('app/viefund-transactions-sync-status.json'),
+            json_encode([
+                'completed_at' => Carbon::now('UTC')->toIso8601String(),
+            ], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)
+        );
+
         // Remove the lock file so the UI knows the sync has finished
         $lockFile = storage_path('app/viefund-sync.lock');
         if (file_exists($lockFile)) {

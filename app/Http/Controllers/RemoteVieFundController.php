@@ -6,6 +6,7 @@ use App\Exports\VieFundReportSheetExport;
 use App\Models\RemoteVieFundCustomerTransaction;
 use App\Services\VieFund\VieFundRemoteService;
 use Exception;
+use Illuminate\Support\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -60,6 +61,7 @@ class RemoteVieFundController extends Controller
         // Three states: in-progress (lock file present) → needs sync → up to date
         $syncInProgress = false;
         $syncNeeded     = false;
+        $lastSyncedAt   = $this->lastSuccessfulTransactionSyncAt();
 
         $lockFile = storage_path('app/viefund-sync.lock');
         if (file_exists($lockFile) && (time() - filemtime($lockFile)) < 14400) {
@@ -168,7 +170,8 @@ class RemoteVieFundController extends Controller
             'bannerName',
             'availableTrxTypes',
             'syncNeeded',
-            'syncInProgress'
+            'syncInProgress',
+            'lastSyncedAt'
         ));
     }
 
@@ -361,7 +364,29 @@ class RemoteVieFundController extends Controller
             }
         }
 
-        return response()->json(['inProgress' => $inProgress, 'syncNeeded' => $syncNeeded]);
+        $lastSyncedAt = $this->lastSuccessfulTransactionSyncAt();
+
+        return response()->json([
+            'inProgress' => $inProgress,
+            'syncNeeded' => $syncNeeded,
+            'lastSyncedAt' => $lastSyncedAt?->timezone(config('app.timezone'))->format('M j, Y g:i A T'),
+        ]);
+    }
+
+    private function lastSuccessfulTransactionSyncAt(): ?Carbon
+    {
+        $statusFile = storage_path('app/viefund-transactions-sync-status.json');
+        if (!file_exists($statusFile)) {
+            return null;
+        }
+
+        try {
+            $status = json_decode((string) file_get_contents($statusFile), true, flags: JSON_THROW_ON_ERROR);
+
+            return isset($status['completed_at']) ? Carbon::parse($status['completed_at']) : null;
+        } catch (Exception) {
+            return null;
+        }
     }
 
     public function sync(Request $request): RedirectResponse

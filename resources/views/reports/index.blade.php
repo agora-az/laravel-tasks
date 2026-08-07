@@ -533,14 +533,28 @@
             <div style="font-size:16px; font-weight:700; color:#2d3748;">Cash Snapshot Monitoring</div>
             <div style="font-size:13px; color:#4a5568; margin-top:4px;">Daily direct-cash baselines, verification runs, and changed-day audit flags.</div>
         </div>
-        @if(session('snapshot_review_success'))
-            <div class="report-local-notice" style="margin:0;">{{ session('snapshot_review_success') }}</div>
-        @endif
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+            @if($unreviewedCashSnapshotCount > 0)
+                <a href="{{ route('reports.viefund-cash-snapshots.export-unreviewed') }}" class="report-action-button" style="display:inline-flex; align-items:center; text-decoration:none; border-radius:4px; padding:7px 10px; font-size:11px; font-weight:700;">Download CSV</a>
+                <form method="POST" action="{{ route('reports.viefund-cash-snapshots.acknowledge-all') }}" onsubmit="return confirm('Acknowledge all currently changed days? The audit history will be retained.');">
+                    @csrf
+                    <button type="submit" class="report-action-button" style="border:0; border-radius:4px; padding:7px 10px; font-size:11px; font-weight:700; cursor:pointer;">Acknowledge all</button>
+                </form>
+            @endif
+            @if(session('snapshot_review_success'))
+                <div class="report-local-notice" style="margin:0;">{{ session('snapshot_review_success') }}</div>
+            @endif
+        </div>
     </div>
 
     <div class="snapshot-monitor-grid">
         <div style="min-width:0; overflow-x:auto;">
-            <div style="font-size:12px; font-weight:700; color:#4a5568; margin-bottom:8px;">Unreviewed Changed Days</div>
+            <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px;">
+                <div style="font-size:12px; font-weight:700; color:#4a5568;">Unreviewed Changed Days</div>
+                @if($unreviewedCashSnapshotCount > 0)
+                    <div style="font-size:11px; color:#64748b; font-family:monospace;">{{ number_format($unreviewedCashSnapshotCount) }} changed {{ $unreviewedCashSnapshotCount === 1 ? 'day' : 'days' }}{{ $unreviewedCashSnapshotCount > $cashSnapshotChanges->count() ? ' · latest 20 shown' : '' }}</div>
+                @endif
+            </div>
             <table style="width:100%; border-collapse:collapse; font-size:12px; white-space:nowrap;">
                 <thead>
                     <tr style="text-align:left; border-bottom:1px solid #cbd5e1;">

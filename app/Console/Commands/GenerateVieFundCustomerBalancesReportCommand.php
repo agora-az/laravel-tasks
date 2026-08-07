@@ -150,6 +150,13 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'status_ids' => $statuses,
             'trust_status_names' => $trustStatuses,
         ]);
+        $cutoffReview = collect();
+        if ($balanceSource === 'transaction_rollup' && $simulatedGenerationTime !== '') {
+            $cutoffReview = $this->vieFundRemoteService->fetchCustomerBalanceCutoffReview($reportDate, $dateBasis, [
+                'cutoff' => $simulatedGenerationTime,
+                'status_ids' => $statuses,
+            ]);
+        }
 
         $cashSnapshotByAccountId = collect();
         $cashSnapshotByPlanId = collect();
@@ -160,9 +167,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         }
 
         $totalAccounts = $balances->count();
+        $totalPlanAccounts = $balances->pluck('plan_id')->unique()->count();
         $totalBalance = 0.0;
         $totalFutureSettlementCash = 0.0;
-        $totalClientEligibleFutureSettlementCash = 0.0;
         $rows = [];
 
         foreach ($balances->values() as $index => $row) {
@@ -178,7 +185,6 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                     $computedBalance = 0.0;
                 }
             }
-
             $totalBalance += $computedBalance;
             $futureSettlementCount = (int) ($row->future_settlement_transaction_count ?? 0);
             $futureSettlementCash = (float) ($row->future_settlement_cash ?? 0);
@@ -186,7 +192,6 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                 ? Carbon::parse($row->next_settlement_date)->toDateString()
                 : '';
             $totalFutureSettlementCash += $futureSettlementCash;
-            $totalClientEligibleFutureSettlementCash += (float) ($row->client_eligible_future_settlement_cash ?? 0);
             $rows[] = [
                 trim((string) ($row->client_name ?? '')),
                 (string) ($row->rep_code ?? ''),
@@ -199,7 +204,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                 $format === 'excel' ? $futureSettlementCash : $this->formatAccountingCurrency($futureSettlementCash),
                 $nextSettlementDate,
                 $futureSettlementCount > 0
-                    ? 'Positive confirmed cash linked to unsettled trust; excluded from settled balance pending clarification.'
+                    ? 'Positive confirmed cash linked to unsettled trust; review required.'
                     : '',
             ];
 
@@ -226,13 +231,13 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ]);
         }
 
-        $futureSettlementCashIncludedInEstimate = $balanceSource === 'transaction_rollup'
-            && $dateBasis === 'settlement_date'
-                ? $totalClientEligibleFutureSettlementCash
-                : 0.0;
-        $potentialClientVieFundBalance = $totalBalance + $futureSettlementCashIncludedInEstimate;
-        $totalClientExcludedFutureSettlementCash = $totalFutureSettlementCash
-            - $futureSettlementCashIncludedInEstimate;
+        $historicalInferenceCandidates = $cutoffReview
+            ->where('review_type', 'Historical inference candidate');
+        $duplicateCashAccountPatterns = $cutoffReview
+            ->where('review_type', 'Duplicate cash-account pattern');
+        $duplicateAccountRowCount = (int) $duplicateCashAccountPatterns->sum('deduped_account_count');
+        $historicalInferenceAdjustment = (float) $historicalInferenceCandidates->sum('inference_amount');
+        $inferredClientBalance = $totalBalance + $historicalInferenceAdjustment;
 
         $metadataRows = [
             ['Report', 'VieFund Customer Balances'],
@@ -240,16 +245,68 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ['Date Basis', $dateBasisLabel],
             ['Balance Source', self::BALANCE_SOURCE_LABELS[$balanceSource]],
             ['Cash Statuses', $statusLabel],
-            ['Future Settlement Review', 'Positive confirmed cash linked to Unsettled trust'],
+            ['Status Evaluation', 'Current replica status; historical inference shown separately for review'],
             ['Simulated Generation Time', $simulatedGenerationTime !== '' ? $simulatedGenerationTime : 'Not set'],
-            ['Plan Accounts', $format === 'excel' ? $totalAccounts : number_format($totalAccounts)],
+            ['Plan Accounts (Distinct)', $format === 'excel' ? $totalPlanAccounts : number_format($totalPlanAccounts)],
+            ['Duplicate Cash Account Rows (Included)', $format === 'excel' ? $duplicateAccountRowCount : number_format($duplicateAccountRowCount)],
+            ['Reported Account Rows', $format === 'excel' ? $totalAccounts : number_format($totalAccounts)],
             ['Generated At', now()->toDateTimeString()],
             ['Total Settled Balance', $format === 'excel' ? $totalBalance : $this->formatAccountingCurrency($totalBalance)],
-            ['Future Settlement Cash (Info)', $format === 'excel' ? $totalFutureSettlementCash : $this->formatAccountingCurrency($totalFutureSettlementCash)],
-            ['FSC Linked to Used Trust (Client Reported)', $format === 'excel' ? $futureSettlementCashIncludedInEstimate : $this->formatAccountingCurrency($futureSettlementCashIncludedInEstimate)],
-            ['FSC Linked to Unused Trust', $format === 'excel' ? $totalClientExcludedFutureSettlementCash : $this->formatAccountingCurrency($totalClientExcludedFutureSettlementCash)],
-            ['Potential Client VieFund Balance (Estimate)', $format === 'excel' ? $potentialClientVieFundBalance : $this->formatAccountingCurrency($potentialClientVieFundBalance)],
+            ['Future Settlement Cash (Review Required)', $format === 'excel' ? $totalFutureSettlementCash : $this->formatAccountingCurrency($totalFutureSettlementCash)],
+            ['Cutoff Review Records', $format === 'excel' ? $cutoffReview->count() : number_format($cutoffReview->count())],
+            ['Historical Inference Candidates', $format === 'excel' ? $historicalInferenceCandidates->count() : number_format($historicalInferenceCandidates->count())],
+            ['Historical Inference Adjustment (Review Required)', $format === 'excel' ? $historicalInferenceAdjustment : $this->formatAccountingCurrency($historicalInferenceAdjustment)],
+            ['Inferred Client Balance (Review Required)', $format === 'excel' ? $inferredClientBalance : $this->formatAccountingCurrency($inferredClientBalance)],
         ];
+
+        $reviewHeaders = [
+            'Review Type',
+            'Review Reason',
+            'Plan Account ID',
+            'Cash Account ID',
+            'Account Status',
+            'Record ID',
+            'Current Cash Status',
+            'Amount / Current Balance',
+            'Selected Date',
+            'Created / Opened At',
+            'Linked Record Last Modified At',
+            'Linked Trust Amount Left',
+            'Suggested Inference Treatment',
+            'Inference Adjustment',
+            'Source Cash Accounts',
+            'Deduped Account Count',
+            'Review Decision',
+            'Review Notes',
+        ];
+        $reviewRows = $cutoffReview->map(function ($row): array {
+            $currentStatus = $row->current_status;
+            if ($currentStatus !== null && $currentStatus !== '') {
+                $statusId = (int) $currentStatus;
+                $currentStatus = $statusId . ' - ' . (self::FUND_STATUS_LABELS[$statusId] ?? 'Unknown');
+            }
+
+            return [
+                (string) ($row->review_type ?? ''),
+                (string) ($row->review_reason ?? ''),
+                (string) ($row->plan_account_id ?? ''),
+                $this->normalizeAccountIdentifier((string) ($row->account_id ?? '')),
+                (string) ($row->account_status ?? ''),
+                (string) ($row->record_id ?? ''),
+                (string) $currentStatus,
+                (float) ($row->amount ?? 0),
+                !empty($row->selected_date) ? Carbon::parse($row->selected_date)->toDateTimeString() : '',
+                !empty($row->created_at) ? Carbon::parse($row->created_at)->toDateTimeString() : '',
+                !empty($row->linked_modified_at) ? Carbon::parse($row->linked_modified_at)->toDateTimeString() : '',
+                $row->linked_trust_amount_left !== null ? (float) $row->linked_trust_amount_left : null,
+                (string) ($row->inference_treatment ?? ''),
+                (float) ($row->inference_amount ?? 0),
+                (int) ($row->source_row_count ?? 0),
+                (int) ($row->deduped_account_count ?? 0),
+                '',
+                '',
+            ];
+        })->all();
 
         $headers = [
             'Client Name',
@@ -269,7 +326,8 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             Excel::store(
                 new VieFundCustomerBalancesWorkbookExport(
                     [$headers, ...$rows],
-                    [['Summary Item', 'Value'], ...$metadataRows]
+                    [['Summary Item', 'Value'], ...$metadataRows],
+                    [$reviewHeaders, ...$reviewRows]
                 ),
                 $outputRelativePath,
                 null,

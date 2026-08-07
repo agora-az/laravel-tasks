@@ -58,13 +58,13 @@ Schedule::command('viefund:sync-cash-daily-snapshots --full --date-basis=trade_d
     ->runInBackground();
 
 Schedule::command('viefund:sync-customers')
-    ->dailyAt('22:00')
+    ->dailyAt('22:30')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
 
 Schedule::command('bank:sync-entries --parser=v2 --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
-    ->dailyAt('01:00')
+    ->dailyAt('23:00')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();

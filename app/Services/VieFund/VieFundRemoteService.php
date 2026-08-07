@@ -71,6 +71,11 @@ class VieFundRemoteService
         return $this->repository->fetchCustomerBalancesByDate($asOfDate, $dateColumn, $filters);
     }
 
+    public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
+    {
+        return $this->repository->fetchCustomerBalanceCutoffReview($asOfDate, $dateColumn, $filters);
+    }
+
     public function fetchCustomerCashBalanceTotal(): float
     {
         return $this->repository->fetchCustomerCashBalanceTotal();

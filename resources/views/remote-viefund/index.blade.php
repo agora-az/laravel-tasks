@@ -71,7 +71,7 @@
 @section('content')
     <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
         <h2 style="margin: 0;">VieFund Customer Transactions</h2>
-        <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-end;">
             <div id="sync-status-badge">
                 @if($syncInProgress)
                     <span class="sync-chip sync-chip-progress">
@@ -102,6 +102,10 @@
                         ✓ Transactions Synced
                     </span>
                 @endif
+            </div>
+            <div id="last-synced-at" style="font-size: 12px; color: #718096; white-space: nowrap;">
+                Last synced:
+                <span style="font-family: monospace; color: #4a5568;">{{ $lastSyncedAt?->timezone(config('app.timezone'))->format('M j, Y g:i A T') ?? 'Not recorded' }}</span>
             </div>
         </div>
     </div>
@@ -1600,6 +1604,7 @@ const sharedCols = [
             if (!inProgress) return;
 
             var badge = document.getElementById('sync-status-badge');
+            var lastSyncedAt = document.querySelector('#last-synced-at span');
             var timer = setInterval(function () {
                 fetch('{{ route('remote-viefund.sync-status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
                     .then(function (r) { return r.json(); })
@@ -1613,6 +1618,9 @@ const sharedCols = [
                         } else {
                             // All caught up
                             badge.innerHTML = '<span class="sync-chip sync-chip-success">✓ Transactions Synced</span>';
+                            if (lastSyncedAt && data.lastSyncedAt) {
+                                lastSyncedAt.textContent = data.lastSyncedAt;
+                            }
                         }
                     })
                     .catch(function () { /* network blip — keep polling */ });

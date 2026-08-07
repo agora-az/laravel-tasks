@@ -39,6 +39,8 @@ interface VieFundRemoteRepositoryInterface
 
     public function fetchCustomerBalancesByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection;
 
+    public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection;
+
     public function fetchCustomerCashBalanceTotal(): float;
 
     public function fetchDailySettlementFundTransactions(CarbonInterface $date, int $perPage = 250, int $page = 1): LengthAwarePaginator;

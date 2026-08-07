@@ -24,15 +24,15 @@ To reproduce the June 24, 2026 client report, a row must satisfy both timelines:
 
 These tables currently drive cash reconstruction:
 
-| Table | Exported rows | Role |
-| --- | ---: | --- |
-| `UB_FundTrx` | 4,670,859 | Fund transaction facts |
-| `UB_FundTrxDetail` | 4,670,859 | One-to-one settlement, fee, and confirmation detail |
-| `UB_FundTrxLookup` | 4,670,859 | Report-oriented fund transaction lookup and allocation rows |
-| `UB_TrustTrx` | 4,347,885 | Trust cash ledger |
-| `UB_CashTrx` | 4,333,224 | Cash-account ledger |
-| `UB_FundTrxCash` | 3,789,986 | Fund-to-cash transaction linkage |
-| `UB_RESPTrx` | 44,970 | RESP lifecycle and reversal linkage |
+| Table              | Exported rows | Role                                                        |
+| ------------------ | ------------: | ----------------------------------------------------------- |
+| `UB_FundTrx`       |     4,670,859 | Fund transaction facts                                      |
+| `UB_FundTrxDetail` |     4,670,859 | One-to-one settlement, fee, and confirmation detail         |
+| `UB_FundTrxLookup` |     4,670,859 | Report-oriented fund transaction lookup and allocation rows |
+| `UB_TrustTrx`      |     4,347,885 | Trust cash ledger                                           |
+| `UB_CashTrx`       |     4,333,224 | Cash-account ledger                                         |
+| `UB_FundTrxCash`   |     3,789,986 | Fund-to-cash transaction linkage                            |
+| `UB_RESPTrx`       |        44,970 | RESP lifecycle and reversal linkage                         |
 
 `UB_Def_TrxType`, `UB_Def_TrxStatus`, and `UB_Def_RESP_TrxType` decode the relevant type and status IDs.
 
@@ -69,15 +69,15 @@ These tables currently drive cash reconstruction:
 
 These tables can explain lineage but are not independent balance ledgers:
 
-| Tables | Purpose |
-| --- | --- |
-| `UB_FundTrxOrder`, `UB_FundTrxOrderARC`, `UB_FundTrxOrderTrx` | Order workflow, archived order state, and order-to-fund-transaction links |
-| `UB_FundTrxOrderTransfer` | Transfer source-account metadata |
-| `UB_FundTrxConversion` | Conversion source/destination links and rebate amounts |
-| `UB_FundTrxFeeInfo` | Fees attached to a fund transaction |
-| `UB_TrustTrxBank`, `UB_TrustTrxCheque`, `UB_TrustTrxEstate` | Payment destination and estate metadata |
-| `UB_TrxConfirmation`, `UB_TrxConfirmationClient` | Confirmation object/client delivery metadata; no transaction amount |
-| `UB_CompTrxApprovalStatus`, `UB_CompTrxApprovalStatusARC`, `UB_CompTrxApprovalStatusHistory` | Compliance approval state and history |
+| Tables                                                                                       | Purpose                                                                   |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `UB_FundTrxOrder`, `UB_FundTrxOrderARC`, `UB_FundTrxOrderTrx`                                | Order workflow, archived order state, and order-to-fund-transaction links |
+| `UB_FundTrxOrderTransfer`                                                                    | Transfer source-account metadata                                          |
+| `UB_FundTrxConversion`                                                                       | Conversion source/destination links and rebate amounts                    |
+| `UB_FundTrxFeeInfo`                                                                          | Fees attached to a fund transaction                                       |
+| `UB_TrustTrxBank`, `UB_TrustTrxCheque`, `UB_TrustTrxEstate`                                  | Payment destination and estate metadata                                   |
+| `UB_TrxConfirmation`, `UB_TrxConfirmationClient`                                             | Confirmation object/client delivery metadata; no transaction amount       |
+| `UB_CompTrxApprovalStatus`, `UB_CompTrxApprovalStatusARC`, `UB_CompTrxApprovalStatusHistory` | Compliance approval state and history                                     |
 
 ## Derived Sources
 

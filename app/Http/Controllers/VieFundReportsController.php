@@ -123,10 +123,16 @@ class VieFundReportsController extends Controller
         ));
         $cashSnapshotChanges = VieFundCashDailySnapshotChange::query()
             ->with('snapshot')
-            ->whereHas('snapshot', fn($query) => $query->where('has_unreviewed_change', true))
+            ->whereIn('id', VieFundCashDailySnapshotChange::query()
+                ->selectRaw('MAX(id)')
+                ->whereHas('snapshot', fn($query) => $query->where('has_unreviewed_change', true))
+                ->groupBy('snapshot_id'))
             ->latest('detected_at')
             ->limit(20)
             ->get();
+        $unreviewedCashSnapshotCount = VieFundCashDailySnapshot::query()
+            ->where('has_unreviewed_change', true)
+            ->count();
         $cashSnapshotRuns = VieFundCashSnapshotRun::query()
             ->latest('started_at')
             ->limit(8)
@@ -152,6 +158,7 @@ class VieFundReportsController extends Controller
             'customerBalanceCurrencyLabel' => $this->customerBalanceCurrencyLabelFromCode($customerBalanceCurrencyCode),
             'customerBalanceOpenedBefore' => $customerBalanceOpenedBefore,
             'cashSnapshotChanges' => $cashSnapshotChanges,
+            'unreviewedCashSnapshotCount' => $unreviewedCashSnapshotCount,
             'cashSnapshotRuns' => $cashSnapshotRuns,
             'inceptionDates' => $inceptionDates,
             'legacyInceptionDates' => $legacyInceptionDates,
@@ -170,6 +177,82 @@ class VieFundReportsController extends Controller
         return redirect()
             ->route('reports.index')
             ->with('snapshot_review_success', 'Snapshot change acknowledged. Its audit history was retained.');
+    }
+
+    public function acknowledgeAllCashSnapshotChanges(Request $request): RedirectResponse
+    {
+        $reviewedAt = now();
+        $reviewedByLabel = (string) $request->session()->get('user', 'authenticated user');
+        $acknowledged = VieFundCashDailySnapshot::query()
+            ->where('has_unreviewed_change', true)
+            ->update([
+                'has_unreviewed_change' => false,
+                'reviewed_at' => $reviewedAt,
+                'reviewed_by' => null,
+                'reviewed_by_label' => $reviewedByLabel,
+                'updated_at' => $reviewedAt,
+            ]);
+
+        return redirect()
+            ->route('reports.index')
+            ->with(
+                'snapshot_review_success',
+                sprintf('%s changed %s acknowledged. Audit history was retained.', number_format($acknowledged), $acknowledged === 1 ? 'day' : 'days')
+            );
+    }
+
+    public function exportUnreviewedCashSnapshotChanges(): StreamedResponse
+    {
+        $changes = VieFundCashDailySnapshotChange::query()
+            ->with(['snapshot', 'run'])
+            ->whereHas('snapshot', fn($query) => $query->where('has_unreviewed_change', true))
+            ->oldest('detected_at')
+            ->get()
+            ->filter(function (VieFundCashDailySnapshotChange $change): bool {
+                $reviewedAt = $change->snapshot?->reviewed_at;
+
+                return $reviewedAt === null || $change->detected_at->gt($reviewedAt);
+            });
+
+        $filename = 'viefund_cash_snapshot_unreviewed_' . now()->format('Ymd_His') . '.csv';
+
+        return response()->streamDownload(function () use ($changes) {
+            $out = fopen('php://output', 'w');
+            fwrite($out, "\xEF\xBB\xBF");
+            fputcsv($out, [
+                'Date',
+                'Date Basis',
+                'Previous Count',
+                'New Count',
+                'Count Delta',
+                'Previous Net',
+                'New Net',
+                'Net Delta',
+                'Detected At',
+                'Run Type',
+                'Run ID',
+                'Algorithm Version',
+            ]);
+
+            foreach ($changes as $change) {
+                fputcsv($out, [
+                    $change->snapshot->total_date->toDateString(),
+                    self::DATE_BASIS_OPTIONS[$change->snapshot->date_basis] ?? $change->snapshot->date_basis,
+                    $change->previous_transaction_count,
+                    $change->new_transaction_count,
+                    $change->transaction_count_delta,
+                    number_format((float) $change->previous_net_total, 4, '.', ''),
+                    number_format((float) $change->new_net_total, 4, '.', ''),
+                    number_format((float) $change->net_total_delta, 4, '.', ''),
+                    $change->detected_at->format('Y-m-d H:i:s'),
+                    $change->run?->run_type ?? '',
+                    $change->run_id,
+                    $change->algorithm_version,
+                ]);
+            }
+
+            fclose($out);
+        }, $filename, ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
     private function resolveInceptionDate(string $dateBasis): ?string

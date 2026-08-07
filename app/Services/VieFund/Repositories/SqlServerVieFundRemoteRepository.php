@@ -722,30 +722,30 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         };
         $cashStatusIds = $this->resolveFundStatusIds($filters);
 
+        $normalizedAccountId = "CASE WHEN LEFT(ca.AccountID, 1) = '#' THEN SUBSTRING(ca.AccountID, 2, LEN(ca.AccountID) - 1) ELSE ca.AccountID END";
         $planAccounts = DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_Plan as p")
             ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->join("{$schema}.UB_CashAccount as ca", 'ca.iPlanID', '=', 'p.ID')
             ->whereNotNull('p.DealerAccountID')
             ->where('p.DealerAccountID', '<>', '')
             ->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID)
+            ->whereNotNull('ca.AccountID')
+            ->where('ca.AccountID', '<>', '')
             ->when(!empty($cashAccountScope['excluded_plan_accounts']), function ($query) use ($cashAccountScope) {
                 $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']);
             })
-            ->whereExists(function ($query) use ($schema, $cashAccountScope) {
-                $query->selectRaw('1')
-                    ->from("{$schema}.UB_CashAccount as ca")
-                    ->whereColumn('ca.iPlanID', 'p.ID')
-                    ->whereNotNull('ca.AccountID')
-                    ->where('ca.AccountID', '<>', '');
-
-                $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca');
-            })
+            ->tap(fn($query) => $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca'))
             ->selectRaw(
                 "p.ID AS plan_id, " .
                     "p.DealerAccountID AS plan_account_id, " .
                     "TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))) AS client_name, " .
-                    "(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'AccountID') . ") AS account_id, " .
-                    "(" . $this->buildBalanceReportCashAccountSelectSubquery($schema, $cashAccountScope, 'AccountStatus') . ") AS account_status"
+                    "{$normalizedAccountId} AS account_id, ca.AccountStatus AS account_status, ca.ID AS cash_account_row_id, " .
+                    "ROW_NUMBER() OVER (PARTITION BY p.ID ORDER BY " .
+                    "CASE WHEN {$normalizedAccountId} = p.ThirdPartyAccount THEN 0 ELSE 1 END, " .
+                    "CASE WHEN {$normalizedAccountId} = p.DealerAccountID THEN 0 ELSE 1 END, " .
+                    "CASE WHEN ca.AccountStatus IN ('A', 'Active') THEN 0 WHEN ca.AccountStatus IN ('T', 'Terminated') THEN 1 ELSE 2 END, " .
+                    "ISNULL(ca.dtCreated, '1900-01-01') ASC, {$normalizedAccountId} ASC, ca.ID ASC) AS cash_account_rank"
             )
             ->selectRaw("p.dtStartDate AS plan_start_date, p.dtEndDate AS plan_end_date");
 
@@ -780,20 +780,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->when(!empty($cashAccountScope['currency_code']), function ($query) use ($cashAccountScope) {
                 $query->where('ca.CurrencyCode', '=', $cashAccountScope['currency_code']);
             })
-            ->when(!empty($cashStatusIds), function ($query) use ($cashAccountScope, $cashStatusIds) {
-                $query->where(function ($statusQuery) use ($cashAccountScope, $cashStatusIds) {
-                    $statusQuery->whereIn('ct.iStatus', $cashStatusIds);
-
-                    if (!empty($cashAccountScope['opened_before'])) {
-                        $statusQuery->orWhere(function ($deletedAfterReport) use ($cashAccountScope) {
-                            $deletedAfterReport->where('ct.iStatus', 0)
-                                ->where(function ($linkedChange) use ($cashAccountScope) {
-                                    $linkedChange->where('t.dtLastModified', '>', $cashAccountScope['opened_before'])
-                                        ->orWhere('linked_tr.dtLastModified', '>', $cashAccountScope['opened_before']);
-                                });
-                        });
-                    }
-                });
+            ->when(!empty($cashStatusIds), function ($query) use ($cashStatusIds) {
+                $query->whereIn('ct.iStatus', $cashStatusIds);
             })
             ->selectRaw("\n                ct.iPlanID AS plan_id,\n                ct.ID AS cash_id,\n                MAX(ct.mAmount) AS cash_amount,\n                MAX(l.DealerRepCode) AS rep_code\n            ")
             ->groupBy('ct.iPlanID', 'ct.ID');
@@ -831,18 +819,157 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoinSub($futureSettlementCash, 'future_settlement_cash', 'future_settlement_cash.plan_id', '=', 'plans.plan_id');
 
         $query->selectRaw("\n            plans.client_name,\n            COALESCE(cash_balances.rep_code, '') AS rep_code,\n            plans.plan_account_id,\n            COALESCE(plans.account_id, plans.plan_account_id) AS account_id,\n            COALESCE(plans.account_status, '') AS account_status,
-            COALESCE(cash_balances.cash_transaction_count, 0) AS cash_transaction_count,
-            COALESCE(cash_balances.cash_ledger_balance, 0) AS cash_ledger_balance,
-            COALESCE(future_settlement_cash.future_settlement_transaction_count, 0) AS future_settlement_transaction_count,
-            COALESCE(future_settlement_cash.future_settlement_cash, 0) AS future_settlement_cash,
-            COALESCE(future_settlement_cash.client_eligible_future_settlement_cash, 0) AS client_eligible_future_settlement_cash,
-            future_settlement_cash.next_settlement_date
+            CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_transaction_count, 0) ELSE 0 END AS cash_transaction_count,
+            CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_ledger_balance, 0) ELSE 0 END AS cash_ledger_balance,
+            CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(future_settlement_cash.future_settlement_transaction_count, 0) ELSE 0 END AS future_settlement_transaction_count,
+            CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(future_settlement_cash.future_settlement_cash, 0) ELSE 0 END AS future_settlement_cash,
+            CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(future_settlement_cash.client_eligible_future_settlement_cash, 0) ELSE 0 END AS client_eligible_future_settlement_cash,
+            CASE WHEN plans.cash_account_rank = 1 THEN future_settlement_cash.next_settlement_date ELSE NULL END AS next_settlement_date
         ");
 
         return $query
-            ->selectRaw('COALESCE(cash_balances.cash_ledger_balance, 0) AS total_balance')
+            ->selectRaw('CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_ledger_balance, 0) ELSE 0 END AS total_balance')
+            ->selectRaw('plans.plan_id, plans.cash_account_row_id, plans.cash_account_rank')
             ->orderBy('plans.plan_account_id')
+            ->orderBy('plans.cash_account_rank')
             ->get();
+    }
+
+    public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $cutoff = trim((string) ($filters['cutoff'] ?? ''));
+        if ($cutoff === '') {
+            return collect();
+        }
+
+        $to = $asOfDate->copy()->addDay()->startOfDay()->toDateTimeString();
+        $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
+        $cashStatusIds = $this->resolveFundStatusIds($filters);
+        $cashDateColumn = match ($dateColumn) {
+            'create_date' => 'ct.dtCreated',
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+            default => throw new InvalidArgumentException('Invalid date column selected for report.'),
+        };
+
+        $applyPlanScope = function ($query) use ($cashAccountScope): void {
+            $query->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID)
+                ->when(!empty($cashAccountScope['excluded_plan_accounts']), function ($query) use ($cashAccountScope) {
+                    $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']);
+                });
+        };
+        $applyCurrencyScope = function ($query) use ($cashAccountScope): void {
+            $query->when(!empty($cashAccountScope['currency_code']), function ($query) use ($cashAccountScope) {
+                $query->where('ca.CurrencyCode', '=', $cashAccountScope['currency_code']);
+            });
+        };
+
+        $historicalInference = collect();
+        if (in_array(6, $cashStatusIds, true) && !in_array(0, $cashStatusIds, true)) {
+            $historicalInference = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_CashTrx as ct")
+                ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
+                ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')
+                ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iCashTrxID', '=', 'ct.ID')
+                ->leftJoin("{$schema}.UB_FundTrx as t", 't.ID', '=', 'fc.iTrxID')
+                ->leftJoin("{$schema}.UB_TrustTrx as linked_tr", 'linked_tr.ID', '=', 'ct.iTrustTrxID')
+                ->where('ct.iStatus', '=', 0)
+                ->whereNotNull($cashDateColumn)
+                ->where($cashDateColumn, '<', $to)
+                ->whereNotNull('ct.mAmount')
+                ->whereNotNull('ct.dtCreated')
+                ->where('ct.dtCreated', '<=', $cutoff)
+                ->where(function ($query) use ($cutoff) {
+                    $query->where('t.dtLastModified', '>', $cutoff)
+                        ->orWhere('linked_tr.dtLastModified', '>', $cutoff);
+                })
+                ->tap($applyPlanScope)
+                ->tap($applyCurrencyScope)
+                ->selectRaw("'Historical inference candidate' AS review_type")
+                ->selectRaw("'Currently Deleted; linked record changed after cutoff' AS review_reason")
+                ->selectRaw('p.DealerAccountID AS plan_account_id, ca.AccountID AS account_id, ca.AccountStatus AS account_status')
+                ->selectRaw('ct.ID AS record_id, ct.iStatus AS current_status, ct.mAmount AS amount')
+                ->selectRaw("{$cashDateColumn} AS selected_date, ct.dtCreated AS created_at")
+                ->selectRaw('MAX(CASE WHEN ISNULL(t.dtLastModified, linked_tr.dtLastModified) > ISNULL(linked_tr.dtLastModified, t.dtLastModified) THEN t.dtLastModified ELSE linked_tr.dtLastModified END) AS linked_modified_at')
+                ->selectRaw('MAX(linked_tr.mAmountLeft) AS linked_trust_amount_left')
+                ->selectRaw("CASE WHEN MAX(ISNULL(linked_tr.mAmountLeft, 0)) > 0 THEN 'Exclude - linked trust amount remains' ELSE 'Include - no linked trust amount remains' END AS inference_treatment")
+                ->selectRaw('CASE WHEN MAX(ISNULL(linked_tr.mAmountLeft, 0)) > 0 THEN 0 ELSE ct.mAmount END AS inference_amount')
+                ->groupBy('p.DealerAccountID', 'ca.AccountID', 'ca.AccountStatus')
+                ->groupBy('ct.ID', 'ct.iStatus', 'ct.mAmount', 'ct.dtCreated')
+                ->groupBy($cashDateColumn)
+                ->get();
+        }
+
+        $postCutoffTransactions = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_CashTrx as ct")
+            ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')
+            ->whereNotNull($cashDateColumn)
+            ->where($cashDateColumn, '<', $to)
+            ->whereNotNull('ct.mAmount')
+            ->whereNotNull('ct.dtCreated')
+            ->where('ct.dtCreated', '>', $cutoff)
+            ->tap($applyPlanScope)
+            ->tap($applyCurrencyScope)
+            ->selectRaw("'Transaction created after cutoff' AS review_type")
+            ->selectRaw("'Record did not exist at simulated generation time' AS review_reason")
+            ->selectRaw('p.DealerAccountID AS plan_account_id, ca.AccountID AS account_id, ca.AccountStatus AS account_status')
+            ->selectRaw('ct.ID AS record_id, ct.iStatus AS current_status, ct.mAmount AS amount')
+            ->selectRaw("{$cashDateColumn} AS selected_date, ct.dtCreated AS created_at")
+            ->selectRaw('NULL AS linked_modified_at, NULL AS linked_trust_amount_left')
+            ->selectRaw('NULL AS inference_treatment, 0 AS inference_amount')
+            ->get();
+
+        $postCutoffAccounts = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_CashAccount as ca")
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ca.iPlanID')
+            ->whereNotNull('ca.dtOpen')
+            ->where('ca.dtOpen', '>', $cutoff)
+            ->whereNotNull('ca.AccountID')
+            ->where('ca.AccountID', '<>', '')
+            ->tap($applyPlanScope)
+            ->tap($applyCurrencyScope)
+            ->selectRaw("'Account opened after cutoff' AS review_type")
+            ->selectRaw("'Account did not exist at simulated generation time' AS review_reason")
+            ->selectRaw('p.DealerAccountID AS plan_account_id, ca.AccountID AS account_id, ca.AccountStatus AS account_status')
+            ->selectRaw('ca.ID AS record_id, NULL AS current_status, ca.mBalance AS amount')
+            ->selectRaw('NULL AS selected_date, ca.dtOpen AS created_at, NULL AS linked_modified_at')
+            ->selectRaw('NULL AS linked_trust_amount_left, NULL AS inference_treatment, 0 AS inference_amount')
+            ->get();
+
+        $duplicateCashAccounts = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_CashAccount as ca")
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ca.iPlanID')
+            ->whereNotNull('ca.dtOpen')
+            ->where('ca.dtOpen', '<=', $cutoff)
+            ->whereNotNull('ca.AccountID')
+            ->where('ca.AccountID', '<>', '')
+            ->tap($applyPlanScope)
+            ->tap($applyCurrencyScope)
+            ->selectRaw("'Duplicate cash-account pattern' AS review_type")
+            ->selectRaw("'Same plan and cash ID may render as AGRA [id] and AGRA CASH [id]' AS review_reason")
+            ->selectRaw('p.DealerAccountID AS plan_account_id, ca.AccountID AS account_id')
+            ->selectRaw('MAX(ca.AccountStatus) AS account_status, NULL AS record_id, NULL AS current_status')
+            ->selectRaw('0 AS amount, NULL AS selected_date, MAX(ca.dtOpen) AS created_at')
+            ->selectRaw('NULL AS linked_modified_at, NULL AS linked_trust_amount_left')
+            ->selectRaw('NULL AS inference_treatment, 0 AS inference_amount')
+            ->selectRaw('COUNT(*) AS source_row_count, COUNT(*) - 1 AS deduped_account_count')
+            ->groupBy('p.ID', 'p.DealerAccountID', 'ca.AccountID')
+            ->havingRaw('COUNT(*) > 1')
+            ->get();
+
+        return $historicalInference
+            ->concat($postCutoffTransactions)
+            ->concat($postCutoffAccounts)
+            ->concat($duplicateCashAccounts)
+            ->sortBy(fn($row) => [
+                (string) ($row->review_type ?? ''),
+                (string) ($row->plan_account_id ?? ''),
+                (string) ($row->record_id ?? ''),
+            ])
+            ->values();
     }
 
     public function fetchCustomerCashBalanceTotal(): float

@@ -86,6 +86,13 @@ Historical trade reports remain live because trust usage can evolve after trade 
 
 The Reports page shows recent synchronization runs and unreviewed changed days. Acknowledging a day clears its current review flag and records the review time and session user. It does not delete or modify the immutable change history.
 
+Unreviewed days remain in the queue until acknowledged. Repeated changes to the same day add immutable audit rows while the day remains one review item. The page shows the latest 20 change records and displays the total number of unreviewed days.
+
+- **Download CSV** exports every audit change detected after each currently flagged day's most recent acknowledgement. It includes previous/new counts and net totals, deltas, detection time, run information, and algorithm version.
+- **Acknowledge all** clears every current review flag and records a common review time and reviewer label. It does not delete snapshot values or audit rows.
+
+The CSV is a changed-day audit export, not a historical transaction-level ledger. Snapshot history records aggregate daily changes and cannot identify which source transaction was inserted, deleted, or modified. Use the changed dates to guide transaction-level source review.
+
 ## Legacy Comparison Report
 
 The Reports page also provides **Legacy VieFund Daily Net + Running Balance** as an independent comparison export. It reproduces the previous implementation without changing or bypassing the direct-cash report.

@@ -25,6 +25,8 @@ For each plan, the report:
 4. If a **Simulated Report Generation Time** is supplied, excludes transactions and cash accounts that did not yet exist at that time.
 5. Groups the remaining cash transactions by plan and sums `UB_CashTrx.mAmount`.
 
+The selected cash transaction statuses are evaluated from the replica's current `UB_CashTrx.iStatus` values. The report does not infer historical status from linked record modification timestamps.
+
 The normal production setting is **Confirmed** status and **CAD** currency.
 
 ### Eligible account population
@@ -37,18 +39,20 @@ A row is produced when:
 - the cash account existed by the simulated generation time, when one is supplied
 - the plan is not in the configured explicit exclusion list
 
+Every eligible VieFund cash-account source row is reported. When a plan has multiple cash-account rows, the report retains each row instead of deduplicating the plan. The plan-level transaction balance and transaction count appear only on the preferred source row; additional source rows show zero so totals are not duplicated. Duplicate patterns remain listed on **Cutoff Review**.
+
 A leading `#` is removed from cash account IDs in the output so they can be compared consistently with client files.
 
 ## Date Basis
 
 The date basis determines which `UB_CashTrx` date controls whether a transaction falls on or before the reporting date.
 
-| Selection | VieFund field | Meaning |
-| --- | --- | --- |
-| Created date | `dtCreated` | When the cash transaction record was created in VieFund |
-| Trade date | `dtTrade` | The cash transaction's effective trade date |
-| Processing date | `dtProcessing` | When VieFund processed the cash transaction |
-| Settlement date | `dtSettlement` | When the cash transaction settles |
+| Selection       | VieFund field  | Meaning                                                 |
+| --------------- | -------------- | ------------------------------------------------------- |
+| Created date    | `dtCreated`    | When the cash transaction record was created in VieFund |
+| Trade date      | `dtTrade`      | The cash transaction's effective trade date             |
+| Processing date | `dtProcessing` | When VieFund processed the cash transaction             |
+| Settlement date | `dtSettlement` | When the cash transaction settles                       |
 
 Use the same basis as the client report being reconciled. **Settlement date** is the default and is the appropriate basis for a settled-cash position. **Trade date** can include transactions before they settle, subject to the availability rule described below.
 
@@ -56,15 +60,17 @@ Use the same basis as the client report being reconciled. **Settlement date** is
 
 **Simulated Report Generation Time** is optional, but it is important when reproducing a historical client report from the current replica.
 
-The reporting date answers, "Which transaction dates are in scope?" The simulated generation time answers, "What records and statuses were available when the historical report was run?"
+The reporting date answers, "Which transaction dates are in scope?" The simulated generation time answers, "What records existed when the historical report was run?"
 
 When supplied, the report:
 
 - excludes cash accounts opened after that timestamp
 - excludes transactions created after that timestamp
-- may reconstruct a currently Deleted cash transaction as Confirmed when a linked fund or trust record has a last-modified time after the simulated generation time
+- lists known post-cutoff accounts and relevant backdated transactions on the **Cutoff Review** sheet
 
-The linked timestamps come from `UB_FundTrx.dtLastModified` and `UB_TrustTrx.dtLastModified`, not from the cash transaction's status history. A cash transaction reaches `UB_FundTrx` through `UB_FundTrxCash`; it reaches `UB_TrustTrx` through `UB_CashTrx.iTrustTrxID`. These fields show that a related record changed after the simulated generation time, but they do not identify what changed or prove that the change was the deletion. The reconstruction is therefore an inference used to reproduce a validated historical report, not independently verified status history.
+The settled balance does not reconstruct historical transaction statuses. Confirmed-only output excludes transactions that are currently Deleted, even if they may have had another status when an older client report was generated.
+
+When a simulated generation time is supplied, the report separately identifies currently Deleted cash transactions whose linked fund or trust record changed after the cutoff. Their amounts appear as **Historical Inference Adjustment (Review Required)** and are added only to **Inferred Client Balance (Review Required)**. Linked modification timestamps do not identify the changed field, so these rows are candidates for review rather than proof of historical status.
 
 Enter the client report's actual generation time when known. If only an email or delivery time is known, it can be used as an upper bound, but the Summary sheet should be reviewed to confirm the timestamp used. VieFund timestamps and validated report times are interpreted in Eastern time.
 
@@ -81,50 +87,37 @@ The main report flags positive Confirmed cash linked to an Unsettled trust trans
 
 Future-settlement cash is not automatically added to the settled balance.
 
-The report classifies each flagged cash transaction from the current linked Unsettled trust state. The Summary labels refer to the full future-settlement cash amount linked to each trust transaction, not the numeric value stored in `mAmountUsed`:
+The Summary reports one **Future Settlement Cash (Review Required)** amount. It no longer classifies this evidence as included in or excluded from the client report. On a trade-date report, eligible future-settling cash may already be represented in the strict balance through the selected date basis.
 
-- **FSC Linked to Used Trust (Client Reported)** on a Direct Cash Ledger settlement-date report when the linked trust has an amount used (`mAmountUsed > 0`) or no amount left (`mAmountLeft <= 0`). This cash is added to the client-compatible estimate because the validated client report included it.
-- **FSC Linked to Unused Trust** when the linked trust has nothing used (`mAmountUsed = 0`) and still has an amount left (`mAmountLeft > 0`). This cash remains excluded from the client-compatible estimate.
+## Inferred Client Balance
 
-For trade-date and other report modes, no separate future amount is added to the estimate, so the Summary classifies all informational future cash as excluded from the estimate. On a trade-date report, eligible future-settling cash is already included in the report total. This reproduces the observed VieFund client-report treatment without using an account-specific exception.
-
-## Potential Client VieFund Balance
-
-The Summary sheet includes **Potential Client VieFund Balance (Estimate)** as a quick spot-check value.
-
-- For **Settlement date**, the estimate is the settled report total plus future-settling cash whose linked trust has an amount used or no amount left.
-- For **Trade date**, eligible future-settling cash is already represented in the report total, so the estimate equals the report total.
-- For other date bases, the estimate currently equals the report total.
-
-The Summary sheet exposes the reconciliation directly:
+The Summary sheet includes **Inferred Client Balance (Review Required)** as a provisional comparison value:
 
 ```text
-Future Settlement Cash (Info)
-	= FSC Linked to Used Trust (Client Reported)
-	+ FSC Linked to Unused Trust
-
-Potential Client VieFund Balance (Estimate)
+Inferred Client Balance (Review Required)
 	= Total Settled Balance
-	+ FSC Linked to Used Trust (Client Reported)  [Settlement date only]
+	+ Historical Inference Adjustment (Review Required)
 ```
 
-This value is derived from the current ledger and linked trust state. It is an estimate of what the client VieFund report may display, not a stored VieFund report total and not a substitute for account-level reconciliation.
+The inference adjustment sums historical inference candidates after applying the linked-trust evidence rule described below. It does not automatically add accounts or transactions created after the cutoff, and it does not assert that the inferred historical status is proven. The **Cutoff Review** sheet is the evidence and decision surface for resolving those rows.
+
+For historical inference candidates, **Linked Trust Amount Left** shows the linked trust transaction's current `mAmountLeft`. A positive value suppresses that row's suggested inference adjustment because the linked amount remains available rather than being consumed. **Suggested Inference Treatment** makes the applied rule explicit for client review. The row remains on **Cutoff Review** because `mAmountLeft` is a current snapshot value rather than a value preserved at the simulated generation time.
 
 ## Output Columns
 
-| Column | Description |
-| --- | --- |
-| Client Name | Customer name from the owning VieFund plan |
-| Rep Code | Representative code found through the included cash activity |
-| Plan Account ID | VieFund dealer/plan account identifier |
-| Account ID | Normalized cash account identifier |
-| Account Status | Current selected cash-account status, such as `A` or `T` |
-| Cash Transactions | Number of included cash ledger transactions |
-| Settled Balance | Sum of included cash transaction amounts for the selected basis |
-| Future Settlement Transactions | Count of flagged positive future-settlement cash transactions |
-| Future Settlement Cash (Info) | Informational total of those flagged transactions |
-| Next Settlement Date | Earliest settlement date among the flagged transactions |
-| Clarification Note | Explains why future-settlement cash is shown separately |
+| Column                         | Description                                                     |
+| ------------------------------ | --------------------------------------------------------------- |
+| Client Name                    | Customer name from the owning VieFund plan                      |
+| Rep Code                       | Representative code found through the included cash activity    |
+| Plan Account ID                | VieFund dealer/plan account identifier                          |
+| Account ID                     | Normalized cash account identifier                              |
+| Account Status                 | Current selected cash-account status, such as `A` or `T`        |
+| Cash Transactions              | Number of included cash ledger transactions                     |
+| Settled Balance                | Sum of included cash transaction amounts for the selected basis |
+| Future Settlement Transactions | Count of flagged positive future-settlement cash transactions   |
+| Future Settlement Cash (Info)  | Informational total of those flagged transactions               |
+| Next Settlement Date           | Earliest settlement date among the flagged transactions         |
+| Clarification Note             | Explains why future-settlement cash is shown separately         |
 
 ## Excel And CSV Output
 
@@ -135,13 +128,15 @@ Excel is recommended for reconciliation work. The workbook contains:
 - **Customer Balances** sheet with numeric count and currency cells
 - frozen header row
 - filters across the full report table
-- **Summary** sheet containing criteria, generation details, totals, and the potential client estimate
+- **Summary** sheet containing criteria, strict totals, review counts, and the inferred client balance
+- **Cutoff Review** sheet containing historical inference candidates, accounts opened after the cutoff, relevant transactions created after the cutoff, and duplicate cash-account patterns
+- blank **Review Decision** and **Review Notes** columns for offline review
 
 Because balances are numeric cells rather than formatted text, they can be sorted, filtered, summed, and used in formulas.
 
 ### CSV
 
-CSV contains the same report values, with Summary fields placed beside the report rows. CSV does not support multiple sheets, frozen rows, filters, or Excel number formats.
+CSV contains the customer-balance rows and Summary fields. The **Cutoff Review** worksheet is available only in Excel because CSV does not support multiple sheets.
 
 ## How To Run The Report
 
@@ -179,17 +174,17 @@ The value cannot be later than the current time.
 
 This control filters `UB_CashTrx.iStatus`. Available values are:
 
-| Value | Status |
-| ---: | --- |
-| 0 | Deleted |
-| 1 | Rejected |
-| 2 | Cancelled |
-| 3 | Pending |
-| 4 | Accepted |
-| 5 | Contracted |
-| 6 | Confirmed |
+| Value | Status     |
+| ----: | ---------- |
+|     0 | Deleted    |
+|     1 | Rejected   |
+|     2 | Cancelled  |
+|     3 | Pending    |
+|     4 | Accepted   |
+|     5 | Contracted |
+|     6 | Confirmed  |
 
-Use **Confirmed** only for the standard customer balance reconciliation. Do not add **Deleted** merely because a historical transaction is currently deleted; the simulated generation-time logic handles supported post-report deletions narrowly.
+Use **Confirmed** only for the standard customer balance reconciliation. Select **Deleted** only when intentionally reviewing current deleted transactions; simulated generation time does not reconstruct historical status.
 
 ### Output Format
 
@@ -204,15 +199,33 @@ Confirm these values before comparing totals:
 - **Date Basis**
 - **Balance Source**: should be `Direct Cash Ledger`
 - **Cash Statuses**: normally `Confirmed`
+- **Status Evaluation**: current replica status with historical inference shown separately
 - **Simulated Generation Time**
 - **Plan Accounts**
+- **Deduped Accounts (AGRA / AGRA CASH Pattern)**
+- **Inferred Client Plan Accounts**
 - **Total Settled Balance**
-- **Future Settlement Cash (Info)**
-- **FSC Linked to Used Trust (Client Reported)**
-- **FSC Linked to Unused Trust**
-- **Potential Client VieFund Balance (Estimate)**
+- **Future Settlement Cash (Review Required)**
+- **Cutoff Review Records**
+- **Historical Inference Candidates**
+- **Historical Inference Adjustment (Review Required)**
+- **Inferred Client Balance (Review Required)**
 
 The generated-at time records when this application completed the export. It is different from the simulated generation time.
+
+### Duplicate cash-account pattern
+
+VieFund can contain two pre-cutoff CAD cash-account rows for the same plan and the same AccountID. The client export can render these as separate `AGRA <id>` and `AGRA CASH <id>` rows, while this report selects one representative cash account for the plan.
+
+The **Cutoff Review** sheet lists each matching plan with its source row count and deduped account count. The Summary calculates:
+
+```text
+Inferred Client Plan Accounts
+	= Plan Accounts
+	+ Deduped Accounts (AGRA / AGRA CASH Pattern)
+```
+
+This inference adjusts the expected client row count only. It does not duplicate the plan balance or change any balance total.
 
 ## Caveats And Special Circumstances
 
@@ -220,13 +233,13 @@ The generated-at time records when this application completed the export. It is 
 
 The VieFund replica is refreshed from production. Current balances, statuses, and linked trust usage can differ from their historical state. A historical reporting date alone is not enough to recreate what a user saw months or years earlier.
 
-### Historical status reconstruction is intentionally narrow
+### Historical status inference requires review
 
-The report does not generally include Deleted transactions. With a simulated generation time, it currently includes a deleted cash transaction when a linked `UB_FundTrx.dtLastModified` or `UB_TrustTrx.dtLastModified` is later than that time. This indicates that a related record changed later; it does not prove which field changed or when the cash status became Deleted. Without a later linked timestamp, the deleted transaction remains excluded unless Deleted was explicitly selected.
+The strict report applies selected current cash transaction statuses. The separate inference treats a currently Deleted cash transaction as a candidate when a linked fund or trust record changed after the simulated generation time. That timestamp does not identify which field changed, so unrelated linked changes can produce false positives. Review the candidate rows before relying on the inferred balance.
 
 ### Future-settlement information is not a settled balance
 
-Do not add the entire **Future Settlement Cash (Info)** amount to the settled total. Some future-settlement transactions remain wholly unused and are correctly excluded from the client-compatible balance.
+Do not add the entire **Future Settlement Cash (Review Required)** amount to the settled total. The report intentionally does not decide whether each future-settlement row appeared in a historical client report.
 
 ### Account Status is current descriptive data
 
@@ -238,10 +251,10 @@ VieFund stores transaction amounts with more precision than the two decimals dis
 
 ### Estimate versus evidence
 
-The potential client balance is a convenience check based on behavior observed and validated against available client reports. The direct ledger total and account-level rows remain the auditable report output.
+The inferred client balance is a guesstimate based on linked-record timestamps. The direct ledger total remains the auditable output, and the **Cutoff Review** rows remain unresolved until reviewed.
 
 ## Validation Status
 
-The available client cash-balance reports for settlement-date and trade-date bases have been cross-checked against this reporting implementation and match to the penny when run with the corresponding report date, date basis, currency, status, and historical generation time.
+Available client cash-balance reports have been cross-checked against this implementation. Historical files may not match exactly because the replica does not retain direct cash-status history; the inferred balance and review sheet make that uncertainty visible.
 
 Technical investigation details and reproducible command-line examples are retained in [VieFund Customer Balances Report Criteria](viefund_customer_balances_report_criteria.md).
