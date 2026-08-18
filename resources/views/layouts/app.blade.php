@@ -21,6 +21,9 @@
                     <a href="/imports/transactions">Transaction Data</a>
                     @endif
                     <a href="/bank-entries">Bank Entries</a>
+                    @if(!in_array('settlement_instructions', config('app.nav_hide')))
+                    <a href="{{ route('settlement-instructions.index') }}">Settlement Instructions</a>
+                    @endif
                     <a href="/remote-viefund">Customer Transactions</a>
                     <a href="/reconciliations/daily-totals">Daily Totals</a>
                     @if(!in_array('reconciliation', config('app.nav_hide')))

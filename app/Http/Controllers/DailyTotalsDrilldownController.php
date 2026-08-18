@@ -260,11 +260,14 @@ class DailyTotalsDrilldownController extends Controller
         [$statusIds, $basis, $criteriaKey, $availabilityAsOf] = $this->resolveDayFilters($day, $request->query('variant'));
         $fundCriteria = $this->describeStatuses($statusIds);
         $hideZero = $request->boolean('hide_zero');
+        $tableFilters = $request->only(['search', 'source_id', 'order_id', 'trx_type', 'status', 'sort', 'direction']);
+        $hasActiveFilters = collect($request->only(['search', 'source_id', 'order_id', 'trx_type', 'status']))
+            ->contains(fn($value) => trim((string) $value) !== '');
 
         $result = $this->vieFundRemoteService->fetchCustomerCashTransactionsByDateColumn(
             $day,
             $basis,
-            ['status_ids' => $statusIds, 'availability_as_of' => $availabilityAsOf],
+            array_merge(['status_ids' => $statusIds, 'availability_as_of' => $availabilityAsOf], $tableFilters),
             $perPage,
             $page,
             $hideZero
@@ -273,20 +276,23 @@ class DailyTotalsDrilldownController extends Controller
             ->whereDate('total_date', $day->toDateString())
             ->first();
 
-        $summary = (object) [
+        $auditedSummary = (object) [
             'transaction_count' => $snapshot?->transaction_count ?? $result['transaction_count'],
             'net_total' => $snapshot?->net_total ?? $result['net_total'],
         ];
+        $liveSummary = (object) ['transaction_count' => $result['transaction_count'], 'net_total' => $result['net_total']];
 
         return view('reconciliations/daily-viefund-transactions', [
             'date' => $day->toDateString(),
             'transactions' => $result['items'],
-            'summary' => $summary,
-            'liveSummary' => (object) ['transaction_count' => $result['transaction_count'], 'net_total' => $result['net_total']],
+            'summary' => $hasActiveFilters ? $liveSummary : $auditedSummary,
+            'auditedSummary' => $auditedSummary,
+            'liveSummary' => $liveSummary,
             'fundCriteria' => $fundCriteria,
             'basisLabel' => self::DATE_BASIS_LABELS[$basis] ?? $basis,
             'criteriaKey' => $criteriaKey,
             'hideZero' => $hideZero,
+            'hasActiveFilters' => $hasActiveFilters,
         ]);
     }
 
@@ -301,6 +307,7 @@ class DailyTotalsDrilldownController extends Controller
         [$statusIds, $basis, $criteriaKey, $availabilityAsOf] = $this->resolveDayFilters($day, $request->query('variant'));
         $hideZero = $request->boolean('hide_zero');
         $format = $request->query('format', 'csv');
+        $tableFilters = $request->only(['search', 'source_id', 'order_id', 'trx_type', 'status', 'sort', 'direction']);
 
         if (!in_array($format, ['csv', 'excel'], true)) {
             abort(422, 'Invalid export format.');
@@ -310,7 +317,7 @@ class DailyTotalsDrilldownController extends Controller
         $result = $this->vieFundRemoteService->fetchCustomerCashTransactionsByDateColumn(
             $day,
             $basis,
-            ['status_ids' => $statusIds, 'availability_as_of' => $availabilityAsOf],
+            array_merge(['status_ids' => $statusIds, 'availability_as_of' => $availabilityAsOf], $tableFilters),
             1000000,
             1,
             $hideZero
@@ -339,6 +346,7 @@ class DailyTotalsDrilldownController extends Controller
                 'Txn ID',
                 'Cash Trx ID',
                 'Source ID',
+                'Order ID',
                 'Customer',
                 'Txn Type',
                 'Order Status',
@@ -356,6 +364,7 @@ class DailyTotalsDrilldownController extends Controller
                     data_get($txn, 'trx_id'),
                     data_get($txn, 'cash_trx_id'),
                     data_get($txn, 'source_id'),
+                    data_get($txn, 'order_id'),
                     data_get($txn, 'client_name'),
                     data_get($txn, 'trx_type'),
                     data_get($txn, 'status', data_get($txn, 'order_status')),
@@ -385,6 +394,7 @@ class DailyTotalsDrilldownController extends Controller
             'Txn ID',
             'Cash Trx ID',
             'Source ID',
+            'Order ID',
             'Customer',
             'Txn Type',
             'Order Status',
@@ -402,6 +412,7 @@ class DailyTotalsDrilldownController extends Controller
                 data_get($txn, 'trx_id'),
                 data_get($txn, 'cash_trx_id'),
                 data_get($txn, 'source_id'),
+                data_get($txn, 'order_id'),
                 data_get($txn, 'client_name'),
                 data_get($txn, 'trx_type'),
                 data_get($txn, 'status', data_get($txn, 'order_status')),

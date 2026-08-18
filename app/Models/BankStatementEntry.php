@@ -11,6 +11,7 @@ class BankStatementEntry extends Model
 
     protected $fillable = [
         'import_id',
+        'bank_statement_summary_id',
         'source_file',
         'message_id',
         'statement_id',
@@ -41,6 +42,11 @@ class BankStatementEntry extends Model
     public function import()
     {
         return $this->belongsTo(Import::class);
+    }
+
+    public function summary()
+    {
+        return $this->belongsTo(BankStatementSummary::class, 'bank_statement_summary_id');
     }
 
     public function analyses()

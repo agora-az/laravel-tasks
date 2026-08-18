@@ -590,6 +590,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             $cashDistinct->where('ct.mAmount', '<>', 0);
         }
 
+        $cashDistinct
+            ->leftJoin("{$schema}.UB_FundTrxOrderTrx as daily_order_link", 'daily_order_link.iTrxID', '=', 'fc.iTrxID')
+            ->leftJoin("{$schema}.UB_FundTrxOrder as daily_order", 'daily_order.ID', '=', 'daily_order_link.iOrderID')
+            ->addSelect([
+                DB::raw("COALESCE(MIN(NULLIF(daily_order.SourceID, '')), MAX(NULLIF(ct.SourceID, ''))) AS source_id"),
+                DB::raw("MIN(NULLIF(daily_order.OrderID, '')) AS order_id"),
+            ]);
+
         $query = DB::connection(self::CONNECTION)
             ->query()
             ->fromSub($cashDistinct, 'eligible_cash')
@@ -599,21 +607,88 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_Def_TrxType as ctt", 'ctt.ID', '=', 'ct.iType')
             ->leftJoin("{$schema}.UB_Def_TrxStatus as cts", 'cts.ID', '=', 'ct.iStatus')
             ->leftJoin("{$schema}.UB_TrustTrx as linked_tr", 'linked_tr.ID', '=', 'ct.iTrustTrxID')
-            ->selectRaw("ct.ID AS trx_id, ct.ID AS cash_trx_id, NULL AS source_id, TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))) AS client_name")
+            ->selectRaw("ct.ID AS trx_id, ct.ID AS cash_trx_id, eligible_cash.source_id, eligible_cash.order_id, TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))) AS client_name")
             ->selectRaw("p.DealerAccountID AS plan_dealer_account_id, ISNULL(ctt.NameEN, CAST(ct.iType AS NVARCHAR)) AS trx_type, ISNULL(cts.NameEN, CAST(ct.iStatus AS NVARCHAR)) AS status")
             ->selectRaw('linked_tr.Notes AS notes, ct.mAmount AS amount, ct.dtCreated AS created_date, ct.dtTrade AS trade_date, ct.dtProcessing AS processing_date, ct.dtSettlement AS settlement_date')
-            ->selectRaw("'cash' AS row_source")
-            ->orderBy('eligible_cash.total_date')
-            ->orderBy('ct.ID');
+            ->selectRaw("'cash' AS row_source");
 
-        $transactionCount = (clone $query)->count();
-        $netTotal = (float) DB::connection(self::CONNECTION)
+        if (!empty($filters['search'])) {
+            $search = '%' . trim((string) $filters['search']) . '%';
+            $query->where(function ($searchQuery) use ($search) {
+                $searchQuery->whereRaw('CAST(ct.ID AS NVARCHAR) LIKE ?', [$search])
+                    ->orWhere('eligible_cash.source_id', 'like', $search)
+                    ->orWhere('eligible_cash.order_id', 'like', $search)
+                    ->orWhereRaw("TRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))) LIKE ?", [$search])
+                    ->orWhere('linked_tr.Notes', 'like', $search);
+            });
+        }
+
+        if (!empty($filters['source_id'])) {
+            $query->where('eligible_cash.source_id', 'like', '%' . trim((string) $filters['source_id']) . '%');
+        }
+
+        if (!empty($filters['order_id'])) {
+            $query->where('eligible_cash.order_id', 'like', '%' . trim((string) $filters['order_id']) . '%');
+        }
+
+        if (!empty($filters['trx_type'])) {
+            $query->whereRaw('ISNULL(ctt.NameEN, CAST(ct.iType AS NVARCHAR)) LIKE ?', ['%' . trim((string) $filters['trx_type']) . '%']);
+        }
+
+        if (!empty($filters['status'])) {
+            $query->whereRaw('ISNULL(cts.NameEN, CAST(ct.iStatus AS NVARCHAR)) LIKE ?', ['%' . trim((string) $filters['status']) . '%']);
+        }
+
+        $sortColumns = [
+            'trx_id' => 'ct.ID',
+            'customer' => 'client_name',
+            'trx_type' => 'trx_type',
+            'status' => 'status',
+            'notes' => 'linked_tr.Notes',
+            'amount' => 'ct.mAmount',
+            'created_date' => 'ct.dtCreated',
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+        ];
+        $sort = (string) ($filters['sort'] ?? 'trx_id');
+        $direction = strtolower((string) ($filters['direction'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+        if ($sort === 'source_id' || $sort === 'order_id') {
+            $query->orderBy("eligible_cash.{$sort}", $direction)
+                ->orderBy('ct.ID');
+        } else {
+            $sortColumn = $sortColumns[$sort] ?? $sortColumns['trx_id'];
+            $query->orderBy($sortColumn, $direction);
+
+            if ($sortColumn !== 'ct.ID') {
+                $query->orderBy('ct.ID');
+            }
+        }
+
+        $summary = DB::connection(self::CONNECTION)
             ->query()
-            ->fromSub(clone $cashDistinct, 'cash_summary')
-            ->sum('cash_amount');
+            ->fromSub((clone $query)->reorder(), 'filtered_cash')
+            ->selectRaw('COUNT(*) AS transaction_count, COALESCE(SUM(amount), 0) AS net_total')
+            ->first();
+        $transactionCount = (int) ($summary->transaction_count ?? 0);
+        $netTotal = (float) ($summary->net_total ?? 0);
+        $items = (clone $query)
+            ->forPage(max(1, $page), $perPage)
+            ->get();
+        $paginator = new LengthAwarePaginator(
+            $items,
+            $transactionCount,
+            $perPage,
+            max(1, $page),
+            [
+                'path' => LengthAwarePaginator::resolveCurrentPath(),
+                'pageName' => 'viefund_page',
+                'query' => LengthAwarePaginator::resolveQueryString(),
+            ]
+        );
 
         return [
-            'items' => $query->paginate($perPage, ['*'], 'viefund_page', max(1, $page)),
+            'items' => $paginator,
             'transaction_count' => $transactionCount,
             'net_total' => $netTotal,
         ];

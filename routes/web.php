@@ -9,6 +9,7 @@ use App\Http\Controllers\RemoteVieFundController;
 use App\Http\Controllers\DailyTotalsComparisonController;
 use App\Http\Controllers\DailyTotalsDrilldownController;
 use App\Http\Controllers\BankStatementEntryController;
+use App\Http\Controllers\SettlementInstructionController;
 use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
 
@@ -133,8 +134,14 @@ Route::middleware('auth.check')->group(function () {
 
     // Bank statement entries (raw CAMT analysis view)
     Route::get('/bank-entries', [BankStatementEntryController::class, 'index'])->name('bank-entries.index');
+    Route::get('/bank-entries/export', [BankStatementEntryController::class, 'export'])->name('bank-entries.export');
     Route::post('/bank-entries/sync', [BankStatementEntryController::class, 'sync'])->name('bank-entries.sync');
     Route::get('/bank-entries/sync-status', [BankStatementEntryController::class, 'syncStatus'])->name('bank-entries.sync-status');
+
+    Route::get('/settlement-instructions', [SettlementInstructionController::class, 'index'])->name('settlement-instructions.index');
+    Route::get('/settlement-instructions/export', [SettlementInstructionController::class, 'export'])->name('settlement-instructions.export');
+    Route::post('/settlement-instructions/sync', [SettlementInstructionController::class, 'sync'])->name('settlement-instructions.sync');
+    Route::get('/settlement-instructions/sync-status', [SettlementInstructionController::class, 'syncStatus'])->name('settlement-instructions.sync-status');
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');

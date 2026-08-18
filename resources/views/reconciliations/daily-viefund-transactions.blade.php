@@ -3,6 +3,15 @@
 @section('title', 'VieFund Daily Transactions')
 
 @section('content')
+<style>
+    @media (max-width: 1100px) {
+        .daily-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    }
+    @media (max-width: 640px) {
+        .daily-filter-grid { grid-template-columns: minmax(0, 1fr) !important; }
+        .daily-filter-grid button { width: 100%; }
+    }
+</style>
 @php
     $formattedDate = \Carbon\Carbon::parse($date)->format('F j, Y');
 @endphp
@@ -30,11 +39,52 @@
     </ul>
 </div>
 
-@if(isset($liveSummary) && ((int) $liveSummary->transaction_count !== (int) $summary->transaction_count || abs((float) $liveSummary->net_total - (float) $summary->net_total) >= 0.005))
+@if(!($hasActiveFilters ?? false) && isset($liveSummary, $auditedSummary) && ((int) $liveSummary->transaction_count !== (int) $auditedSummary->transaction_count || abs((float) $liveSummary->net_total - (float) $auditedSummary->net_total) >= 0.005))
     <div style="margin-bottom:16px;padding:10px 14px;border:1px solid #f6e05e;border-radius:6px;background:#fffaf0;color:#744210;font-size:13px;">
-        The audited snapshot is {{ number_format((int) $summary->transaction_count) }} transactions / ${{ number_format((float) $summary->net_total, 2) }}, while the current matching VieFund rows are {{ number_format((int) $liveSummary->transaction_count) }} / ${{ number_format((float) $liveSummary->net_total, 2) }}. Resync Daily Totals to audit the change.
+        The audited snapshot is {{ number_format((int) $auditedSummary->transaction_count) }} transactions / ${{ number_format((float) $auditedSummary->net_total, 2) }}, while the current matching VieFund rows are {{ number_format((int) $liveSummary->transaction_count) }} / ${{ number_format((float) $liveSummary->net_total, 2) }}. Resync Daily Totals to audit the change.
     </div>
 @endif
+
+<form method="GET" action="{{ route('reconciliations.daily-totals.viefund-day', ['date' => $date]) }}" class="card" style="margin-bottom:16px;padding:18px 20px;">
+    @if(request('variant'))
+        <input type="hidden" name="variant" value="{{ request('variant') }}">
+    @endif
+    @if($hideZero ?? false)
+        <input type="hidden" name="hide_zero" value="1">
+    @endif
+    <input type="hidden" name="per_page" value="{{ request('per_page', 250) }}">
+    <input type="hidden" name="sort" value="{{ request('sort', 'trx_id') }}">
+    <input type="hidden" name="direction" value="{{ request('direction', 'asc') }}">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#4a5568;">Filters</div>
+        @if($hasActiveFilters ?? false)
+            <a href="{{ route('reconciliations.daily-totals.viefund-day', array_filter(['date' => $date, 'variant' => request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null, 'per_page' => request('per_page', 250), 'sort' => request('sort'), 'direction' => request('direction')])) }}" style="font-size:12px;font-weight:700;color:#c53030;text-decoration:none;">Clear filters</a>
+        @endif
+    </div>
+    <div class="daily-filter-grid" style="display:grid;grid-template-columns:minmax(220px,2fr) repeat(4,minmax(140px,1fr)) auto;gap:10px;align-items:end;">
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#4a5568;">
+            Search
+            <input type="search" name="search" value="{{ request('search') }}" placeholder="Txn ID, customer, IDs, notes" style="border:1px solid #cbd5e0;border-radius:5px;padding:8px 10px;font:13px monospace;color:#2d3748;min-width:0;">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#4a5568;">
+            Source ID
+            <input type="text" name="source_id" value="{{ request('source_id') }}" style="border:1px solid #cbd5e0;border-radius:5px;padding:8px 10px;font:13px monospace;color:#2d3748;min-width:0;">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#4a5568;">
+            Order ID
+            <input type="text" name="order_id" value="{{ request('order_id') }}" style="border:1px solid #cbd5e0;border-radius:5px;padding:8px 10px;font:13px monospace;color:#2d3748;min-width:0;">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#4a5568;">
+            Transaction Type
+            <input type="text" name="trx_type" value="{{ request('trx_type') }}" style="border:1px solid #cbd5e0;border-radius:5px;padding:8px 10px;font:13px monospace;color:#2d3748;min-width:0;">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#4a5568;">
+            Order Status
+            <input type="text" name="status" value="{{ request('status') }}" style="border:1px solid #cbd5e0;border-radius:5px;padding:8px 10px;font:13px monospace;color:#2d3748;min-width:0;">
+        </label>
+        <button type="submit" style="border:1px solid #2b6cb0;border-radius:5px;padding:8px 15px;background:#2b6cb0;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">Apply</button>
+    </div>
+</form>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -64,6 +114,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const columns = [
         { key: 'trx-id', label: 'Txn ID', checked: true },
         { key: 'source', label: 'Source', checked: true },
+        { key: 'source-id', label: 'Source ID', checked: true },
+        { key: 'order-id', label: 'Order ID', checked: true },
         { key: 'customer-name', label: 'Customer Name', checked: true },
         { key: 'trx-type', label: 'Txn Type', checked: true },
         { key: 'order-status', label: 'Order Status', checked: true },
@@ -126,7 +178,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     <span>▾</span>
                 </button>
                 <div id="daily-export-panel" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 160px; overflow: hidden;">
-                    <a href="{{ route('reconciliations.daily-totals.viefund-day.export', ['date' => $date, 'variant' => $criteriaKey ?? request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null, 'format' => 'csv']) }}"
+                    <a href="{{ route('reconciliations.daily-totals.viefund-day.export', array_merge(request()->except(['viefund_page', 'format']), ['date' => $date, 'variant' => $criteriaKey ?? request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null, 'format' => 'csv'])) }}"
                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; text-decoration: none; border-bottom: 1px solid #f0f4f8;"
                        onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
                         <span style="display:inline-flex; align-items:center; gap:8px;">
@@ -138,7 +190,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             <span>CSV</span>
                         </span>
                     </a>
-                    <a href="{{ route('reconciliations.daily-totals.viefund-day.export', ['date' => $date, 'variant' => $criteriaKey ?? request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null, 'format' => 'excel']) }}"
+                    <a href="{{ route('reconciliations.daily-totals.viefund-day.export', array_merge(request()->except(['viefund_page', 'format']), ['date' => $date, 'variant' => $criteriaKey ?? request('variant'), 'hide_zero' => ($hideZero ?? false) ? 1 : null, 'format' => 'excel'])) }}"
                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; text-decoration: none;"
                        onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
                         <span style="display:inline-flex; align-items:center; gap:8px;">
@@ -179,23 +231,33 @@ document.addEventListener('DOMContentLoaded', function () {
                     $parts[1] ?? '--:--',
                 ];
             };
+            $sortUrl = function (string $column) {
+                $nextDirection = request('sort') === $column && request('direction', 'asc') === 'asc' ? 'desc' : 'asc';
+                return request()->fullUrlWithQuery(['sort' => $column, 'direction' => $nextDirection, 'viefund_page' => 1]);
+            };
+            $sortIndicator = fn(string $column) => request('sort') === $column
+                ? (request('direction', 'asc') === 'desc' ? '↓' : '↑')
+                : '↕';
+            $sortableHeaderStyle = 'display:inline-flex;align-items:center;gap:5px;color:#2d3748;text-decoration:none;white-space:nowrap;';
         @endphp
 
         <div id="table-scroll-wrapper" style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; min-width: 900px;">
                 <thead>
                     <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">
-                        <th data-col="trx-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748; white-space: nowrap;">Txn ID</th>
+                        <th data-col="trx-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748; white-space: nowrap;"><a href="{{ $sortUrl('trx_id') }}" style="{{ $sortableHeaderStyle }}">Txn ID <span>{{ $sortIndicator('trx_id') }}</span></a></th>
                         <th data-col="source" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Source</th>
-                        <th data-col="customer-name" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Customer Name</th>
-                        <th data-col="trx-type" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Txn Type</th>
-                        <th data-col="order-status" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Order Status</th>
-                        <th data-col="notes" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Notes</th>
-                        <th data-col="amount" style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;">Amount</th>
-                        <th data-col="created-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Created Date</th>
-                        <th data-col="trade-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Trade Date</th>
-                        <th data-col="processing-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Processing Date</th>
-                        <th data-col="settlement-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Settlement Date</th>
+                        <th data-col="source-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('source_id') }}" style="{{ $sortableHeaderStyle }}">Source ID <span>{{ $sortIndicator('source_id') }}</span></a></th>
+                        <th data-col="order-id" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('order_id') }}" style="{{ $sortableHeaderStyle }}">Order ID <span>{{ $sortIndicator('order_id') }}</span></a></th>
+                        <th data-col="customer-name" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('customer') }}" style="{{ $sortableHeaderStyle }}">Customer Name <span>{{ $sortIndicator('customer') }}</span></a></th>
+                        <th data-col="trx-type" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('trx_type') }}" style="{{ $sortableHeaderStyle }}">Txn Type <span>{{ $sortIndicator('trx_type') }}</span></a></th>
+                        <th data-col="order-status" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('status') }}" style="{{ $sortableHeaderStyle }}">Order Status <span>{{ $sortIndicator('status') }}</span></a></th>
+                        <th data-col="notes" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('notes') }}" style="{{ $sortableHeaderStyle }}">Notes <span>{{ $sortIndicator('notes') }}</span></a></th>
+                        <th data-col="amount" style="padding: 12px; text-align: right; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('amount') }}" style="{{ $sortableHeaderStyle }}">Amount <span>{{ $sortIndicator('amount') }}</span></a></th>
+                        <th data-col="created-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('created_date') }}" style="{{ $sortableHeaderStyle }}">Created Date <span>{{ $sortIndicator('created_date') }}</span></a></th>
+                        <th data-col="trade-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('trade_date') }}" style="{{ $sortableHeaderStyle }}">Trade Date <span>{{ $sortIndicator('trade_date') }}</span></a></th>
+                        <th data-col="processing-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('processing_date') }}" style="{{ $sortableHeaderStyle }}">Processing Date <span>{{ $sortIndicator('processing_date') }}</span></a></th>
+                        <th data-col="settlement-date" style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('settlement_date') }}" style="{{ $sortableHeaderStyle }}">Settlement Date <span>{{ $sortIndicator('settlement_date') }}</span></a></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -207,11 +269,13 @@ document.addEventListener('DOMContentLoaded', function () {
                             [$settlementDate, $settlementTime] = $toTwoLineDate($txn->settlement_date);
                             $rowSource = data_get($txn, 'row_source', 'fund');
                         @endphp
-                        <tr style="border-bottom: 1px solid #e2e8f0;">
+                        <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? '#f0fff4' : '#fff' }};">
                             <td data-col="trx-id" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;">{{ $txn->trx_id }}</td>
                             <td data-col="source" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">
                                 <span style="display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:700; {{ $rowSource === 'trust' ? 'background:#e9d8fd; color:#553c9a;' : 'background:#c6f6d5; color:#22543d;' }}">{{ ucfirst($rowSource) }}</span>
                             </td>
+                            <td data-col="source-id" style="padding:12px;color:#4a5568;font-family:monospace;font-size:12px;white-space:nowrap;">{{ data_get($txn, 'source_id') ?: '—' }}</td>
+                            <td data-col="order-id" style="padding:12px;color:#4a5568;font-family:monospace;font-size:12px;white-space:nowrap;">{{ data_get($txn, 'order_id') ?: '—' }}</td>
                             <td data-col="customer-name" style="padding: 12px; color: #2d3748; font-family: monospace;">{{ $txn->client_name ?: '—' }}</td>
                             <td data-col="trx-type" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px; white-space: nowrap;" title="{{ $txn->trx_type }}">{{ $txn->trx_type ?: '—' }}</td>
                             <td data-col="order-status" style="padding: 12px; color: #4a5568; font-family: monospace; font-size: 12px;">{{ data_get($txn, 'status', data_get($txn, 'order_status', '—')) }}</td>
@@ -259,7 +323,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         onchange="window.location = this.value"
                         style="border:1px solid #cbd5e0;border-radius:4px;padding:4px 8px;font-size:13px;color:#2d3748;background:#fff;cursor:pointer;">
                     @foreach ([50, 100, 250] as $opt)
-                        <option value="{{ request()->fullUrlWithQuery(['per_page' => $opt, 'page' => 1]) }}"
+                        <option value="{{ request()->fullUrlWithQuery(['per_page' => $opt, 'viefund_page' => 1]) }}"
                                 {{ (int) request('per_page', 250) === $opt ? 'selected' : '' }}>{{ $opt }}</option>
                     @endforeach
                 </select>
@@ -288,7 +352,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         @if ($p === $cur)
                             <span style="{{ $pgBtnActive }}">{{ $p }}</span>
                         @else
-                            <a href="{{ $transactions->url($p) }}{{ request('per_page', 250) != 250 ? '&per_page='.request('per_page') : '' }}" style="{{ $pgBtnBase }}">{{ $p }}</a>
+                            <a href="{{ $transactions->url($p) }}" style="{{ $pgBtnBase }}">{{ $p }}</a>
                         @endif
                         @php $prevPage = $p; @endphp
                     @endforeach

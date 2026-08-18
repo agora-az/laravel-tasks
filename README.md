@@ -67,6 +67,29 @@ The application will be available at [http://127.0.0.1:8000](http://127.0.0.1:80
 3. Fill in the report details including title, period start/end dates, and description
 4. View and export reports as needed
 
+## Settlement Instruction Sync
+
+The Settlement Instructions page can download and import FundSERV FSP files from SFTP. By default it reuses the `BANK_SFTP_*` connection settings. Define any of these variables when the FSP feed uses a different location or credentials:
+
+```dotenv
+SETTLEMENT_SFTP_HOST=
+SETTLEMENT_SFTP_PORT=22
+SETTLEMENT_SFTP_USERNAME=
+SETTLEMENT_SFTP_PASSWORD=
+SETTLEMENT_SFTP_REMOTE_PATH=/
+SETTLEMENT_SFTP_LOCAL_PATH=resources/data/cibc
+SETTLEMENT_SFTP_FILE_PATTERN=FSP*
+SETTLEMENT_SFTP_DRY_RUN=false
+```
+
+Verify file discovery without downloading, importing, or deleting files:
+
+```bash
+php artisan settlement:sync-instructions --dry-run
+```
+
+The scheduler runs the FSP sync daily at 23:15 in the `America/Toronto` timezone, after the Bank Entries sync. Set `SETTLEMENT_SFTP_REMOTE_PATH` if a dry run reports zero matching remote files.
+
 ## Project Structure
 
 - `app/Models/Reconciliation.php` - Reconciliation model

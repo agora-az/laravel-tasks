@@ -68,3 +68,9 @@ Schedule::command('bank:sync-entries --parser=v2 --lock-file=' . storage_path('a
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
+
+Schedule::command('settlement:sync-instructions --lock-file=' . storage_path('app/settlement-instructions-sync.lock') . ' --status-file=' . storage_path('app/settlement-instructions-sync-status.json'))
+    ->dailyAt('23:15')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();

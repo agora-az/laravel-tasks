@@ -22,6 +22,7 @@ class SyncBankEntriesCommand extends Command
         {--dry-run : Preview only (no download, import, analysis, or local file deletion)}
         {--keep-local : Keep processed files in local-path after successful sync}
         {--force : Import files even if filename already imported}
+        {--rebuild : Truncate existing bank raw/analysis/summary tables before importing selected files}
         {--status-file= : Optional path to write sync progress JSON}
         {--lock-file= : Optional lock file path to mark sync in progress}';
 
@@ -76,8 +77,13 @@ class SyncBankEntriesCommand extends Command
         $pattern = $this->resolveOption('pattern', 'BANK_SFTP_FILE_PATTERN', '*.xml');
         $parserVersion = $this->resolveStringOptionValue($this->option('parser')) ?? 'v2';
         $force = (bool) $this->option('force');
+        $rebuild = (bool) $this->option('rebuild');
         $keepLocal = (bool) $this->option('keep-local');
         $dryRun = (bool) $this->option('dry-run') || $this->resolveBooleanEnv('BANK_SFTP_DRY_RUN', false);
+
+        if ($rebuild) {
+            $force = true;
+        }
 
         $localDir = base_path($localPath);
         if (!$dryRun && !is_dir($localDir) && !mkdir($localDir, 0775, true) && !is_dir($localDir)) {
@@ -109,6 +115,10 @@ class SyncBankEntriesCommand extends Command
             ->where('status', 'completed')
             ->pluck('filename')
             ->all();
+
+        if ($rebuild) {
+            $processedNames = [];
+        }
 
         $localCandidates = collect((is_dir($localDir) ? glob($localDir . '/' . $pattern) : []) ?: [])
             ->map(fn($path) => basename($path))
@@ -374,6 +384,7 @@ class SyncBankEntriesCommand extends Command
         $importExit = Artisan::call('import:cibc-camt-raw', [
             '--path' => $stagingRelativeDir,
             '--pattern' => '*.xml',
+            '--truncate' => $rebuild,
         ]);
 
         $this->line(Artisan::output());
