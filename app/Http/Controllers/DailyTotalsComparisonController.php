@@ -5,11 +5,13 @@ namespace App\Http\Controllers;
 use App\Models\BankStatementEntry;
 use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundDailyTotal;
+use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\View\View;
@@ -34,152 +36,184 @@ class DailyTotalsComparisonController extends Controller
         6 => 'Confirmed',
     ];
 
+    public function __construct(
+        private readonly SqlServerEftRemoteRepository $eftRepository
+    ) {}
+
     public function index(Request $request): View
     {
         $earliestBankDate = BankStatementEntry::min('value_date');
-        $earliestVieFundDate = VieFundCashDailySnapshot::min('total_date');
-        $earliestAvailableDate = collect([$earliestBankDate, $earliestVieFundDate])
-            ->filter()
-            ->map(fn($date) => Carbon::parse($date)->startOfDay())
-            ->sort()
-            ->first();
-
-        $defaultStart = $earliestAvailableDate
-            ? $earliestAvailableDate->toDateString()
+        $defaultStart = $earliestBankDate
+            ? Carbon::parse($earliestBankDate)->toDateString()
             : Carbon::today()->toDateString();
 
         $dateFrom = $request->filled('date_from') ? Carbon::parse($request->date_from)->toDateString() : $defaultStart;
         $dateTo = $request->filled('date_to') ? Carbon::parse($request->date_to)->toDateString() : Carbon::today()->toDateString();
-        $showZeroDays = $request->boolean('show_zero_days');
-        $onlyFundservBank = $request->has('only_fundserv_bank')
-            ? $request->boolean('only_fundserv_bank')
-            : true;
-        $includeIncomplete = $request->has('include_incomplete')
-            ? $request->boolean('include_incomplete')
+        $include3000Sequences = $request->has('include_3000_sequences')
+            ? $request->boolean('include_3000_sequences')
             : true;
         $perPage = (int) $request->query('per_page', self::DEFAULT_PER_PAGE);
         if (!in_array($perPage, self::PER_PAGE_OPTIONS, true)) {
             $perPage = self::DEFAULT_PER_PAGE;
         }
-        $sortField = in_array($request->query('sort'), ['total_date', 'bank_net_total', 'viefund_net_total', 'variance', 'discrepancy_pct'], true)
+        $sortField = in_array($request->query('sort'), [
+            'total_date',
+            'account_number',
+            'currency',
+            'bank_transaction_count',
+            'bank_net_total',
+            'settlement_transaction_count',
+            'settlement_net_total',
+        ], true)
             ? $request->query('sort')
             : 'total_date';
         $sortDir = $request->query('sort_dir') === 'asc' ? 'asc' : 'desc';
 
-        $bankRowsQuery = DB::table('bank_statement_entries')
+        $bankRows = DB::table('bank_statement_entries')
             ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
-            ->whereBetween('value_date', [$dateFrom, $dateTo])
-            ->when($onlyFundservBank, function ($query) {
-                $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
-            })
-            ->selectRaw("value_date as total_date, COUNT(*) as transaction_count, SUM(CASE WHEN credit_debit_indicator = 'DBIT' THEN -amount ELSE amount END) as net_total")
-            ->groupBy('value_date')
-            ->orderBy('value_date');
-
-        $bankRows = $bankRowsQuery->get();
-
-        [$selectedBasis, $selectedStatuses] = $this->resolveSelection($request);
-        $variantKey = VieFundCashDailySnapshot::criteriaKey($selectedBasis, self::VIEFUND_CURRENCY_CODE, $selectedStatuses);
-        $viefundVariantSynced = VieFundCashDailySnapshot::where('criteria_key', $variantKey)->exists();
-        $viefundLastSynced = VieFundCashDailySnapshot::where('criteria_key', $variantKey)->max('last_verified_at');
-        $syncInProgress = $this->syncInProgress();
-        // No cached data for this combo and nothing running → the page will auto-start a sync.
-        $autoSync = !$viefundVariantSynced && !$syncInProgress;
-
-        $viefundRows = VieFundCashDailySnapshot::query()
-            ->where('criteria_key', $variantKey)
-            ->whereBetween('total_date', [$dateFrom, $dateTo])
-            ->orderBy('total_date')
+            ->whereBetween('bank_statement_entries.value_date', [$dateFrom, $dateTo])
+            ->selectRaw('bank_statement_entries.value_date as total_date')
+            ->selectRaw('bank_statement_entries.account_number')
+            ->selectRaw("COALESCE(NULLIF(bank_statement_entries.currency, ''), '—') as currency")
+            ->selectRaw('COUNT(*) as bank_transaction_count')
+            ->selectRaw("SUM(CASE WHEN bank_statement_entries.credit_debit_indicator = 'DBIT' THEN -bank_statement_entries.amount ELSE bank_statement_entries.amount END) as bank_net_total")
+            ->selectRaw("SUM(CASE WHEN a.settlement_number IS NOT NULL AND a.settlement_number <> '' THEN 1 ELSE 0 END) as settlement_transaction_count")
+            ->selectRaw("SUM(CASE WHEN a.settlement_number IS NOT NULL AND a.settlement_number <> '' THEN CASE WHEN bank_statement_entries.credit_debit_indicator = 'DBIT' THEN -bank_statement_entries.amount ELSE bank_statement_entries.amount END ELSE 0 END) as settlement_net_total")
+            ->groupBy('bank_statement_entries.value_date', 'bank_statement_entries.account_number', 'bank_statement_entries.currency')
             ->get();
 
-        $byDate = [];
-        foreach ($bankRows as $row) {
-            $dateKey = Carbon::parse($row->total_date)->toDateString();
+        $settlementsByRow = DB::table('bank_statement_entries')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->whereBetween('bank_statement_entries.value_date', [$dateFrom, $dateTo])
+            ->whereNotNull('a.settlement_number')
+            ->where('a.settlement_number', '<>', '')
+            ->selectRaw('bank_statement_entries.value_date as total_date')
+            ->selectRaw('bank_statement_entries.account_number')
+            ->selectRaw("COALESCE(NULLIF(bank_statement_entries.currency, ''), '—') as currency")
+            ->selectRaw('a.settlement_number')
+            ->selectRaw('COUNT(*) as transaction_count')
+            ->selectRaw("SUM(CASE WHEN bank_statement_entries.credit_debit_indicator = 'DBIT' THEN -bank_statement_entries.amount ELSE bank_statement_entries.amount END) as net_total")
+            ->groupBy('bank_statement_entries.value_date', 'bank_statement_entries.account_number', 'bank_statement_entries.currency', 'a.settlement_number')
+            ->get()
+            ->groupBy(fn($row) => Carbon::parse($row->total_date)->toDateString() . '|' . ($row->account_number ?? '') . '|' . ($row->currency ?? '—'))
+            ->map(fn(Collection $rows) => $rows->keyBy(fn($item) => ctype_digit(trim((string) $item->settlement_number))
+                ? (string) (int) trim((string) $item->settlement_number)
+                : trim((string) $item->settlement_number)));
 
-            $byDate[$dateKey] = [
-                'total_date' => $dateKey,
-                'bank_transaction_count' => (int) $row->transaction_count,
-                'bank_net_total' => (float) $row->net_total,
-                'viefund_transaction_count' => 0,
-                'viefund_net_total' => 0.0,
-                'has_bank_data' => true,
-                'has_viefund_data' => false,
+        $rows = $bankRows->map(function ($row) use ($settlementsByRow, $include3000Sequences) {
+            $date = Carbon::parse($row->total_date)->toDateString();
+            $account = (string) ($row->account_number ?? '');
+            $currency = (string) ($row->currency ?? '—');
+            $settlements = $settlementsByRow->get($date . '|' . $account . '|' . $currency, collect());
+            if (!$include3000Sequences) {
+                $settlements = $settlements->reject(function ($settlement, $sequence) {
+                    return ctype_digit((string) $sequence)
+                        && (int) $sequence >= 3000
+                        && (int) $sequence < 4000;
+                });
+            }
+
+            return [
+                'total_date' => $date,
+                'account_number' => $account,
+                'currency' => $currency,
+                'bank_transaction_count' => (int) $row->bank_transaction_count,
+                'bank_net_total' => (float) $row->bank_net_total,
+                'settlement_transaction_count' => $settlements->sum(fn($settlement) => (int) $settlement->transaction_count),
+                'settlement_net_total' => $settlements->sum(fn($settlement) => (float) $settlement->net_total),
+                'settlement_sequences' => $settlements->keys()->values(),
+                'settlements_by_sequence' => $settlements,
             ];
-        }
+        });
 
-        foreach ($viefundRows as $row) {
-            $dateKey = Carbon::parse($row->total_date)->toDateString();
+        // This reconciliation is only meaningful for statement date/account
+        // rows that contain at least one eligible bank EFT sequence.
+        $rows = $rows
+            ->filter(fn(array $row) => $row['settlement_sequences']->count() > 0)
+            ->values();
 
-            $byDate[$dateKey] = array_merge($byDate[$dateKey] ?? [
-                'total_date' => $dateKey,
-                'bank_transaction_count' => 0,
-                'bank_net_total' => 0.0,
-                'has_bank_data' => false,
-            ], [
-                'viefund_transaction_count' => (int) $row->transaction_count,
-                'viefund_net_total' => (float) $row->net_total,
-                'has_viefund_data' => true,
-            ]);
-        }
+        // A settlement can be split across statement dates. The date/account row
+        // determines which sequences are eligible, while its Bank EFT Net uses
+        // every bank record belonging to those sequences for a like-for-like
+        // comparison with the complete VieFund EFT files.
+        $allSequences = $rows
+            ->flatMap(fn(array $row) => $row['settlement_sequences'])
+            ->filter(fn($sequence) => ctype_digit((string) $sequence))
+            ->unique()
+            ->values();
+        $bankBySequence = DB::table('bank_statement_entries')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->whereIn(
+                DB::raw('CAST(a.settlement_number AS UNSIGNED)'),
+                $allSequences->map(fn($sequence) => (int) $sequence)->all()
+            )
+            ->selectRaw('a.settlement_number')
+            ->selectRaw("COALESCE(NULLIF(bank_statement_entries.currency, ''), '—') as currency")
+            ->selectRaw("SUM(CASE WHEN bank_statement_entries.credit_debit_indicator = 'DBIT' THEN -bank_statement_entries.amount ELSE bank_statement_entries.amount END) as net_total")
+            ->groupBy('a.settlement_number', 'bank_statement_entries.currency')
+            ->get()
+            ->keyBy(fn($item) => (string) (int) $item->settlement_number . '|' . ($item->currency ?? '—'));
 
-        $rows = collect(array_values($byDate))->map(function (array $row) {
-            if (!($row['has_bank_data'] ?? false) && ($row['has_viefund_data'] ?? false)) {
-                $row['status'] = 'missing-bank';
-            } elseif (($row['has_bank_data'] ?? false) && !($row['has_viefund_data'] ?? false)) {
-                $row['status'] = 'missing-viefund';
-            }
-
-            $row['variance'] = $row['bank_net_total'] - $row['viefund_net_total'];
-            $bankAbs = abs($row['bank_net_total']);
-            $row['discrepancy_pct'] = $bankAbs < 0.0001
-                ? null
-                : (abs($row['variance']) / $bankAbs) * 100;
-
-            if (!isset($row['status'])) {
-                $row['status'] = abs($row['variance']) < 0.01 ? 'match' : ($row['variance'] > 0 ? 'bank-higher' : 'viefund-higher');
-            }
+        $rows = $rows->map(function (array $row) use ($bankBySequence) {
+            $row['settlement_net_total'] = $row['settlement_sequences']->sum(
+                fn($sequence) => (float) ($bankBySequence->get((string) $sequence . '|' . $row['currency'])?->net_total ?? 0)
+            );
 
             return $row;
         });
 
-        if ($sortField === 'discrepancy_pct') {
-            $rows = $sortDir === 'asc'
-                ? $rows->sortBy(fn(array $row) => $row['discrepancy_pct'] ?? INF)->values()
-                : $rows->sortByDesc(fn(array $row) => $row['discrepancy_pct'] ?? -INF)->values();
-        } else {
-            $rows = $sortDir === 'asc'
-                ? $rows->sortBy($sortField)->values()
-                : $rows->sortByDesc($sortField)->values();
-        }
-
-        // Default behavior: hide days where both sources net to zero.
-        if (!$showZeroDays) {
-            $rows = $rows->filter(function (array $row) {
-                return !(abs($row['bank_net_total']) < 0.0001 && abs($row['viefund_net_total']) < 0.0001);
-            })->values();
-        }
-
-        if (!$includeIncomplete) {
-            $rows = $rows->filter(function (array $row) {
-                return !in_array($row['status'], ['missing-bank', 'missing-viefund'], true);
-            })->values();
-        }
+        $rows = $sortDir === 'asc'
+            ? $rows->sortBy($sortField)->values()
+            : $rows->sortByDesc($sortField)->values();
 
         $summary = [
-            'days' => $rows->count(),
+            'days' => $rows->pluck('total_date')->unique()->count(),
+            'accounts' => $rows->pluck('account_number')->unique()->count(),
+            'rows' => $rows->count(),
             'bank_total' => $rows->sum('bank_net_total'),
-            'viefund_total' => $rows->sum('viefund_net_total'),
-            'variance_total' => $rows->sum('variance'),
-            'mismatch_days' => $rows->where('status', '!=', 'match')->count(),
+            'settlement_total' => $rows->sum('settlement_net_total'),
         ];
 
         $currentPage = max(1, (int) $request->query('page', 1));
         $totalRows = $rows->count();
+        $pageRows = $rows->forPage($currentPage, $perPage)->values();
+        $pageSequences = $pageRows
+            ->flatMap(fn(array $row) => $row['settlement_sequences'])
+            ->filter(fn($sequence) => ctype_digit((string) $sequence))
+            ->unique()
+            ->values();
+        $eftBySequence = $this->eftRepository
+            ->totalsBySequences($pageSequences->all())
+            ->groupBy(fn($row) => (string) (int) $row->sequence_number)
+            ->map(fn(Collection $files) => [
+                'transaction_count' => $files->sum(fn($file) => (int) $file->transaction_count),
+                'net_total' => $files->sum(fn($file) => (float) $file->net_total),
+            ]);
+
+        $pageRows = $pageRows->map(function (array $row) use ($eftBySequence) {
+            $matchedSequences = $row['settlement_sequences']
+                ->filter(fn($sequence) => $eftBySequence->has((string) $sequence));
+            $row['eft_transaction_count'] = $matchedSequences
+                ->sum(fn($sequence) => (int) data_get($eftBySequence->get((string) $sequence), 'transaction_count', 0));
+            $row['eft_net_total'] = $matchedSequences
+                ->sum(fn($sequence) => (float) data_get($eftBySequence->get((string) $sequence), 'net_total', 0));
+            $row['variance'] = (float) $row['settlement_net_total'] - (float) $row['eft_net_total'];
+            $row['matched_sequences'] = $matchedSequences->values();
+            $row['matched_sequence_count'] = $matchedSequences->count();
+            return $row;
+        });
+
         $rows = new LengthAwarePaginator(
-            $rows->forPage($currentPage, $perPage)->values(),
+            $pageRows,
             $totalRows,
             $perPage,
             $currentPage,
@@ -189,10 +223,131 @@ class DailyTotalsComparisonController extends Controller
             ]
         );
 
-        $fundStatusOptions = self::FUND_STATUS_OPTIONS;
-        $dateBasisOptions = VieFundDailyTotal::DATE_BASIS_OPTIONS;
+        return view('reconciliations.daily-totals', compact(
+            'rows',
+            'summary',
+            'dateFrom',
+            'dateTo',
+            'sortField',
+            'sortDir',
+            'perPage',
+            'include3000Sequences',
+        ));
+    }
 
-        return view('reconciliations.daily-totals', compact('rows', 'summary', 'dateFrom', 'dateTo', 'sortField', 'sortDir', 'showZeroDays', 'onlyFundservBank', 'includeIncomplete', 'perPage', 'fundStatusOptions', 'dateBasisOptions', 'selectedStatuses', 'selectedBasis', 'variantKey', 'viefundVariantSynced', 'viefundLastSynced', 'syncInProgress', 'autoSync'));
+    public function fspIndex(Request $request, string $source = 'agra'): View
+    {
+        $source = in_array($source, ['agra', '7960'], true) ? $source : 'agra';
+        $sourceType = $source === '7960' ? 'ltm' : 'fundserv_agra';
+        $sourceLabel = $source === '7960' ? '7960' : 'AGRA';
+        $earliestBankDate = BankStatementEntry::min('value_date');
+        $dateFrom = $request->filled('date_from')
+            ? Carbon::parse($request->date_from)->toDateString()
+            : ($earliestBankDate ? Carbon::parse($earliestBankDate)->toDateString() : Carbon::today()->toDateString());
+        $dateTo = $request->filled('date_to')
+            ? Carbon::parse($request->date_to)->toDateString()
+            : Carbon::today()->toDateString();
+        $perPage = (int) $request->query('per_page', self::DEFAULT_PER_PAGE);
+        if (!in_array($perPage, self::PER_PAGE_OPTIONS, true)) {
+            $perPage = self::DEFAULT_PER_PAGE;
+        }
+        $sortField = in_array($request->query('sort'), [
+            'total_date',
+            'account_number',
+            'currency',
+            'bank_transaction_count',
+            'bank_net_total',
+            'fsp_item_count',
+            'fsp_net_total',
+            'variance',
+        ], true) ? $request->query('sort') : 'total_date';
+        $sortDir = $request->query('sort_dir') === 'asc' ? 'asc' : 'desc';
+
+        $bankByDate = DB::table('bank_statement_entries as b')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->whereBetween('b.value_date', [$dateFrom, $dateTo])
+            ->where('a.counterparty', 'like', 'fundserv%')
+            ->selectRaw('b.value_date as total_date')
+            ->selectRaw('b.id as bank_entry_id')
+            ->selectRaw('b.account_number')
+            ->selectRaw("CASE WHEN b.credit_debit_indicator = 'DBIT' THEN -b.amount ELSE b.amount END as net_total")
+            ->get()
+            ->groupBy(fn($row) => Carbon::parse($row->total_date)->toDateString());
+
+        $fspByDate = DB::table('settlement_instructions')
+            ->whereBetween('settlement_date', [$dateFrom, $dateTo])
+            ->where('source_type', $sourceType)
+            ->selectRaw('settlement_date as total_date')
+            ->selectRaw('currency')
+            ->selectRaw('COUNT(*) as item_count')
+            ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
+            ->groupBy('settlement_date', 'currency')
+            ->get()
+            ->groupBy(fn($row) => Carbon::parse($row->total_date)->toDateString());
+
+        $rows = $fspByDate->flatMap(function (Collection $fspGroups, string $date) use ($bankByDate) {
+            $availableBank = $bankByDate->get($date, collect())->keyBy('bank_entry_id');
+
+            return $fspGroups
+                ->sortByDesc(fn($fsp) => abs((float) $fsp->net_total))
+                ->map(function ($fsp) use (&$availableBank, $date) {
+                    $fspNet = (float) $fsp->net_total;
+                    $bank = $availableBank
+                        ->sortBy(fn($candidate) => abs((float) $candidate->net_total - $fspNet))
+                        ->first();
+                    if ($bank) {
+                        $availableBank->forget($bank->bank_entry_id);
+                    }
+                    $bankNet = (float) ($bank?->net_total ?? 0);
+
+                    return [
+                        'total_date' => $date,
+                        'bank_entry_id' => $bank?->bank_entry_id ? (int) $bank->bank_entry_id : null,
+                        'account_number' => (string) ($bank?->account_number ?? ''),
+                        'currency' => (string) ($fsp->currency ?? ''),
+                        'bank_transaction_count' => $bank ? 1 : 0,
+                        'bank_net_total' => $bankNet,
+                        'fsp_item_count' => (int) $fsp->item_count,
+                        'fsp_net_total' => $fspNet,
+                        'variance' => $bankNet - $fspNet,
+                    ];
+                });
+        });
+
+        $rows = ($sortDir === 'asc' ? $rows->sortBy($sortField) : $rows->sortByDesc($sortField))->values();
+        $summary = [
+            'days' => $rows->pluck('total_date')->unique()->count(),
+            'accounts' => $rows->pluck('account_number')->filter()->unique()->count(),
+            'bank_transaction_count' => $rows->sum('bank_transaction_count'),
+            'bank_net_total' => $rows->sum('bank_net_total'),
+            'fsp_item_count' => $rows->sum('fsp_item_count'),
+            'fsp_net_total' => $rows->sum('fsp_net_total'),
+            'variance' => $rows->sum('variance'),
+        ];
+
+        $currentPage = max(1, (int) $request->query('page', 1));
+        $rows = new LengthAwarePaginator(
+            $rows->forPage($currentPage, $perPage)->values(),
+            $rows->count(),
+            $perPage,
+            $currentPage,
+            ['path' => route('reconciliations.bank-fsp.source', ['source' => $source]), 'query' => $request->query()]
+        );
+
+        return view('reconciliations.bank-fsp', compact(
+            'dateFrom',
+            'dateTo',
+            'rows',
+            'summary',
+            'sortField',
+            'sortDir',
+            'perPage',
+            'source',
+            'sourceLabel',
+        ));
     }
 
     /**

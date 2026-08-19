@@ -6,6 +6,8 @@
 @php
     $formattedDate = \Carbon\Carbon::parse($date)->format('F j, Y');
     $isOnlyFundservBank = $onlyFundservBank ?? false;
+    $isAllDates = $allDates ?? false;
+    $dateLabel = $isAllDates ? 'All dates sharing the selected settlement number(s)' : $formattedDate;
 @endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; gap: 12px; flex-wrap: wrap;">
     <h2 style="margin: 0;">Bank Daily Transactions</h2>
@@ -20,7 +22,17 @@
 <div class="card" style="margin-bottom: 16px; padding: 22px 24px; background: linear-gradient(135deg, #ebf8ff 0%, #e8f4fd 100%); border: 1px solid #90cdf4; color: #2c5282; box-shadow: 0 4px 14px rgba(49, 130, 206, 0.10);">
     <div style="font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #2b6cb0; margin-bottom: 8px;">Criteria</div>
     <ul style="margin: 0; padding-left: 20px; font-size: 15px; font-weight: 400; line-height: 1.55; color: #2c5282;">
-        <li><strong>Transaction Date</strong> is {{ $formattedDate }}</li>
+        @if($isAllDates)
+            <li><strong>Transaction Dates</strong> include all bank entries sharing the selected settlement number(s)</li>
+        @else
+            <li><strong>Transaction Date</strong> is {{ $formattedDate }}</li>
+        @endif
+        @if(($account ?? '') !== '')
+            <li><strong>Account</strong> is {{ $account }}</li>
+        @endif
+        @if(($settlementNumbers ?? collect())->isNotEmpty())
+            <li><strong>Settlement Numbers</strong> are {{ $settlementNumbers->implode(', ') }}</li>
+        @endif
         <li>
             @if($isOnlyFundservBank)
                 Calculating only bank transactions where counterparty contains "fundserv"
@@ -35,7 +47,7 @@
     <div id="daily-sticky-banner" style="position: sticky; top: 0; z-index: 11; padding: 14px 20px; background: linear-gradient(90deg, #ebf8ff, #f0fff4); border-bottom: 1px solid #bee3f8; display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center;">
         <div style="display: flex; flex-direction: column; gap: 2px;">
             <span style="font-size: 11px; font-weight: 700; color: #2c5282; text-transform: uppercase; letter-spacing: 0.08em;">Transaction Date</span>
-            <span style="font-size: 24px; font-weight: 700; color: #1a365d; line-height: 1.1;">{{ $formattedDate }}</span>
+            <span style="font-size: {{ $isAllDates ? '14px' : '24px' }}; font-weight: 700; color: #1a365d; line-height: 1.1;">{{ $dateLabel }}</span>
         </div>
         <div style="display: flex; flex-direction: column; gap: 2px; align-items: center;">
             <span style="font-size: 11px; font-weight: 700; color: #2c5282; text-transform: uppercase; letter-spacing: 0.08em;">Total</span>
@@ -49,7 +61,7 @@
                     <span>▾</span>
                 </button>
                 <div id="bank-export-panel" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 160px; overflow: hidden;">
-                    <a href="{{ route('reconciliations.daily-totals.bank-day.export', ['date' => $date, 'only_fundserv_bank' => $isOnlyFundservBank ? 1 : 0, 'format' => 'csv']) }}"
+                    <a href="{{ route('reconciliations.daily-totals.bank-day.export', ['date' => $date, 'account' => $account ?? '', 'settlement_numbers' => ($settlementNumbers ?? collect())->implode(','), 'all_dates' => $isAllDates ? 1 : 0, 'only_fundserv_bank' => $isOnlyFundservBank ? 1 : 0, 'format' => 'csv']) }}"
                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; text-decoration: none; border-bottom: 1px solid #f0f4f8;"
                        onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
                         <span style="display:inline-flex; align-items:center; gap:8px;">
@@ -61,7 +73,7 @@
                             <span>CSV</span>
                         </span>
                     </a>
-                    <a href="{{ route('reconciliations.daily-totals.bank-day.export', ['date' => $date, 'only_fundserv_bank' => $isOnlyFundservBank ? 1 : 0, 'format' => 'excel']) }}"
+                    <a href="{{ route('reconciliations.daily-totals.bank-day.export', ['date' => $date, 'account' => $account ?? '', 'settlement_numbers' => ($settlementNumbers ?? collect())->implode(','), 'all_dates' => $isAllDates ? 1 : 0, 'only_fundserv_bank' => $isOnlyFundservBank ? 1 : 0, 'format' => 'excel']) }}"
                        style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; text-decoration: none;"
                        onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
                         <span style="display:inline-flex; align-items:center; gap:8px;">

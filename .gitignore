@@ -32,6 +32,7 @@ resources/data/viefund_db_schema
 /storage/app/viefund-daily-totals-sync-status.json
 /storage/app/viefund-cash-daily-totals-sync-status.json
 /storage/app/viefund-transactions-sync-status.json
+/storage/app/settlement-instructions-sync-status.json
 /storage/app/*.lock
 storage/app/reports
 /resources/data/

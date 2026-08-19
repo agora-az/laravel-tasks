@@ -6,6 +6,7 @@ use App\Exports\VieFundReportSheetExport;
 use App\Models\BankStatementEntry;
 use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundCashSnapshotRun;
+use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -49,7 +50,10 @@ class DailyTotalsDrilldownController extends Controller
         'settlement_date' => 'se',
     ];
 
-    public function __construct(private readonly VieFundRemoteService $vieFundRemoteService) {}
+    public function __construct(
+        private readonly VieFundRemoteService $vieFundRemoteService,
+        private readonly SqlServerEftRemoteRepository $eftRepository,
+    ) {}
 
     /** Configured fallback fund status IDs (VIEFUND_DEFAULT_FUND_STATUS). */
     private function defaultStatusIds(): array
@@ -110,6 +114,15 @@ class DailyTotalsDrilldownController extends Controller
     public function bankDay(Request $request, string $date): View
     {
         $day = $this->parseDateOrFail($date);
+        $account = trim((string) $request->query('account', ''));
+        $entryId = $request->integer('entry_id') ?: null;
+        $settlementNumbers = collect(preg_split('/[,\s]+/', (string) $request->query('settlement_numbers', ''), -1, PREG_SPLIT_NO_EMPTY))
+            ->map(fn($number) => trim((string) $number))
+            ->filter()
+            ->unique()
+            ->take(500)
+            ->values();
+        $allDates = $request->boolean('all_dates') && $settlementNumbers->isNotEmpty();
         $onlyFundservBank = $request->has('only_fundserv_bank')
             ? $request->boolean('only_fundserv_bank')
             : false;
@@ -123,7 +136,10 @@ class DailyTotalsDrilldownController extends Controller
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
-            ->whereDate('bank_statement_entries.value_date', '=', $day->toDateString())
+            ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
+            ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
+            ->when($entryId, fn($query) => $query->where('bank_statement_entries.id', $entryId))
+            ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
             })
@@ -148,7 +164,10 @@ class DailyTotalsDrilldownController extends Controller
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
-            ->whereDate('value_date', '=', $day->toDateString())
+            ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
+            ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
+            ->when($entryId, fn($query) => $query->where('bank_statement_entries.id', $entryId))
+            ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
             })
@@ -160,12 +179,24 @@ class DailyTotalsDrilldownController extends Controller
             'transactions' => $transactions,
             'summary' => $summary,
             'onlyFundservBank' => $onlyFundservBank,
+            'account' => $account,
+            'entryId' => $entryId,
+            'settlementNumbers' => $settlementNumbers,
+            'allDates' => $allDates,
         ]);
     }
 
     public function bankDayExport(Request $request, string $date): BinaryFileResponse|StreamedResponse
     {
         $day = $this->parseDateOrFail($date);
+        $account = trim((string) $request->query('account', ''));
+        $settlementNumbers = collect(preg_split('/[,\s]+/', (string) $request->query('settlement_numbers', ''), -1, PREG_SPLIT_NO_EMPTY))
+            ->map(fn($number) => trim((string) $number))
+            ->filter()
+            ->unique()
+            ->take(500)
+            ->values();
+        $allDates = $request->boolean('all_dates') && $settlementNumbers->isNotEmpty();
         $onlyFundservBank = $request->has('only_fundserv_bank')
             ? $request->boolean('only_fundserv_bank')
             : false;
@@ -180,7 +211,9 @@ class DailyTotalsDrilldownController extends Controller
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
-            ->whereDate('bank_statement_entries.value_date', '=', $day->toDateString())
+            ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
+            ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
+            ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
             })
@@ -246,6 +279,251 @@ class DailyTotalsDrilldownController extends Controller
 
             fclose($out);
         }, $filename);
+    }
+
+    public function settlementSequences(Request $request, string $date): View
+    {
+        $day = $this->parseDateOrFail($date);
+        $account = trim((string) $request->query('account', ''));
+        $include3000Sequences = $request->boolean('include_3000_sequences');
+
+        $sourceSequences = DB::table('bank_statement_entries')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->whereDate('bank_statement_entries.value_date', $day->toDateString())
+            ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
+            ->whereNotNull('a.settlement_number')
+            ->where('a.settlement_number', '<>', '')
+            ->distinct()
+            ->pluck('a.settlement_number')
+            ->map(fn($sequence) => trim((string) $sequence))
+            ->filter()
+            ->when(!$include3000Sequences, fn($sequences) => $sequences->reject(
+                fn($sequence) => ctype_digit($sequence)
+                    && (int) $sequence >= 3000
+                    && (int) $sequence < 4000
+            ))
+            ->values();
+
+        $bankBySequence = DB::table('bank_statement_entries')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->whereIn('a.settlement_number', $sourceSequences->all())
+            ->selectRaw('a.settlement_number')
+            ->selectRaw('COUNT(*) as bank_transaction_count')
+            ->selectRaw("SUM(CASE WHEN bank_statement_entries.credit_debit_indicator = 'DBIT' THEN -bank_statement_entries.amount ELSE bank_statement_entries.amount END) as bank_net_total")
+            ->selectRaw('MIN(bank_statement_entries.value_date) as first_bank_date')
+            ->selectRaw('MAX(bank_statement_entries.value_date) as last_bank_date')
+            ->selectRaw('COUNT(DISTINCT bank_statement_entries.account_number) as bank_account_count')
+            ->selectRaw("GROUP_CONCAT(DISTINCT bank_statement_entries.account_number ORDER BY bank_statement_entries.account_number SEPARATOR ', ') as bank_accounts")
+            ->groupBy('a.settlement_number')
+            ->get()
+            ->keyBy(fn($row) => (string) (int) $row->settlement_number);
+
+        $eftBySequence = $this->eftRepository
+            ->totalsBySequences($sourceSequences->all())
+            ->groupBy(fn($row) => (string) (int) $row->sequence_number);
+
+        $rows = $sourceSequences
+            ->map(fn($sequence) => (string) (int) $sequence)
+            ->unique()
+            ->map(function (string $sequence) use ($bankBySequence, $eftBySequence) {
+                $bank = $bankBySequence->get($sequence);
+                $eftFiles = $eftBySequence->get($sequence, collect());
+                $bankNet = (float) ($bank?->bank_net_total ?? 0);
+                $eftNet = $eftFiles->sum(fn($file) => (float) $file->net_total);
+
+                return [
+                    'sequence' => $sequence,
+                    'bank_transaction_count' => (int) ($bank?->bank_transaction_count ?? 0),
+                    'bank_net_total' => $bankNet,
+                    'first_bank_date' => $bank?->first_bank_date,
+                    'last_bank_date' => $bank?->last_bank_date,
+                    'bank_account_count' => (int) ($bank?->bank_account_count ?? 0),
+                    'bank_accounts' => (string) ($bank?->bank_accounts ?? ''),
+                    'eft_file_count' => $eftFiles->count(),
+                    'eft_transaction_count' => $eftFiles->sum(fn($file) => (int) $file->transaction_count),
+                    'eft_net_total' => $eftNet,
+                    'variance' => $bankNet - $eftNet,
+                ];
+            })
+            ->sortBy('sequence', SORT_NATURAL)
+            ->values();
+
+        $summary = [
+            'bank_net_total' => $rows->sum(fn(array $row) => $row['bank_net_total']),
+            'eft_net_total' => $rows->sum(fn(array $row) => $row['eft_net_total']),
+            'variance' => $rows->sum(fn(array $row) => $row['variance']),
+        ];
+
+        return view('reconciliations.daily-settlement-sequences', [
+            'date' => $day->toDateString(),
+            'account' => $account,
+            'rows' => $rows,
+            'summary' => $summary,
+            'include3000Sequences' => $include3000Sequences,
+        ]);
+    }
+
+    public function fspComparison(Request $request, string $source, string $date): View
+    {
+        $day = $this->parseDateOrFail($date);
+        abort_unless(in_array($source, ['agra', '7960'], true), 404);
+
+        $sourceType = $source === '7960' ? 'ltm' : 'fundserv_agra';
+        $sourceLabel = $source === '7960' ? '7960' : 'AGRA';
+        $currency = strtoupper(trim((string) $request->query('currency', 'CAD')));
+        $entryId = $request->integer('entry_id') ?: null;
+        $perPage = in_array($request->integer('per_page', 100), [50, 100, 250], true)
+            ? $request->integer('per_page', 100)
+            : 100;
+        $sort = in_array($request->query('sort'), ['side', 'amount'], true)
+            ? (string) $request->query('sort')
+            : null;
+        $direction = strtolower((string) $request->query('direction', 'asc')) === 'desc' ? 'desc' : 'asc';
+        $amountSearchInput = trim((string) $request->query('amount', ''));
+        $normalizedAmountSearch = preg_replace('/[^0-9.]/', '', $amountSearchInput);
+        $amountSearch = $normalizedAmountSearch !== '' ? $normalizedAmountSearch : null;
+
+        $bankTransaction = DB::table('bank_statement_entries as b')
+            ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->when($entryId, fn($query) => $query->where('b.id', $entryId))
+            ->whereDate('b.value_date', $day->toDateString())
+            ->select([
+                'b.id',
+                'b.value_date',
+                'b.account_number',
+                'b.credit_debit_indicator',
+                'b.amount',
+                'b.additional_info',
+                'a.memo_type',
+                'a.counterparty',
+                'a.wire_payment_reference',
+            ])
+            ->first();
+
+        $bankNet = $bankTransaction
+            ? ($bankTransaction->credit_debit_indicator === 'DBIT' ? -(float) $bankTransaction->amount : (float) $bankTransaction->amount)
+            : 0.0;
+
+        $fspBase = DB::table('settlement_instructions')
+            ->where('source_type', $sourceType)
+            ->whereDate('settlement_date', $day->toDateString())
+            ->where('currency', $currency);
+        $fspSummary = (clone $fspBase)
+            ->selectRaw('COUNT(*) as item_count')
+            ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
+            ->first();
+        $fspTransactions = (clone $fspBase)
+            ->when($amountSearch !== null, fn($query) => $query->whereRaw(
+                'CAST(ABS(COALESCE(settlement_amount, 0)) AS CHAR) LIKE ?',
+                ['%'.$amountSearch.'%']
+            ))
+            ->when($sort === 'side', fn($query) => $query->orderBy('side', $direction))
+            ->when($sort === 'amount', fn($query) => $query->orderByRaw(
+                "CASE WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) ELSE 0 END ".strtoupper($direction)
+            ))
+            ->orderBy('id')
+            ->paginate($perPage)
+            ->withQueryString();
+        $fspNet = (float) ($fspSummary?->net_total ?? 0);
+
+        return view('reconciliations.fsp-comparison', [
+            'date' => $day->toDateString(),
+            'source' => $source,
+            'sourceType' => $sourceType,
+            'sourceLabel' => $sourceLabel,
+            'currency' => $currency,
+            'bankTransaction' => $bankTransaction,
+            'bankNet' => $bankNet,
+            'fspTransactions' => $fspTransactions,
+            'fspItemCount' => (int) ($fspSummary?->item_count ?? 0),
+            'fspNet' => $fspNet,
+            'variance' => $bankNet - $fspNet,
+            'perPage' => $perPage,
+            'sort' => $sort,
+            'direction' => $direction,
+            'amountSearchInput' => $amountSearchInput,
+        ]);
+    }
+
+    public function eftSequenceComparison(Request $request, string $date, string $sequence): View
+    {
+        $day = $this->parseDateOrFail($date);
+        $sequence = trim($sequence);
+        abort_unless($sequence !== '' && ctype_digit($sequence), 404);
+        $account = trim((string) $request->query('account', ''));
+        $amountSearchInput = trim((string) $request->query('amount', ''));
+        $amountSearch = preg_replace('/[^0-9.]/', '', $amountSearchInput);
+        $amountSearch = $amountSearch !== '' ? $amountSearch : null;
+        $amountSortDirection = strtolower((string) $request->query('amount_direction', 'asc')) === 'desc' ? 'desc' : 'asc';
+        $sortByAmount = $request->query('sort') === 'amount';
+
+        $bankTransactions = DB::table('bank_statement_entries as b')
+            ->join('bank_statement_entry_analyses as a', function ($join) {
+                $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                    ->where('a.parser_version', self::PARSER_VERSION);
+            })
+            ->where('a.settlement_number', $sequence)
+            ->select([
+                'b.id',
+                'b.value_date',
+                'b.account_number',
+                'b.credit_debit_indicator',
+                'b.amount',
+                'b.additional_info',
+                'a.memo_type',
+                'a.counterparty',
+                'a.settlement_number',
+                'a.wire_payment_reference',
+            ])
+            ->orderBy('b.value_date')
+            ->orderBy('b.id')
+            ->get();
+
+        $bankNet = $bankTransactions->sum(fn($item) => $item->credit_debit_indicator === 'DBIT'
+            ? -(float) $item->amount
+            : (float) $item->amount);
+
+        $eftFiles = $this->eftRepository->totalsBySequences([$sequence]);
+        $eftItemCount = $eftFiles->sum(fn($file) => (int) $file->transaction_count);
+        $eftNet = $eftFiles->sum(fn($file) => (float) $file->net_total);
+        $eftItems = $this->eftRepository->paginateItems([
+            'file_id' => '',
+            'sequences' => $sequence,
+            'date_basis' => 'created',
+            'date_from' => '',
+            'date_to' => '',
+            'type' => '',
+            'file_status' => '',
+            'item_status' => '',
+            'file_search' => '',
+            'item_search' => '',
+            'amount_contains' => $amountSearch,
+        ], $sortByAmount ? 'signed_amount' : 'created_at', $sortByAmount ? $amountSortDirection : 'desc', 100, 'eft_page')->withQueryString();
+
+        return view('reconciliations.eft-sequence-comparison', [
+            'date' => $day->toDateString(),
+            'account' => $account,
+            'sequence' => $sequence,
+            'include3000Sequences' => $request->boolean('include_3000_sequences'),
+            'bankTransactions' => $bankTransactions,
+            'bankNet' => $bankNet,
+            'eftItems' => $eftItems,
+            'eftItemCount' => $eftItemCount,
+            'eftNet' => $eftNet,
+            'variance' => $bankNet - $eftNet,
+            'amountSearchInput' => $amountSearchInput,
+            'sortByAmount' => $sortByAmount,
+            'amountSortDirection' => $amountSortDirection,
+        ]);
     }
 
     public function viefundDay(Request $request, string $date): View

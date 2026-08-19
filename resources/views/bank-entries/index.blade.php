@@ -417,11 +417,11 @@
                             <th style="text-align: left; font-weight: 700; color: #2d3748;">Statement Date</th>
                             <th style="text-align: left; font-weight: 700; color: #2d3748;">Account</th>
                             <th style="text-align: left; font-weight: 700; color: #2d3748;">Statement ID</th>
-                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Source File</th>
                             <th style="text-align: right; font-weight: 700; color: #2d3748;">Opening (OPBD)</th>
                             <th style="text-align: right; font-weight: 700; color: #2d3748;">Closing (CLBD)</th>
                             <th style="text-align: right; font-weight: 700; color: #2d3748;">Credit Summary</th>
                             <th style="text-align: right; font-weight: 700; color: #2d3748;">Debit Summary</th>
+                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Source File</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -443,7 +443,6 @@
                                 </td>
                                 <td style="white-space: nowrap; color: #2d3748;">{{ $summary->account_number ?: '—' }}</td>
                                 <td style="white-space: nowrap; color: #2d3748;">{{ $summary->statement_id ?: '—' }}</td>
-                                <td style="white-space: nowrap; color: #4a5568;">{{ $summary->source_file }}</td>
                                 <td style="text-align: right; white-space: nowrap; color: #4a5568;">
                                     @if($openingAmount !== null)
                                         {{ (float) $openingAmount < 0 ? '(' . $currency . ' ' . number_format(abs((float) $openingAmount), 2) . ')' : $currency . ' ' . number_format((float) $openingAmount, 2) }}
@@ -464,6 +463,7 @@
                                 <td style="text-align: right; white-space: nowrap; color: #c53030;">
                                     {{ number_format((int) ($summary->total_debit_entries ?? 0)) }} / {{ $currency }} {{ number_format((float) ($summary->total_debit_sum ?? 0), 2) }}
                                 </td>
+                                <td style="white-space: nowrap; color: #4a5568;">{{ $summary->source_file }}</td>
                             </tr>
                         @endforeach
                     </tbody>
@@ -488,11 +488,14 @@
                                 $sort = request('sort', 'value_date');
                                 $dir = request('sort_dir', 'desc');
                                 $flip = fn($col) => ($sort === $col && $dir === 'asc') ? 'desc' : 'asc';
-                                $arrow = fn($col) => $sort === $col ? ($dir === 'asc' ? ' ↑' : ' ↓') : '';
+                                $arrow = fn($col) => $sort === $col ? ($dir === 'asc' ? ' ↑' : ' ↓') : ' ⇅';
                                 $sortUrl = fn($col) => route('bank-entries.index', array_merge(request()->except(['sort','sort_dir','page']), ['sort' => $col, 'sort_dir' => $flip($col)]));
                             @endphp
                             <th style="text-align: left; font-weight: 600; color: #2d3748;">
                                 <a href="{{ $sortUrl('value_date') }}" style="color: inherit; text-decoration: none;">Date{{ $arrow('value_date') }}</a>
+                            </th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748;">
+                                <a href="{{ $sortUrl('account_number') }}" style="color: inherit; text-decoration: none;">Account{{ $arrow('account_number') }}</a>
                             </th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748;">
                                 <a href="{{ $sortUrl('inferred_channel') }}" style="color: inherit; text-decoration: none;">Channel{{ $arrow('inferred_channel') }}</a>
@@ -532,10 +535,8 @@
                             $chStyle = $channelColors[$ch] ?? ['bg' => '#f7fafc', 'text' => '#4a5568'];
                         @endphp
                         <tr style="border-bottom: 1px solid #e2e8f0; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }}">
-                            <td style="color: #4a5568; white-space: nowrap; line-height: 1.2;">
-                                <span style="display: block;">{{ $entry->value_date }}</span>
-                                <span style="display: block; opacity: 0.9;">00:00</span>
-                            </td>
+                            <td style="color: #4a5568; white-space: nowrap;">{{ $entry->value_date?->format('Y-m-d') ?? '—' }}</td>
+                            <td style="color: #4a5568; white-space: nowrap;">{{ $entry->account_number ?: '—' }}</td>
                             <td style="">
                                 @if($entry->inferred_channel)
                                     <span style="background: {{ $chStyle['bg'] }}; color: {{ $chStyle['text'] }}; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; font-family: monospace;">

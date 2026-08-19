@@ -1,15 +1,24 @@
 @extends('layouts.app')
 
-@section('title', 'Settlement Instructions')
+@section('title', 'FSP Files')
 
 @section('content')
 @php
     $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
+    $settlementDateFrom = request('date_from');
+    $settlementDateTo = request('date_to');
+    $settlementDateLabel = match (true) {
+        $settlementDateFrom && $settlementDateTo && $settlementDateFrom === $settlementDateTo => \Carbon\Carbon::parse($settlementDateFrom)->format('F j, Y'),
+        $settlementDateFrom && $settlementDateTo => \Carbon\Carbon::parse($settlementDateFrom)->format('F j, Y') . ' through ' . \Carbon\Carbon::parse($settlementDateTo)->format('F j, Y'),
+        $settlementDateFrom => \Carbon\Carbon::parse($settlementDateFrom)->format('F j, Y') . ' onward',
+        $settlementDateTo => 'Through ' . \Carbon\Carbon::parse($settlementDateTo)->format('F j, Y'),
+        default => 'All settlement dates',
+    };
 @endphp
 <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
     <div>
-        <h2 style="margin: 0;">Settlement Instructions</h2>
-        <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: FundSERV AGRA and LTM settlement instruction feeds</div>
+        <h2 style="margin: 0;">FSP Files</h2>
+        <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: AGRA and 7960 feeds</div>
         <div id="settlement-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
             <span id="settlement-sync-status"></span>
             <button type="button" id="settlement-sync-status-dismiss" aria-label="Dismiss FSP sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
@@ -110,8 +119,8 @@
     $currentSort = $sort ?? 'settlement_date';
     $currentSortDir = $sortDir ?? 'desc';
     $sourceLabels = [
-        'fundserv_agra' => 'FundSERV AGRA',
-        'ltm' => 'LTM',
+        'fundserv_agra' => 'AGRA',
+        'ltm' => '7960',
     ];
     $formatAccountingAmount = static function ($amount, ?string $side): string {
         if ($amount === null) {
@@ -311,17 +320,18 @@
 
 <div class="card" style="padding-top: 0;">
     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #e2e8f0; padding: 12px 14px; background: #f8fafc; flex-wrap: wrap;">
-        <div style="font-size: 12px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 0.07em;">
-            Settlement Instructions
+        <div>
+            <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Settlement Date</div>
+            <div style="font-size:20px;font-weight:800;color:#1a365d;line-height:1.15;margin-top:4px;">{{ $settlementDateLabel }}</div>
         </div>
         <div style="display: flex; gap: 8px;">
             <button type="button" data-settlement-tab="fundserv_agra" aria-selected="{{ $activeSourceTab === 'fundserv_agra' ? 'true' : 'false' }}"
                style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeSourceTab === 'fundserv_agra' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-                FundSERV AGRA
+                AGRA
             </button>
             <button type="button" data-settlement-tab="ltm" aria-selected="{{ $activeSourceTab === 'ltm' ? 'true' : 'false' }}"
                style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeSourceTab === 'ltm' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-                LTM
+                7960
             </button>
         </div>
     </div>
@@ -357,7 +367,7 @@
                 <div style="margin: 16px 0;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap; padding: 0 14px;">
                         <div>
-                            <div style="font-size: 12px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 0.07em;">Summary</div>
+                            <div style="font-size: 12px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 0.07em;">FSP Files</div>
                             <div style="font-size: 13px; color: #4a5568; margin-top: 4px;">
                                 {{ $sourceLabels[$sourceType] }}: showing {{ number_format($sourceSummaries->count()) }} of {{ number_format((int) ($sourceSummaryTotals->summary_count ?? 0)) }} summary groups for the active filters.
                             </div>

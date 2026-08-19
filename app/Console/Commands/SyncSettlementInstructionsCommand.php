@@ -151,13 +151,34 @@ class SyncSettlementInstructionsCommand extends Command
             return $this->failSync($statusFile, "Unable to list remote path: {$remotePath}", $startedAt);
         }
 
-        $remoteCandidates = collect($remoteFiles)
+        $candidateNames = static fn(array $files) => collect($files)
             ->map(fn($name) => basename((string) $name))
             ->filter(fn($name) => $name !== '' && $name !== '.' && $name !== '..')
             ->filter(fn($name) => fnmatch($pattern, $name))
             ->unique()
             ->sort()
             ->values();
+
+        $remoteCandidates = $candidateNames($remoteFiles);
+
+        // When settlement-specific path configuration is absent, the bank SFTP
+        // root is used for the connection. Current FSP deliveries are stored in
+        // its Settlement_Files subdirectory, so discover that folder when the
+        // configured directory contains no matching FSP files.
+        if ($remoteCandidates->isEmpty()) {
+            $settlementFilesPath = $remotePath === '/'
+                ? '/Settlement_Files'
+                : $remotePath . '/Settlement_Files';
+            $settlementFiles = $sftp->nlist($settlementFilesPath);
+
+            if ($settlementFiles !== false) {
+                $subdirectoryCandidates = $candidateNames($settlementFiles);
+                if ($subdirectoryCandidates->isNotEmpty()) {
+                    $remotePath = $settlementFilesPath;
+                    $remoteCandidates = $subdirectoryCandidates;
+                }
+            }
+        }
 
         $toDownload = $force
             ? $remoteCandidates->reject(fn($name) => $localCandidates->contains($name))->values()

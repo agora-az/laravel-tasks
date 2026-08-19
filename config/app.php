@@ -25,6 +25,6 @@ return [
 
     // Comma-separated list of nav item keys to hide.
     // Available keys: transaction_data, reconciliation, reports
-    // Example: NAV_HIDE=transaction_data,settlement_instructions,reconciliation,reports
+    // Example: NAV_HIDE=transaction_data,settlement_instructions,eft_files,reconciliation,reports
     'nav_hide' => array_filter(array_map('trim', explode(',', env('NAV_HIDE', '')))),
 ];

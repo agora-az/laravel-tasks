@@ -563,7 +563,7 @@ class BankStatementEntryController extends Controller
      */
     private function resolveSort(Request $request): array
     {
-        $sortField = in_array($request->sort, ['value_date', 'amount', 'inferred_channel', 'memo_type', 'counterparty'], true)
+        $sortField = in_array($request->sort, ['value_date', 'account_number', 'amount', 'inferred_channel', 'memo_type', 'counterparty'], true)
             ? $request->sort
             : 'value_date';
 
@@ -576,6 +576,7 @@ class BankStatementEntryController extends Controller
     {
         $columnMap = [
             'value_date' => 'bank_statement_entries.value_date',
+            'account_number' => 'bank_statement_entries.account_number',
             'amount' => 'bank_statement_entries.amount',
             'inferred_channel' => 'a.inferred_channel',
             'memo_type' => 'a.memo_type',

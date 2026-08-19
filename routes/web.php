@@ -10,6 +10,7 @@ use App\Http\Controllers\DailyTotalsComparisonController;
 use App\Http\Controllers\DailyTotalsDrilldownController;
 use App\Http\Controllers\BankStatementEntryController;
 use App\Http\Controllers\SettlementInstructionController;
+use App\Http\Controllers\EftFileController;
 use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
 
@@ -81,10 +82,19 @@ Route::middleware('auth.check')->group(function () {
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
         Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
+        Route::get('/bank-fsp', [DailyTotalsComparisonController::class, 'fspIndex'])->name('reconciliations.bank-fsp');
+        Route::get('/bank-fsp/{source}/{date}/compare', [DailyTotalsDrilldownController::class, 'fspComparison'])
+            ->whereIn('source', ['agra', '7960'])
+            ->name('reconciliations.bank-fsp.compare');
+        Route::get('/bank-fsp/{source}', [DailyTotalsComparisonController::class, 'fspIndex'])
+            ->whereIn('source', ['agra', '7960'])
+            ->name('reconciliations.bank-fsp.source');
         Route::post('/daily-totals/sync', [DailyTotalsComparisonController::class, 'sync'])->name('reconciliations.daily-totals.sync');
         Route::get('/daily-totals/sync-status', [DailyTotalsComparisonController::class, 'syncStatus'])->name('reconciliations.daily-totals.sync-status');
         Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
         Route::get('/daily-totals/{date}/bank/export', [DailyTotalsDrilldownController::class, 'bankDayExport'])->name('reconciliations.daily-totals.bank-day.export');
+        Route::get('/daily-totals/{date}/settlements', [DailyTotalsDrilldownController::class, 'settlementSequences'])->name('reconciliations.daily-totals.settlement-sequences');
+        Route::get('/daily-totals/{date}/settlements/{sequence}/compare', [DailyTotalsDrilldownController::class, 'eftSequenceComparison'])->name('reconciliations.daily-totals.eft-sequence-compare');
         Route::get('/daily-totals/{date}/viefund', [DailyTotalsDrilldownController::class, 'viefundDay'])->name('reconciliations.daily-totals.viefund-day');
         Route::get('/daily-totals/{date}/viefund/export', [DailyTotalsDrilldownController::class, 'viefundDayExport'])->name('reconciliations.daily-totals.viefund-day.export');
         Route::get('/daily-totals/{date}/variance', [DailyTotalsDrilldownController::class, 'varianceDay'])->name('reconciliations.daily-totals.variance-day');
@@ -142,6 +152,9 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/settlement-instructions/export', [SettlementInstructionController::class, 'export'])->name('settlement-instructions.export');
     Route::post('/settlement-instructions/sync', [SettlementInstructionController::class, 'sync'])->name('settlement-instructions.sync');
     Route::get('/settlement-instructions/sync-status', [SettlementInstructionController::class, 'syncStatus'])->name('settlement-instructions.sync-status');
+
+    Route::get('/eft-files', [EftFileController::class, 'index'])->name('eft-files.index');
+    Route::get('/eft-files/export', [EftFileController::class, 'export'])->name('eft-files.export');
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');
