@@ -20,7 +20,9 @@ class VieFundReportSheetExport implements FromArray, WithColumnWidths, WithEvent
         private readonly string $title,
         private readonly bool $freezeHeaderRow = false,
         private readonly bool $autoFilter = false,
-        private readonly array $numberFormats = []
+        private readonly array $numberFormats = [],
+        private readonly array $subtotalRows = [],
+        private readonly array $outlineGroups = []
     ) {}
 
     public function array(): array
@@ -35,8 +37,12 @@ class VieFundReportSheetExport implements FromArray, WithColumnWidths, WithEvent
     {
         $widths = [];
 
-        foreach ($this->rows as $row) {
+        foreach ($this->rows as $rowIndex => $row) {
+            $isSubtotalRow = in_array($rowIndex + 1, $this->subtotalRows, true);
             foreach (array_values($row) as $index => $value) {
+                if ($isSubtotalRow && $index !== 10) {
+                    continue;
+                }
                 $column = Coordinate::stringFromColumnIndex($index + 1);
                 $widths[$column] = max($widths[$column] ?? 0, $this->measureWidth($value));
             }
@@ -72,6 +78,35 @@ class VieFundReportSheetExport implements FromArray, WithColumnWidths, WithEvent
 
                 foreach ($this->numberFormats as $range => $formatCode) {
                     $event->sheet->getStyle($range)->getNumberFormat()->setFormatCode($formatCode);
+                }
+
+                foreach ($this->outlineGroups as [$startRow, $endRow]) {
+                    for ($row = $startRow; $row <= $endRow; $row++) {
+                        $event->sheet->getRowDimension($row)->setOutlineLevel(1);
+                    }
+                }
+
+                foreach ($this->subtotalRows as $row) {
+                    $event->sheet->mergeCells("A{$row}:J{$row}");
+                    $event->sheet->getStyle("A{$row}:{$highestColumn}{$row}")->applyFromArray([
+                        'font' => ['bold' => true],
+                        'fill' => [
+                            'fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
+                            'startColor' => ['argb' => 'FFEAF0F6'],
+                        ],
+                        'borders' => [
+                            'top' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_MEDIUM, 'color' => ['argb' => 'FFCBD5E0']],
+                            'bottom' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_MEDIUM, 'color' => ['argb' => 'FFA0AEC0']],
+                        ],
+                    ]);
+                    $event->sheet->getStyle("A{$row}")->getAlignment()->setHorizontal(
+                        \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_RIGHT
+                    );
+                }
+
+                if ($this->outlineGroups !== []) {
+                    $event->sheet->getDelegate()->setShowSummaryRight(false);
+                    $event->sheet->getDelegate()->setShowSummaryBelow(true);
                 }
             },
         ];

@@ -126,7 +126,7 @@
                             </td>
                             <td style="text-align:right;color:#4a5568;" title="Matched {{ $row['matched_sequence_count'] }} of {{ $row['settlement_sequences']->count() }} distinct sequence(s)">
                                 @if($row['settlement_transaction_count'] > 0)
-                                    <a href="{{ route('eft-files.index', ['tab' => 'items', 'sequences' => $row['matched_sequences']->implode(',')]) }}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">{{ number_format($row['eft_transaction_count']) }}</a>
+                                    <a href="{{ route('eft-files.index', ['tab' => 'items', 'sequences' => $row['matched_sequences']->implode(','), 'drilldown_date' => $row['total_date']]) }}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline;">{{ number_format($row['eft_transaction_count']) }}</a>
                                 @else
                                     0
                                 @endif

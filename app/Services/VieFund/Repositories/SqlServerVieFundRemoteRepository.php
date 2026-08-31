@@ -383,6 +383,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 });
             }
         }
+        // A direct EFT link targets one UB_TrustTrx row. Exclude the fund side
+        // of the combined customer-transaction query so the focused page only
+        // contains that linked transaction.
+        if (!empty($filters['trust_trx_id'])) {
+            $query->whereRaw('1 = 0');
+        }
         if (!empty($filters['source_id'])) {
             $sourceIds = array_values(array_filter(array_map('trim', explode(',', $filters['source_id']))));
             $query->where(function ($q) use ($sourceIds) {
@@ -1915,6 +1921,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             } else {
                 $query->whereIn('tr.ID', array_map(fn($id) => (int) ltrim((string) $id, 'Tt'), $trxIds));
             }
+        }
+        if (!empty($filters['trust_trx_id'])) {
+            $query->where('tr.ID', (int) $filters['trust_trx_id']);
         }
         if (!empty($filters['trx_type'])) {
             $types = (array) $filters['trx_type'];

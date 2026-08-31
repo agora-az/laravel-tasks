@@ -90,7 +90,9 @@ class SqlServerEftRemoteRepository
         string $sort,
         string $direction,
         int $perPage = 50,
-        string $pageName = 'item_page'
+        string $pageName = 'item_page',
+        bool $missingCandidates = false,
+        ?string $candidateDate = null
     ): LengthAwarePaginator {
         $sortColumns = [
             'created_at' => 'i.dtCreated',
@@ -120,9 +122,15 @@ class SqlServerEftRemoteRepository
                 'i.BankTransit as bank_transit',
                 'i.Notes as notes',
                 'f.FileName as file_name',
+                'tr.dtEffective as trade_date',
+                'tr.dtSettlement as settlement_date',
             ])
             ->selectRaw('i.mAmount as amount')
             ->selectRaw("right(rtrim(coalesce(i.BankAccountNumber, '')), 4) as bank_account_last4");
+
+        if ($missingCandidates) {
+            $this->applyMissingCandidateFilter($query, $filters, $candidateDate);
+        }
 
         if ($sort === 'signed_amount') {
             $query->orderByRaw("case when i.iLinkedType = 10 then i.mAmount else -i.mAmount end {$direction}");
@@ -132,6 +140,136 @@ class SqlServerEftRemoteRepository
         $query->orderByDesc('i.ID');
 
         return $query->paginate($perPage, ['*'], $pageName)->withQueryString();
+    }
+
+    public function missingCandidates(array $filters, ?string $candidateDate = null): Collection
+    {
+        $query = $this->itemRowsQuery($filters);
+        $this->applyMissingCandidateFilter($query, $filters, $candidateDate);
+
+        return $query
+            ->orderByDesc('i.dtEffective')
+            ->orderByDesc('i.dtCreated')
+            ->orderByDesc('i.ID')
+            ->get();
+    }
+
+    public function excludedCandidates(array $filters, ?string $candidateDate = null): Collection
+    {
+        [$from, $to] = $this->candidateDateBounds($filters, $candidateDate);
+        if (!$from && !$to) {
+            return collect();
+        }
+
+        $otherDaysFilters = array_merge($filters, [
+            'file_id' => '',
+            'sequences' => '',
+            'date_from' => '',
+            'date_to' => '',
+        ]);
+        $query = $this->itemRowsQuery($otherDaysFilters)
+            ->whereNotNull('i.dtEffective')
+            ->whereNotNull('i.dtCreated');
+
+        if ($from) {
+            $query->where('i.dtEffective', '>=', $from);
+        }
+        if ($to) {
+            $query->where('i.dtEffective', '<', $to);
+        }
+
+        $query->where(function (Builder $otherDay) use ($from, $to): void {
+            if ($from && $to) {
+                $otherDay->where('i.dtCreated', '<', $from)
+                    ->orWhere('i.dtCreated', '>=', $to);
+            } elseif ($from) {
+                $otherDay->where('i.dtCreated', '<', $from);
+            } elseif ($to) {
+                $otherDay->where('i.dtCreated', '>=', $to);
+            }
+        });
+
+        return $query
+            ->orderByDesc('i.dtEffective')
+            ->orderByDesc('i.dtCreated')
+            ->orderByDesc('i.ID')
+            ->get();
+    }
+
+    private function itemRowsQuery(array $filters): Builder
+    {
+        return $this->itemQuery($filters)
+            ->select([
+                'i.ID as id',
+                'i.iProcessingID as processing_id',
+                'i.dtCreated as created_at',
+                'i.dtEffective as effective_date',
+                'i.iLinkedType as type_id',
+                't.NameEN as type_name',
+                'i.iLinkedID as linked_id',
+                'i.iStatus as status_id',
+                'i.HolderName as holder_name',
+                'i.HolderID as holder_id',
+                'i.SourceCode as source_code',
+                's.NameEN as source_name',
+                'i.BankCode as bank_code',
+                'i.BankTransit as bank_transit',
+                'i.Notes as notes',
+                'f.FileName as file_name',
+                'tr.dtEffective as trade_date',
+                'tr.dtSettlement as settlement_date',
+            ])
+            ->selectRaw('i.mAmount as amount')
+            ->selectRaw("right(rtrim(coalesce(i.BankAccountNumber, '')), 4) as bank_account_last4");
+    }
+
+    private function applyMissingCandidateFilter(Builder $query, array $filters, ?string $candidateDate): void
+    {
+        [$from, $to] = $this->candidateDateBounds($filters, $candidateDate);
+
+        if (!$from && !$to) {
+            $query->whereRaw('1 = 0');
+
+            return;
+        }
+
+        $query->where(function (Builder $mismatch) use ($from, $to): void {
+            foreach (['i.dtEffective', 'tr.dtSettlement'] as $dateColumn) {
+                $mismatch->orWhere(function (Builder $dateMismatch) use ($dateColumn, $from, $to): void {
+                    $dateMismatch->whereNotNull($dateColumn);
+
+                    if ($from && $to) {
+                        $dateMismatch->where(function (Builder $outside) use ($dateColumn, $from, $to): void {
+                            $outside->where($dateColumn, '<', $from)
+                                ->orWhere($dateColumn, '>=', $to);
+                        });
+                    } elseif ($from) {
+                        $dateMismatch->where($dateColumn, '<', $from);
+                    } elseif ($to) {
+                        $dateMismatch->where($dateColumn, '>=', $to);
+                    }
+                });
+            }
+        });
+    }
+
+    private function candidateDateBounds(array $filters, ?string $candidateDate): array
+    {
+        if ($candidateDate !== null) {
+            return [
+                Carbon::parse($candidateDate)->startOfDay(),
+                Carbon::parse($candidateDate)->addDay()->startOfDay(),
+            ];
+        }
+
+        return [
+            ($filters['date_from'] ?? '') !== ''
+                ? Carbon::parse($filters['date_from'])->startOfDay()
+                : null,
+            ($filters['date_to'] ?? '') !== ''
+                ? Carbon::parse($filters['date_to'])->addDay()->startOfDay()
+                : null,
+        ];
     }
 
     public function totals(array $filters): object
@@ -208,6 +346,8 @@ class SqlServerEftRemoteRepository
                 'i.BankTransit as bank_transit',
                 'i.Notes as notes',
                 'f.FileName as file_name',
+                'tr.dtEffective as trade_date',
+                'tr.dtSettlement as settlement_date',
             ])
             ->selectRaw('i.mAmount as amount')
             ->selectRaw("right(rtrim(coalesce(i.BankAccountNumber, '')), 4) as bank_account_last4")
@@ -284,7 +424,8 @@ class SqlServerEftRemoteRepository
             ->table($this->table('UB_EFTItem') . ' as i')
             ->join($this->table('UB_EFTFile') . ' as f', 'f.ID', '=', 'i.iProcessingID')
             ->leftJoin($this->table('UB_Def_EFTType') . ' as t', 't.ID', '=', 'i.iLinkedType')
-            ->leftJoin($this->table('UB_Def_EFTSource') . ' as s', 's.FSCode', '=', 'i.SourceCode');
+            ->leftJoin($this->table('UB_Def_EFTSource') . ' as s', 's.FSCode', '=', 'i.SourceCode')
+            ->leftJoin($this->table('UB_TrustTrx') . ' as tr', 'tr.ID', '=', 'i.iLinkedID');
 
         $this->applyFileFilters($query, $filters, true);
 

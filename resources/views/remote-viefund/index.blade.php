@@ -5,6 +5,7 @@
 @php
     $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
     $showSyncButtons = $showSyncButtons ?? true;
+    $highlightTrustTrxId = trim((string) request('highlight_trust_trx_id', ''));
 @endphp
 
 <style>
@@ -952,8 +953,10 @@
                                         : (!empty($txn->cash_trx_id)
                                             ? ('C-' . $txn->cash_trx_id)
                                             : ('F-' . ($txn->fund_trx_id ?? 'UNKNOWN')));
+                                    $isHighlightedTransaction = $highlightTrustTrxId !== ''
+                                        && (string) ($txn->trust_trx_id ?? '') === $highlightTrustTrxId;
                                 @endphp
-                                <tr class="remote-viefund-row" style="border-bottom: 1px solid #e2e8f0; cursor: pointer;"
+                                <tr id="transaction-{{ $displayTxnId }}" class="remote-viefund-row{{ $isHighlightedTransaction ? ' highlighted-customer-transaction' : '' }}" style="border-bottom:1px solid #e2e8f0;cursor:pointer;{{ $isHighlightedTransaction ? 'background:#fefcbf;box-shadow:inset 5px 0 #d69e2e;' : '' }}"
                                     data-trx-id="{{ $txn->trx_id }}"
                                     data-display-trx-id="{{ $displayTxnId }}"
                                     data-fund-trx-id="{{ $txn->fund_trx_id ?? '' }}"

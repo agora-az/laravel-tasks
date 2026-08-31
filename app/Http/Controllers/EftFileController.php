@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Exports\EftFilesWorkbookExport;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -26,19 +27,33 @@ class EftFileController extends Controller
         ], 'created_at');
         $fileSortDir = $this->direction($request, 'file_sort_dir');
         $itemSortDir = $this->direction($request, 'item_sort_dir');
-        $activeTab = in_array($request->query('tab'), ['files', 'items'], true)
+        $activeTab = in_array($request->query('tab'), ['files', 'items', 'missing', 'excluded'], true)
             ? (string) $request->query('tab')
             : 'files';
+        $drilldownDateLabel = null;
+        $drilldownDate = trim((string) $request->query('drilldown_date', ''));
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $drilldownDate)) {
+            try {
+                $drilldownDateLabel = Carbon::createFromFormat('Y-m-d', $drilldownDate)->format('F j, Y');
+            } catch (\Throwable) {
+                $drilldownDate = '';
+            }
+        } else {
+            $drilldownDate = '';
+        }
 
         $files = $this->repository->paginateFiles($filters, $fileSort, $fileSortDir);
-        $items = $this->repository->paginateItems($filters, $itemSort, $itemSortDir);
+        $items = match ($activeTab) {
+            'missing' => $this->repository->missingCandidates($filters, $drilldownDate ?: null),
+            'excluded' => $this->repository->excludedCandidates($filters, $drilldownDate ?: null),
+            default => $this->repository->paginateItems($filters, $itemSort, $itemSortDir),
+        };
         $totals = $this->repository->totals($filters);
         $totalsByType = $this->repository->totalsByType($filters);
         $types = $this->repository->types();
         $fileStatuses = $this->repository->fileStatuses();
         $itemStatuses = $this->repository->itemStatuses();
         $selectedFile = $filters['file_id'] !== '' ? $files->first() : null;
-
         return view('eft-files.index', compact(
             'activeTab',
             'fileSort',
@@ -53,7 +68,9 @@ class EftFileController extends Controller
             'types',
             'fileStatuses',
             'itemStatuses',
-            'selectedFile'
+            'selectedFile',
+            'drilldownDate',
+            'drilldownDateLabel'
         ));
     }
 
@@ -94,11 +111,13 @@ class EftFileController extends Controller
             ];
         }
 
-        $itemRows = [[
+        $itemHeader = [
             'Item ID',
             'File ID',
             'Created',
             'Effective Date',
+            'Trade Date',
+            'Settlement Date',
             'Type ID',
             'Type',
             'Linked ID',
@@ -108,38 +127,47 @@ class EftFileController extends Controller
             'Holder ID',
             'Source Code',
             'Source',
-            'Bank',
-            'Transit',
-            'Account Last 4',
             'File Name',
             'Notes',
-        ]];
+        ];
+        $itemRows = [$itemHeader];
 
         foreach ($this->repository->exportItems($filters) as $item) {
-            $itemRows[] = [
-                (int) $item->id,
-                (int) $item->processing_id,
-                $this->dateTime($item->created_at),
-                $this->date($item->effective_date),
-                $item->type_id !== null ? (int) $item->type_id : null,
-                (string) ($item->type_name ?? ''),
-                $item->linked_id !== null ? (int) $item->linked_id : null,
-                $item->status_id !== null ? (int) $item->status_id : null,
-                $item->amount !== null ? (float) $item->amount : null,
-                (string) ($item->holder_name ?? ''),
-                (string) ($item->holder_id ?? ''),
-                trim((string) ($item->source_code ?? '')),
-                (string) ($item->source_name ?? ''),
-                trim((string) ($item->bank_code ?? '')),
-                trim((string) ($item->bank_transit ?? '')),
-                (string) ($item->bank_account_last4 ?? ''),
-                (string) ($item->file_name ?? ''),
-                (string) ($item->notes ?? ''),
-            ];
+            $itemRows[] = $this->itemExportRow($item);
+        }
+
+        $otherSettlementDateRows = [$itemHeader];
+        $otherSettlementDateSubtotalRows = [];
+        $otherSettlementDateOutlineGroups = [];
+        $drilldownDate = $this->validDate((string) $request->query('drilldown_date', ''));
+        $candidateGroups = $this->repository->missingCandidates($filters, $drilldownDate)
+            ->groupBy(fn($item) => $this->date($item->effective_date));
+        foreach ($candidateGroups as $effectiveDate => $groupItems) {
+            $groupStartRow = count($otherSettlementDateRows) + 1;
+            foreach ($groupItems as $item) {
+                $otherSettlementDateRows[] = $this->itemExportRow($item);
+            }
+            $groupEndRow = count($otherSettlementDateRows);
+            $groupNetTotal = $groupItems->sum(fn($item) => (int) $item->type_id === 10
+                ? (float) $item->amount
+                : -(float) $item->amount);
+            $subtotalRow = array_fill(0, count($itemHeader), null);
+            $subtotalRow[0] = "{$effectiveDate} Net Total";
+            $subtotalRow[10] = $groupNetTotal;
+            $otherSettlementDateRows[] = $subtotalRow;
+            $subtotalRowNumber = count($otherSettlementDateRows);
+            $otherSettlementDateSubtotalRows[] = $subtotalRowNumber;
+            $otherSettlementDateOutlineGroups[] = [$groupStartRow, $groupEndRow];
         }
 
         return Excel::download(
-            new EftFilesWorkbookExport($fileRows, $itemRows),
+            new EftFilesWorkbookExport(
+                $fileRows,
+                $itemRows,
+                $otherSettlementDateRows,
+                $otherSettlementDateSubtotalRows,
+                $otherSettlementDateOutlineGroups
+            ),
             'eft-files-' . now()->format('Ymd-His') . '.xlsx',
             ExcelWriter::XLSX
         );
@@ -187,5 +215,44 @@ class EftFileController extends Controller
     private function date(mixed $value): string
     {
         return $value ? date('Y-m-d', strtotime((string) $value)) : '';
+    }
+
+    private function validDate(string $value): ?string
+    {
+        $value = trim($value);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return null;
+        }
+
+        try {
+            Carbon::createFromFormat('Y-m-d', $value);
+
+            return $value;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function itemExportRow(object $item): array
+    {
+        return [
+            (int) $item->id,
+            (int) $item->processing_id,
+            $this->dateTime($item->created_at),
+            $this->date($item->effective_date),
+            $this->dateTime($item->trade_date),
+            $this->dateTime($item->settlement_date),
+            $item->type_id !== null ? (int) $item->type_id : null,
+            (string) ($item->type_name ?? ''),
+            $item->linked_id !== null ? (int) $item->linked_id : null,
+            $item->status_id !== null ? (int) $item->status_id : null,
+            $item->amount !== null ? (float) $item->amount : null,
+            (string) ($item->holder_name ?? ''),
+            (string) ($item->holder_id ?? ''),
+            trim((string) ($item->source_code ?? '')),
+            (string) ($item->source_name ?? ''),
+            (string) ($item->file_name ?? ''),
+            (string) ($item->notes ?? ''),
+        ];
     }
 }

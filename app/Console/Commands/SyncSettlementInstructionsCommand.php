@@ -127,23 +127,23 @@ class SyncSettlementInstructionsCommand extends Command
             $localCandidates = $this->localCandidates($localDir, $pattern);
         }
 
-        $localPending = $force
-            ? $localCandidates
-            : $localCandidates->reject(fn($name) => in_array($name, $processedNames, true))->values();
+        $connect = function () use ($host, $port, $username, $password): SFTP {
+            $client = new SFTP($host, $port);
+            if (!$client->login($username, $password)) {
+                throw new \RuntimeException('Settlement SFTP authentication failed.');
+            }
 
-        $sftp = new SFTP($host, $port);
+            return $client;
+        };
+
         try {
-            $loggedIn = $sftp->login($username, $password);
+            $sftp = $connect();
         } catch (\Throwable $e) {
             return $this->failSync(
                 $statusFile,
                 "Unable to connect to settlement SFTP host {$host}:{$port}. " . trim($e->getMessage()),
                 $startedAt
             );
-        }
-
-        if (!$loggedIn) {
-            return $this->failSync($statusFile, 'Settlement SFTP authentication failed.', $startedAt);
         }
 
         $remoteFiles = $sftp->nlist($remotePath);
@@ -179,6 +179,48 @@ class SyncSettlementInstructionsCommand extends Command
                 }
             }
         }
+
+        // A dropped SFTP transfer can leave a file with the final filename on
+        // disk. Never treat it as importable until its size matches the remote
+        // file. Preserve mismatches for inspection and download them again.
+        $invalidLocalNames = collect();
+        foreach ($remoteCandidates->filter(fn($name) => $localCandidates->contains($name)) as $fileName) {
+            $remoteFilePath = $remotePath === '/' ? "/{$fileName}" : "{$remotePath}/{$fileName}";
+            $localFilePath = $localDir . DIRECTORY_SEPARATOR . $fileName;
+
+            try {
+                $remoteSize = $sftp->filesize($remoteFilePath);
+            } catch (\Throwable) {
+                $remoteSize = false;
+            }
+
+            if ($remoteSize === false || (int) $remoteSize === (int) filesize($localFilePath)) {
+                continue;
+            }
+
+            $localSize = (int) filesize($localFilePath);
+            $invalidLocalNames->push($fileName);
+            if (!$dryRun) {
+                $incompleteDir = $localDir . DIRECTORY_SEPARATOR . '.incomplete';
+                if (!is_dir($incompleteDir)) {
+                    @mkdir($incompleteDir, 0775, true);
+                }
+                $preservedPath = $incompleteDir . DIRECTORY_SEPARATOR . $fileName . '.' . now()->format('Ymd_His');
+                @rename($localFilePath, $preservedPath);
+            }
+
+            $this->warn(sprintf(
+                'Local file %s is incomplete (%d of %d bytes); it will be downloaded again.',
+                $fileName,
+                $localSize,
+                (int) $remoteSize
+            ));
+        }
+
+        $localCandidates = $localCandidates->reject(fn($name) => $invalidLocalNames->contains($name))->values();
+        $localPending = $force
+            ? $localCandidates
+            : $localCandidates->reject(fn($name) => in_array($name, $processedNames, true))->values();
 
         $toDownload = $force
             ? $remoteCandidates->reject(fn($name) => $localCandidates->contains($name))->values()
@@ -226,8 +268,37 @@ class SyncSettlementInstructionsCommand extends Command
         foreach ($toDownload as $fileName) {
             $remoteFilePath = $remotePath === '/' ? "/{$fileName}" : "{$remotePath}/{$fileName}";
             $localFilePath = $localDir . DIRECTORY_SEPARATOR . $fileName;
+            $temporaryFilePath = $localDir . DIRECTORY_SEPARATOR . '.download-' . $fileName . '.part';
+            $downloadSucceeded = false;
 
-            if (!$sftp->get($remoteFilePath, $localFilePath)) {
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                @unlink($temporaryFilePath);
+                try {
+                    $downloadSucceeded = $sftp->get($remoteFilePath, $temporaryFilePath);
+                    $remoteSize = $downloadSucceeded ? $sftp->filesize($remoteFilePath) : false;
+                    if ($downloadSucceeded && $remoteSize !== false) {
+                        $downloadSucceeded = (int) filesize($temporaryFilePath) === (int) $remoteSize;
+                    }
+                    if ($downloadSucceeded && @rename($temporaryFilePath, $localFilePath)) {
+                        break;
+                    }
+                    $downloadSucceeded = false;
+                } catch (\Throwable $e) {
+                    $this->warn("Download attempt {$attempt} failed for {$fileName}: " . $e->getMessage());
+                }
+
+                @unlink($temporaryFilePath);
+                if ($attempt < 3) {
+                    try {
+                        $sftp = $connect();
+                    } catch (\Throwable $e) {
+                        $this->warn('SFTP reconnect failed: ' . $e->getMessage());
+                    }
+                }
+            }
+
+            @unlink($temporaryFilePath);
+            if (!$downloadSucceeded) {
                 $failed[] = $fileName;
                 continue;
             }

@@ -22,6 +22,12 @@
         2 => ['bg' => '#fffaf0', 'text' => '#975a16'],
         10 => ['bg' => '#f0fff4', 'text' => '#276749'],
     ];
+    $typeLabels = [
+        0 => 'Rep payment',
+        10 => 'Client deposit',
+        1 => 'Client payment',
+        2 => 'Supplier payment',
+    ];
     $statusColors = [
         0 => ['bg' => '#edf2f7', 'text' => '#4a5568'],
         1 => ['bg' => '#c6f6d5', 'text' => '#22543d'],
@@ -51,6 +57,12 @@
     };
     $fileSortArrow = static fn(string $column): string => $fileSort === $column ? ($fileSortDir === 'asc' ? ' ↑' : ' ↓') : ' ⇅';
     $itemSortArrow = static fn(string $column): string => $itemSort === $column ? ($itemSortDir === 'asc' ? ' ↑' : ' ↓') : ' ⇅';
+    $isCandidateTab = in_array($activeTab, ['missing', 'excluded'], true);
+    $candidatesNetTotal = $isCandidateTab
+        ? $items->sum(fn($item) => (int) $item->type_id === 10
+            ? (float) $item->amount
+            : -(float) $item->amount)
+        : null;
 @endphp
 
 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:20px 0;flex-wrap:wrap;">
@@ -96,7 +108,7 @@
         @foreach($totalsByType as $typeTotal)
             @php $colors = $typeColors[(int) $typeTotal->type_id] ?? ['bg' => '#edf2f7', 'text' => '#2d3748']; @endphp
             <span style="background:{{ $colors['bg'] }};color:{{ $colors['text'] }};border:1px solid #cbd5e0;border-radius:4px;padding:6px 9px;font:600 12px monospace;">
-                {{ $typeTotal->type_name }}: {{ number_format((int) $typeTotal->file_count) }} / {{ $formatAmount($typeTotal->total_amount) }}
+                {{ $typeLabels[(int) $typeTotal->type_id] ?? $typeTotal->type_name }}: {{ number_format((int) $typeTotal->file_count) }} / {{ $formatAmount($typeTotal->total_amount) }}
             </span>
         @endforeach
     </div>
@@ -138,7 +150,7 @@
                 <select name="type" style="padding:8px 10px;border:1px solid #cbd5e0;border-radius:4px;width:100%;font-size:13px;">
                     <option value="">All types</option>
                     @foreach($types as $type)
-                        <option value="{{ $type->id }}" @selected($filters['type'] !== '' && (int) $filters['type'] === (int) $type->id)>{{ $type->name }}</option>
+                        <option value="{{ $type->id }}" @selected($filters['type'] !== '' && (int) $filters['type'] === (int) $type->id)>{{ $typeLabels[(int) $type->id] ?? $type->name }}</option>
                     @endforeach
                 </select>
             </div>
@@ -185,18 +197,36 @@
         <input type="hidden" name="file_sort_dir" value="{{ $fileSortDir }}">
         <input type="hidden" name="item_sort" value="{{ $itemSort }}">
         <input type="hidden" name="item_sort_dir" value="{{ $itemSortDir }}">
+        @if($drilldownDate !== '')
+            <input type="hidden" name="drilldown_date" value="{{ $drilldownDate }}">
+        @endif
     </form>
 </div>
 
 <div class="card" style="padding-top:0;">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid #e2e8f0;padding:12px 14px;background:#f8fafc;flex-wrap:wrap;">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:18px;border-bottom:1px solid #e2e8f0;padding:12px 14px;background:#f8fafc;">
         <div>
-            <div style="font-size:12px;font-weight:800;color:#4a5568;text-transform:uppercase;letter-spacing:0.07em;">EFT Remote Records</div>
-            <div style="font-size:12px;color:#718096;margin-top:3px;">{{ $dateBasisLabel }} {{ $filters['date_from'] ?: 'all history' }} through {{ $filters['date_to'] ?: 'present' }}</div>
+            @if($drilldownDateLabel)
+                <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Settlement Date</div>
+                <div style="font-size:20px;font-weight:800;color:#1a365d;line-height:1.15;margin-top:4px;">{{ $drilldownDateLabel }}</div>
+            @else
+                <div style="font-size:12px;font-weight:800;color:#4a5568;text-transform:uppercase;letter-spacing:0.07em;">EFT Remote Records</div>
+                <div style="font-size:12px;color:#718096;margin-top:3px;">{{ $dateBasisLabel }} {{ $filters['date_from'] ?: 'all history' }} through {{ $filters['date_to'] ?: 'present' }}</div>
+            @endif
         </div>
-        <div style="display:flex;gap:8px;">
+        @if($isCandidateTab)
+            <div style="text-align:center;min-width:180px;">
+                <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Net Total</div>
+                <div style="font-size:20px;font-weight:800;color:{{ $candidatesNetTotal < 0 ? '#c53030' : '#2f855a' }};line-height:1.15;margin-top:4px;white-space:nowrap;">{{ $formatAmount($candidatesNetTotal) }}</div>
+            </div>
+        @else
+            <div></div>
+        @endif
+        <div style="display:flex;gap:8px;justify-self:end;">
             <a href="{{ $tabUrl('files') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'files' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">File Summaries</a>
             <a href="{{ $tabUrl('items') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'items' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">EFT Items</a>
+            <a href="{{ $tabUrl('missing') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'missing' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">Other Settlement Dates</a>
+            <a href="{{ $tabUrl('excluded') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'excluded' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">Txns from Other Files</a>
         </div>
     </div>
 
@@ -226,7 +256,7 @@
                         <tr style="border-bottom:1px solid #d9e2ec;background:{{ $loop->even ? 'rgba(56,161,105,0.07)' : 'transparent' }};">
                             <td style="white-space:nowrap;line-height:1.2;"><span style="display:block;">{{ $formatDate($file->created_at) }}</span><span style="display:block;opacity:.85;">{{ $formatTime($file->created_at) }}</span></td>
                             <td style="white-space:nowrap;">{{ $formatDate($file->effective_date) }}</td>
-                            <td><span style="background:{{ $colors['bg'] }};color:{{ $colors['text'] }};padding:3px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;">{{ $file->type_name ?? 'Type ' . $file->type_id }}</span></td>
+                            <td><span style="background:{{ $colors['bg'] }};color:{{ $colors['text'] }};padding:3px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;">{{ $typeLabels[(int) $file->type_id] ?? ($file->type_name ?? 'Type ' . $file->type_id) }}</span></td>
                             <td style="text-align:right;white-space:nowrap;">{{ $file->sequence_number ?? '—' }}</td>
                             <td style="text-align:right;">
                                 <a href="{{ route('eft-files.index', ['tab' => 'items', 'file_id' => $file->id]) }}" style="color:#2b6cb0;font-weight:700;text-decoration:underline;">{{ number_format((int) $file->item_count) }}</a>
@@ -246,46 +276,98 @@
         @endif
     @else
         @if($items->count())
-            <div style="padding:12px 14px;color:#4a5568;font-size:13px;">Showing {{ number_format($items->count()) }} of {{ number_format($items->total()) }} matching items. Account numbers are masked.</div>
+            <div style="padding:12px 14px;color:#4a5568;font-size:13px;">
+                @if($isCandidateTab)
+                    Showing all {{ number_format($items->count()) }} candidates, grouped by effective date.
+                @else
+                    Showing {{ number_format($items->count()) }} of {{ number_format($items->total()) }} matching items.
+                @endif
+            </div>
             <div style="overflow-x:auto;">
                 <table style="width:max-content;border-collapse:collapse;min-width:1120px;" class="mono-grid eft-items-grid">
                     <thead><tr style="background:#e2e8f0;border-bottom:2px solid #cbd5e0;white-space:nowrap;">
-                        <th style="text-align:left;"><a href="{{ $itemSortUrl('created_at') }}" style="color:inherit;text-decoration:none;">Created{{ $itemSortArrow('created_at') }}</a></th>
-                        <th style="text-align:left;"><a href="{{ $itemSortUrl('effective_date') }}" style="color:inherit;text-decoration:none;">Effective{{ $itemSortArrow('effective_date') }}</a></th>
+                        <th style="text-align:left;">@if($isCandidateTab) Created @else <a href="{{ $itemSortUrl('created_at') }}" style="color:inherit;text-decoration:none;">Created{{ $itemSortArrow('created_at') }}</a> @endif</th>
+                        <th style="text-align:left;">@if($isCandidateTab) Effective ↓ @else <a href="{{ $itemSortUrl('effective_date') }}" style="color:inherit;text-decoration:none;">Effective{{ $itemSortArrow('effective_date') }}</a> @endif</th>
+                        <th style="text-align:left;">Trade</th>
+                        <th style="text-align:left;">Settlement</th>
                         <th style="text-align:left;"><a href="{{ $itemSortUrl('type') }}" style="color:inherit;text-decoration:none;">Type{{ $itemSortArrow('type') }}</a></th>
                         <th style="text-align:left;"><a href="{{ $itemSortUrl('holder') }}" style="color:inherit;text-decoration:none;">Holder{{ $itemSortArrow('holder') }}</a></th>
                         <th style="text-align:left;">Holder ID</th>
                         <th style="text-align:left;">Source</th>
-                        <th style="text-align:left;">Bank</th>
-                        <th style="text-align:left;">Transit</th>
-                        <th style="text-align:left;">Account</th>
                         <th style="text-align:right;"><a href="{{ $itemSortUrl('amount') }}" style="color:inherit;text-decoration:none;">Amount{{ $itemSortArrow('amount') }}</a></th>
                     </tr></thead>
                     <tbody>
-                    @foreach($items as $item)
+                    @php
+                        $itemGroups = $isCandidateTab
+                            ? $items->groupBy(fn($item) => $formatDate($item->effective_date))
+                            : collect(['' => $items]);
+                    @endphp
+                    @foreach($itemGroups as $effectiveDate => $groupItems)
+                    @foreach($groupItems as $item)
                         @php
                             $colors = $typeColors[(int) $item->type_id] ?? ['bg' => '#edf2f7', 'text' => '#2d3748'];
                             $amountColor = (int) $item->type_id === 10 ? '#2f855a' : '#c53030';
+                            $planAccountId = null;
+                            if (preg_match('/PL(.+)$/i', (string) $item->holder_id, $holderIdMatch)) {
+                                $planAccountId = $holderIdMatch[1];
+                            }
+                            $customerTransactionUrl = $planAccountId && $item->linked_id
+                                ? route('remote-viefund.index', [
+                                    'filter_account_id' => $planAccountId,
+                                    'highlight_trust_trx_id' => $item->linked_id,
+                                ]) . '#transaction-T-' . $item->linked_id
+                                : null;
                         @endphp
                         <tr style="border-bottom:1px solid #d9e2ec;background:{{ $loop->even ? 'rgba(56,161,105,0.07)' : 'transparent' }};">
                             <td style="white-space:nowrap;line-height:1.2;"><span style="display:block;">{{ $formatDate($item->created_at) }}</span><span style="display:block;opacity:.85;">{{ $formatTime($item->created_at) }}</span></td>
                             <td style="white-space:nowrap;">{{ $formatDate($item->effective_date) }}</td>
-                            <td><span style="background:{{ $colors['bg'] }};color:{{ $colors['text'] }};padding:3px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;">{{ $item->type_name ?? 'Type ' . $item->type_id }}</span></td>
-                            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ $item->holder_name }}">{{ $item->holder_name ?? '—' }}</td>
+                            <td style="white-space:nowrap;">{{ $formatDate($item->trade_date) }}</td>
+                            <td style="white-space:nowrap;">{{ $formatDate($item->settlement_date) }}</td>
+                            <td><span style="background:{{ $colors['bg'] }};color:{{ $colors['text'] }};padding:3px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;">{{ $typeLabels[(int) $item->type_id] ?? ($item->type_name ?? 'Type ' . $item->type_id) }}</span></td>
+                            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ $customerTransactionUrl ? 'Open customer transaction' : $item->holder_name }}">
+                                @if($customerTransactionUrl)
+                                    <a href="{{ $customerTransactionUrl }}" target="_blank" rel="noopener noreferrer" style="color:#2b6cb0;text-decoration:underline;font-weight:600;">{{ $item->holder_name ?? '—' }}</a>
+                                @else
+                                    {{ $item->holder_name ?? '—' }}
+                                @endif
+                            </td>
                             <td style="white-space:nowrap;color:#4a5568;">{{ $item->holder_id ?? '—' }}</td>
                             <td style="white-space:nowrap;" title="Code {{ trim((string) $item->source_code) }}">{{ $item->source_name ?? (trim((string) $item->source_code) ?: '—') }}</td>
-                            <td style="white-space:nowrap;">{{ trim((string) $item->bank_code) ?: '—' }}</td>
-                            <td style="white-space:nowrap;">{{ trim((string) $item->bank_transit) ?: '—' }}</td>
-                            <td style="white-space:nowrap;">{{ $item->bank_account_last4 ? '****' . $item->bank_account_last4 : '—' }}</td>
                             <td style="text-align:right;white-space:nowrap;font-weight:700;color:{{ $amountColor }};">{{ $formatAmount($item->amount) }}</td>
                         </tr>
+                    @endforeach
+                    @if($isCandidateTab)
+                        @php
+                            $groupNetTotal = $groupItems->sum(
+                                fn($groupItem) => (int) $groupItem->type_id === 10
+                                    ? (float) $groupItem->amount
+                                    : -(float) $groupItem->amount
+                            );
+                        @endphp
+                        <tr style="border-top:2px solid #cbd5e0;border-bottom:2px solid #a0aec0;background:#edf2f7;">
+                            <td colspan="8" style="text-align:right;font-weight:800;color:#2d3748;white-space:nowrap;">{{ $effectiveDate }} Net Total</td>
+                            <td style="text-align:right;font-weight:800;color:{{ $groupNetTotal < 0 ? '#c53030' : '#2f855a' }};white-space:nowrap;">{{ $formatAmount($groupNetTotal) }}</td>
+                        </tr>
+                    @endif
                     @endforeach
                     </tbody>
                 </table>
             </div>
-            <div style="margin-top:20px;display:flex;justify-content:center;">{{ $items->onEachSide(1)->links() }}</div>
+            @if(!$isCandidateTab)
+                <div style="margin-top:20px;display:flex;justify-content:center;">{{ $items->onEachSide(1)->links() }}</div>
+            @endif
         @else
-            <p style="color:#718096;text-align:center;padding:36px 0;">No EFT items match the current filters.</p>
+            <p style="color:#718096;text-align:center;padding:36px 0;">
+                @if($isCandidateTab && !$drilldownDateLabel && $filters['date_from'] === '' && $filters['date_to'] === '')
+                    Select a date or date range to find candidates.
+                @elseif($activeTab === 'missing')
+                    No missing candidates match the current filters.
+                @elseif($activeTab === 'excluded')
+                    No excluded candidates match the selected date and filters.
+                @else
+                    No EFT items match the current filters.
+                @endif
+            </p>
         @endif
     @endif
 </div>
