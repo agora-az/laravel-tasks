@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Import;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Str;
 use phpseclib3\Net\SFTP;
 
 class SyncBankEftFilesCommand extends Command
@@ -21,17 +22,21 @@ class SyncBankEftFilesCommand extends Command
         {--keep-local : Keep successfully imported local files}
         {--status-file= : Sync status JSON path}
         {--lock-file= : Sync lock path}
-        {--run-id= : Identifier supplied by the initiating web session}';
+        {--run-id= : Identifier supplied by the initiating web session}
+        {--trigger=Command line : Description of what initiated the sync}';
 
     protected $description = 'Download and import unprocessed fixed-width bank EFT files';
 
     private ?string $runId = null;
 
+    private string $trigger = 'Command line';
+
     public function handle(): int
     {
         $lockFile = $this->stringOption('lock-file');
         $statusFile = $this->stringOption('status-file');
-        $this->runId = $this->stringOption('run-id');
+        $this->runId = $this->stringOption('run-id') ?? (string) Str::uuid();
+        $this->trigger = $this->stringOption('trigger') ?? 'Command line';
         if ($lockFile) {
             @file_put_contents($lockFile, date('c'));
         }
@@ -191,11 +196,18 @@ class SyncBankEftFilesCommand extends Command
         if (!$path) {
             return;
         }
-        $existing = [];
+        $existing = [
+            'run_id' => $this->runId,
+            'trigger' => $this->trigger,
+            'started_at' => now()->toIso8601String(),
+        ];
         if (is_file($path)) {
             $decoded = json_decode((string) @file_get_contents($path), true);
             if (is_array($decoded) && ($decoded['run_id'] ?? null) === $this->runId) {
-                $existing = array_intersect_key($decoded, array_flip(['run_id', 'trigger', 'started_at']));
+                $existing = array_merge(
+                    $existing,
+                    array_intersect_key($decoded, array_flip(['run_id', 'trigger', 'started_at']))
+                );
             }
         }
 

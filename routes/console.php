@@ -57,6 +57,24 @@ Schedule::command('viefund:sync-cash-daily-snapshots --days=90 --date-basis=trad
     ->withoutOverlapping()
     ->runInBackground();
 
+Schedule::command('bank:sync-eft-files --trigger="Scheduled sync" --lock-file=' . storage_path('app/bank-eft-sync.lock') . ' --status-file=' . storage_path('app/bank-eft-sync-status.json'))
+    ->dailyAt('21:35')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
+Schedule::command('settlement:sync-instructions --trigger="Scheduled sync" --lock-file=' . storage_path('app/settlement-instructions-sync.lock') . ' --status-file=' . storage_path('app/settlement-instructions-sync-status.json'))
+    ->dailyAt('21:45')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
+Schedule::command('bank:sync-entries --parser=v2 --trigger="Scheduled sync" --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
+    ->dailyAt('21:55')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping()
+    ->runInBackground();
+
 Schedule::command('viefund:sync-cash-daily-snapshots --full --date-basis=settlement_date --currency=00 --statuses=6')
     ->weeklyOn(1, '22:00')
     ->timezone('America/Toronto')
@@ -71,18 +89,6 @@ Schedule::command('viefund:sync-cash-daily-snapshots --full --date-basis=trade_d
 
 Schedule::command('viefund:sync-customers')
     ->dailyAt('22:30')
-    ->timezone('America/Toronto')
-    ->withoutOverlapping()
-    ->runInBackground();
-
-Schedule::command('bank:sync-entries --parser=v2 --trigger="Scheduled sync" --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
-    ->dailyAt('23:00')
-    ->timezone('America/Toronto')
-    ->withoutOverlapping()
-    ->runInBackground();
-
-Schedule::command('settlement:sync-instructions --trigger="Scheduled sync" --lock-file=' . storage_path('app/settlement-instructions-sync.lock') . ' --status-file=' . storage_path('app/settlement-instructions-sync-status.json'))
-    ->dailyAt('23:15')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
