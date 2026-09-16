@@ -39,3 +39,4 @@ resources/data/viefund_db_schema
 storage/app/reports
 /resources/data/
 *.pfx
+storage/app/settlement-sync
