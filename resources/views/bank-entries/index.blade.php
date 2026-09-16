@@ -1,56 +1,53 @@
 @extends('layouts.app')
 
-@section('title', 'Bank Statement Entries')
+@section('title', 'Bank Statements')
 
 @section('content')
 @php
     $showSyncButtons = filter_var(env('SHOW_SYNC_BUTTONS', true), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
     $showSyncButtons = $showSyncButtons ?? true;
-    $activeTab = request('view') === 'summaries' ? 'summaries' : 'transactions';
+    $activeTab = request('view') === 'transactions' ? 'transactions' : 'summaries';
+    $currencyTotals = $totals->currency_totals ?? collect();
+    $formatCurrencyTotal = static function ($amount, ?string $currency, bool $accounting = false): string {
+        $value = (float) $amount;
+        $formatted = ($currency ?: 'Unknown') . ' $' . number_format(abs($value), 2);
+        return $accounting && $value < 0 ? '(' . $formatted . ')' : $formatted;
+    };
+    $dateFromLabel = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) request('date_from'))
+        ? \Illuminate\Support\Carbon::parse(request('date_from'))->format('F j, Y')
+        : null;
+    $dateToLabel = preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) request('date_to'))
+        ? \Illuminate\Support\Carbon::parse(request('date_to'))->format('F j, Y')
+        : null;
+    $selectedStatementDate = $selectedStatement
+        ? ($selectedStatement->closing_balance_date ?? $selectedStatement->opening_balance_date)
+        : null;
+    $dateScopeLabel = match (true) {
+        $selectedStatementDate !== null => $selectedStatementDate->format('F j, Y'),
+        $dateFromLabel && $dateToLabel && $dateFromLabel === $dateToLabel => $dateFromLabel,
+        $dateFromLabel && $dateToLabel => $dateFromLabel . ' through ' . $dateToLabel,
+        $dateFromLabel => $dateFromLabel . ' onward',
+        $dateToLabel => 'Through ' . $dateToLabel,
+        default => null,
+    };
+    $hasStatementScope = $selectedStatement !== null || $dateFromLabel !== null || $dateToLabel !== null;
+    $bankViewUrl = static fn(string $view): string => route(
+        'bank-entries.index',
+        array_merge(request()->except(['view', 'page', 'summary_page', 'statement_summary_id']), ['view' => $view])
+    );
 @endphp
-<div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:20px 0;flex-wrap:wrap;">
     <div>
-        <h2 style="margin: 0;">Bank Statement Entries</h2>
+        <h2 style="margin: 0;">Bank Statements</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source: CIBC CAMT.053 · Parser v2</div>
         <div id="bank-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
             <span id="bank-sync-status"></span>
             <button type="button" id="bank-sync-status-dismiss" aria-label="Dismiss bank sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
-    <div style="display:flex; align-items:center; gap:10px;">
-        <div style="position: relative;" id="bank-export-wrap">
-            <button id="bank-export-btn" type="button" class="sync-action-pill sync-action-pill-secondary" style="display: inline-flex; align-items: center; gap: 8px;">
-                <span>↓ Export</span>
-                <span>▾</span>
-            </button>
-            <div id="bank-export-panel" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 160px; overflow: hidden;">
-                <a href="{{ route('bank-entries.export', array_merge(request()->query(), ['format' => 'csv'])) }}"
-                   style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; text-decoration: none; border-bottom: 1px solid #f0f4f8;"
-                   onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
-                    CSV
-                </a>
-                <a href="{{ route('bank-entries.export', array_merge(request()->query(), ['format' => 'excel'])) }}"
-                   style="display: block; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; text-decoration: none;"
-                   onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
-                    Excel
-                </a>
-            </div>
-        </div>
-        @if($showSyncButtons)
-            <form method="POST" action="{{ route('bank-entries.sync') }}" style="margin:0;">
-                @csrf
-                @foreach(request()->query() as $key => $val)
-                    @if(is_array($val))
-                        @foreach($val as $v)
-                            <input type="hidden" name="{{ $key }}[]" value="{{ $v }}">
-                        @endforeach
-                    @else
-                        <input type="hidden" name="{{ $key }}" value="{{ $val }}">
-                    @endif
-                @endforeach
-                <button type="submit" id="bank-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync Bank Entries</button>
-            </form>
-        @endif
+    <div id="bank-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
+        <span><strong>Last sync:</strong> <span id="bank-last-sync-time">checking…</span></span>
+        <span id="bank-last-sync-detail">&nbsp;</span>
     </div>
 </div>
 
@@ -67,26 +64,11 @@
 
 <script>
 (function () {
-    const exportWrap = document.getElementById('bank-export-wrap');
-    const exportButton = document.getElementById('bank-export-btn');
-    const exportPanel = document.getElementById('bank-export-panel');
-    if (exportWrap && exportButton && exportPanel) {
-        exportButton.addEventListener('click', (event) => {
-            event.stopPropagation();
-            exportPanel.style.display = exportPanel.style.display === 'block' ? 'none' : 'block';
-        });
-
-        document.addEventListener('click', (event) => {
-            if (!exportWrap.contains(event.target)) {
-                exportPanel.style.display = 'none';
-            }
-        });
-    }
-
     const wrap = document.getElementById('bank-sync-status-wrap');
     const text = document.getElementById('bank-sync-status');
     const dismiss = document.getElementById('bank-sync-status-dismiss');
-    const btn = document.getElementById('bank-sync-btn');
+    const lastSyncTime = document.getElementById('bank-last-sync-time');
+    const lastSyncDetail = document.getElementById('bank-last-sync-detail');
     if (!wrap || !text) return;
 
     const DISMISS_KEY = 'bankEntriesSyncDismissedMessage';
@@ -97,8 +79,11 @@
     };
 
     const setBusy = (busy) => {
-        if (!btn) return;
-        btn.disabled = busy;
+        document.querySelectorAll('[data-bank-sync-button]').forEach((btn) => {
+            btn.disabled = busy;
+            btn.style.opacity = busy ? '0.65' : '';
+            btn.style.cursor = busy ? 'not-allowed' : '';
+        });
     };
 
     const setMessage = (msg) => {
@@ -120,6 +105,24 @@
         fetch('{{ route('bank-entries.sync-status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then(r => r.json())
             .then(data => {
+                if (lastSyncTime && lastSyncDetail) {
+                    if (data.completed_at) {
+                        const completed = new Date(data.completed_at);
+                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
+                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+                        });
+                        const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
+                        const trigger = data.trigger ? `Started via ${data.trigger}` : '';
+                        lastSyncTime.textContent = when;
+                        lastSyncDetail.textContent = trigger ? `${result} · ${trigger}` : result;
+                    } else if (data.inProgress && data.started_at) {
+                        lastSyncTime.textContent = 'currently running';
+                        lastSyncDetail.textContent = data.message || 'Bank statement sync in progress…';
+                    } else {
+                        lastSyncTime.textContent = 'no completed sync recorded';
+                        lastSyncDetail.innerHTML = '&nbsp;';
+                    }
+                }
                 if (data.inProgress) {
                     const processed = data.processed_files ?? 0;
                     const total = data.total_files ?? '?';
@@ -132,15 +135,12 @@
                 }
 
                 setBusy(false);
-                if (data.success === true) {
+                if (data.success === true && data.initiatedByCurrentSession) {
                     wrap.className = 'sync-chip sync-chip-success';
                     setMessage(data.message || 'Bank sync completed.');
-                } else if (data.success === false) {
+                } else if (data.success === false && data.initiatedByCurrentSession) {
                     wrap.className = 'sync-chip sync-chip-error';
                     setMessage(data.message || 'Bank sync failed.');
-                } else if (data.message && data.message !== 'Idle') {
-                    wrap.className = 'sync-chip sync-chip-progress';
-                    setMessage(data.message);
                 } else {
                     setVisible(false);
                 }
@@ -155,71 +155,7 @@
 })();
 </script>
 
-<script>
-(function () {
-    const initializeBankTabs = () => {
-        const tabs = Array.from(document.querySelectorAll('[data-bank-tab]'));
-        const panes = {
-            transactions: document.getElementById('bank-tab-pane-transactions'),
-            summaries: document.getElementById('bank-tab-pane-summaries'),
-        };
-        const viewInput = document.querySelector('input[name="view"]');
-
-        if (!tabs.length || !panes.transactions || !panes.summaries) {
-            return;
-        }
-
-        const applyTab = (tabName, updateUrl) => {
-            const activeTabName = tabName === 'summaries' ? 'summaries' : 'transactions';
-            tabs.forEach((tab) => {
-                const isActive = tab.getAttribute('data-bank-tab') === activeTabName;
-                tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
-                tab.style.background = isActive ? '#2b6cb0' : '#e2e8f0';
-                tab.style.color = isActive ? '#fff' : '#2d3748';
-            });
-
-            panes.transactions.style.display = activeTabName === 'transactions' ? '' : 'none';
-            panes.summaries.style.display = activeTabName === 'summaries' ? '' : 'none';
-
-            if (viewInput) {
-                viewInput.value = activeTabName;
-            }
-
-            if (updateUrl && window.history && window.history.replaceState) {
-                const url = new URL(window.location.href);
-                url.searchParams.set('view', activeTabName);
-                window.history.replaceState({}, '', url.toString());
-            }
-        };
-
-        tabs.forEach((tab) => {
-            tab.addEventListener('click', () => {
-                const tabName = tab.getAttribute('data-bank-tab') || 'transactions';
-                applyTab(tabName, true);
-            });
-        });
-
-        applyTab('{{ $activeTab }}', false);
-    };
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeBankTabs, { once: true });
-    } else {
-        initializeBankTabs();
-    }
-})();
-</script>
-
 {{-- Summary Cards --}}
-@php
-    $currencyTotals = $totals->currency_totals ?? collect();
-    $formatCurrencyTotal = static function ($amount, ?string $currency, bool $accounting = false): string {
-        $value = (float) $amount;
-        $formatted = ($currency ?: 'Unknown') . ' $' . number_format(abs($value), 2);
-
-        return $accounting && $value < 0 ? '(' . $formatted . ')' : $formatted;
-    };
-@endphp
 <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px;">
     <div class="card" style="background: linear-gradient(135deg, #345262 0%, #5a7585 100%); color: white; text-align: center;">
         <div class="summary-card-value">{{ number_format($totals->total_count) }}</div>
@@ -259,6 +195,13 @@
 {{-- Filters --}}
 <div class="card" style="margin-bottom: 20px;">
     <form action="{{ route('bank-entries.index') }}" method="GET">
+        @if($selectedStatement)
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;background:#ebf8ff;border:1px solid #bee3f8;color:#2c5282;border-radius:4px;padding:9px 12px;margin-bottom:12px;font-size:12px;font-weight:600;">
+                <span>Viewing transactions for {{ $selectedStatement->account_number }} · {{ ($selectedStatement->closing_balance_date ?? $selectedStatement->opening_balance_date)?->format('Y-m-d') ?? 'statement' }}</span>
+                <a href="{{ route('bank-entries.index', ['view' => 'transactions']) }}" style="color:#2b6cb0;white-space:nowrap;">Clear statement</a>
+            </div>
+            <input type="hidden" name="statement_summary_id" value="{{ $selectedStatement->id }}">
+        @endif
         <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 12px; align-items: end;">
             <div>
                 <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Date From</label>
@@ -314,7 +257,7 @@
             </div>
             <div style="display: flex; gap: 8px;">
                 <button type="submit" class="btn" style="padding: 8px 20px; white-space: nowrap;">Filter</button>
-                @if(request()->hasAny(['date_from','date_to','channel','direction','currency','memo_type','search','sort','sort_dir']))
+                @if(request()->hasAny(['statement_summary_id','date_from','date_to','channel','direction','currency','memo_type','search','sort','sort_dir']))
                     <a href="{{ route('bank-entries.index') }}" class="btn" style="background: #718096; padding: 8px 14px; text-decoration: none;">Clear</a>
                 @endif
             </div>
@@ -365,46 +308,39 @@
 
 {{-- Results --}}
 <div id="bank-results-card" class="card" style="padding-top: 0;">
-    <div style="display: flex; gap: 8px; border-bottom: 1px solid #e2e8f0; padding: 12px 14px; background: #f8fafc;">
-        <button type="button" data-bank-tab="transactions" aria-selected="{{ $activeTab === 'transactions' ? 'true' : 'false' }}"
-           style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeTab === 'transactions' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-            Transactions
-        </button>
-        <button type="button" data-bank-tab="summaries" aria-selected="{{ $activeTab === 'summaries' ? 'true' : 'false' }}"
-           style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeTab === 'summaries' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-            CAMT Summaries
-        </button>
-    </div>
-
     <div id="bank-tab-pane-summaries" style="{{ $activeTab === 'summaries' ? '' : 'display:none;' }}">
         @if(($statementSummaryTotals->statement_count ?? 0) > 0)
             @php
-                $summaryNet = (float) ($statementSummaryTotals->summed_credit_total ?? 0) - (float) ($statementSummaryTotals->summed_debit_total ?? 0);
                 $statementCount = (int) ($statementSummaryTotals->statement_count ?? 0);
                 $shownCount = count($statementSummaries);
             @endphp
-            <div style="padding: 16px 18px 0 18px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;">
-                    <div>
-                        <div style="font-size: 12px; font-weight: 800; color: #4a5568; text-transform: uppercase; letter-spacing: 0.07em;">CAMT Statement Summaries</div>
-                        <div style="font-size: 13px; color: #4a5568; margin-top: 4px;">
-                            Showing {{ number_format($shownCount) }} of {{ number_format($statementCount) }} matching statements across {{ number_format((int) ($statementSummaryTotals->account_count ?? 0)) }} accounts.
-                        </div>
-                    </div>
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                        <span style="background: #fff; border: 1px solid #cbd5e0; color: #2d3748; font-size: 12px; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
-                            Credit Sum: ${{ number_format((float) ($statementSummaryTotals->summed_credit_total ?? 0), 2) }}
-                        </span>
-                        <span style="background: #fff; border: 1px solid #cbd5e0; color: #2d3748; font-size: 12px; padding: 4px 8px; border-radius: 4px; font-family: monospace;">
-                            Debit Sum: ${{ number_format((float) ($statementSummaryTotals->summed_debit_total ?? 0), 2) }}
-                        </span>
-                        <span style="background: #fff; border: 1px solid #cbd5e0; color: {{ $summaryNet >= 0 ? '#276749' : '#c53030' }}; font-size: 12px; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 700;">
-                            Net: {{ $summaryNet >= 0 ? '$' . number_format($summaryNet, 2) : '($' . number_format(abs($summaryNet), 2) . ')' }}
-                        </span>
-                    </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                <div>
+                    <div style="font-size:11px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Statement Date</div>
+                    <div style="font-size:20px;font-weight:800;color:#1a365d;line-height:1.15;margin-top:3px;">{{ $dateScopeLabel ?? 'All Statements' }}</div>
                 </div>
+                @if($hasStatementScope)
+                    <div style="text-align:center;min-width:190px;">
+                        <div style="font-size:11px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Net Transaction Total</div>
+                        @forelse($currencyTotals as $currencyTotal)
+                            @php $headerNet = (float) $currencyTotal->total_credits - (float) $currencyTotal->total_debits; @endphp
+                            <div style="font-size:18px;font-weight:800;color:{{ $headerNet < 0 ? '#c53030' : '#2f855a' }};line-height:1.2;margin-top:3px;white-space:nowrap;">{{ $formatCurrencyTotal($headerNet, $currencyTotal->currency, true) }}</div>
+                        @empty
+                            <div style="font-size:18px;font-weight:800;color:#718096;">—</div>
+                        @endforelse
+                    </div>
+                @else
+                    <div></div>
+                @endif
+                <div style="margin-left:auto;">@include('bank-entries._table-controls')</div>
+            </div>
 
-                <div style="font-size: 12px; color: #718096; margin-bottom: 12px;">
+            <div style="padding:16px 18px 12px 18px;">
+                <div style="font-size:12px;font-weight:800;color:#4a5568;text-transform:uppercase;letter-spacing:.07em;">Statement Summaries</div>
+                <div style="font-size:13px;color:#4a5568;margin-top:4px;">
+                    Showing {{ number_format($shownCount) }} of {{ number_format($statementCount) }} matching statements across {{ number_format((int) ($statementSummaryTotals->account_count ?? 0)) }} accounts.
+                </div>
+                <div style="font-size:12px;color:#718096;margin-top:12px;">
                     Statement values come from CAMT file-level metadata and are shown per matching statement; they are not trimmed to specific transaction subsets inside a statement.
                 </div>
             </div>
@@ -413,15 +349,16 @@
                 <table style="width: 100%; border-collapse: collapse; min-width: 980px;" class="mono-grid">
                     <thead>
                         <tr style="background: #e2e8f0; border-bottom: 2px solid #cbd5e0; white-space: nowrap;">
-                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Created</th>
-                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Statement Date</th>
+                            <th style="text-align: left; font-weight: 700; color: #2d3748;"><span style="display:block;">Statement</span><span style="display:block;">Date</span></th>
                             <th style="text-align: left; font-weight: 700; color: #2d3748;">Account</th>
-                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Statement ID</th>
-                            <th style="text-align: right; font-weight: 700; color: #2d3748;">Opening (OPBD)</th>
-                            <th style="text-align: right; font-weight: 700; color: #2d3748;">Closing (CLBD)</th>
-                            <th style="text-align: right; font-weight: 700; color: #2d3748;">Credit Summary</th>
-                            <th style="text-align: right; font-weight: 700; color: #2d3748;">Debit Summary</th>
-                            <th style="text-align: left; font-weight: 700; color: #2d3748;">Source File</th>
+                            <th style="text-align: left; font-weight: 700; color: #2d3748;">CURR</th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Opening</span><span style="display:block;">Balance</span></th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Closing</span><span style="display:block;">Balance</span></th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Credit</span><span style="display:block;">Txns</span></th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Credit</span><span style="display:block;">Summary</span></th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Debit</span><span style="display:block;">Txns</span></th>
+                            <th style="text-align: right; font-weight: 700; color: #2d3748;"><span style="display:block;">Debit</span><span style="display:block;">Summary</span></th>
+                            <th style="text-align: left; font-weight: 700; color: #2d3748;"><span style="display:block;">Source</span><span style="display:block;">File</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -432,36 +369,47 @@
                                 $currency = $summary->closing_balance_currency ?: ($summary->opening_balance_currency ?: 'CAD');
                                 $openingAmount = $summary->opening_balance_signed_amount ?? $summary->opening_balance_amount;
                                 $closingAmount = $summary->closing_balance_signed_amount ?? $summary->closing_balance_amount;
+                                $formatStatementAmount = static function ($amount): string {
+                                    $value = (float) $amount;
+                                    $formatted = '$' . number_format(abs($value), 2);
+                                    return $value < 0 ? '(' . $formatted . ')' : $formatted;
+                                };
+                                $statementTransactionsUrl = route('bank-entries.index', [
+                                    'view' => 'transactions',
+                                    'statement_summary_id' => $summary->id,
+                                ]);
                             @endphp
-                            <tr style="border-bottom: 1px solid #d9e2ec; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }};">
-                                <td style="white-space: nowrap; color: #4a5568; line-height: 1.2;">
-                                    <span style="display:block;">{{ $createdAt?->format('Y-m-d') ?? '—' }}</span>
-                                    <span style="display:block; opacity: 0.9;">{{ $createdAt?->format('H:i:s') ?? '--:--:--' }}</span>
-                                </td>
+                            <tr role="link" tabindex="0" title="View transactions from this statement" onclick="window.location.href='{{ $statementTransactionsUrl }}'" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.location.href='{{ $statementTransactionsUrl }}';}" style="cursor:pointer;border-bottom: 1px solid #d9e2ec; background: {{ $loop->even ? 'rgba(56, 161, 105, 0.07)' : 'transparent' }};">
                                 <td style="white-space: nowrap; color: #2d3748;">
                                     {{ $statementDate?->format('Y-m-d') ?? ($createdAt?->format('Y-m-d') ?? '—') }}
                                 </td>
                                 <td style="white-space: nowrap; color: #2d3748;">{{ $summary->account_number ?: '—' }}</td>
-                                <td style="white-space: nowrap; color: #2d3748;">{{ $summary->statement_id ?: '—' }}</td>
+                                <td style="white-space: nowrap; color: #2d3748; font-weight:700;">{{ $currency }}</td>
                                 <td style="text-align: right; white-space: nowrap; color: #4a5568;">
                                     @if($openingAmount !== null)
-                                        {{ (float) $openingAmount < 0 ? '(' . $currency . ' ' . number_format(abs((float) $openingAmount), 2) . ')' : $currency . ' ' . number_format((float) $openingAmount, 2) }}
+                                        {{ $formatStatementAmount($openingAmount) }}
                                     @else
                                         —
                                     @endif
                                 </td>
-                                <td style="text-align: right; white-space: nowrap; color: #4a5568; font-weight: 700;">
+                                <td style="text-align: right; white-space: nowrap; color: #4a5568;">
                                     @if($closingAmount !== null)
-                                        {{ (float) $closingAmount < 0 ? '(' . $currency . ' ' . number_format(abs((float) $closingAmount), 2) . ')' : $currency . ' ' . number_format((float) $closingAmount, 2) }}
+                                        {{ $formatStatementAmount($closingAmount) }}
                                     @else
                                         —
                                     @endif
                                 </td>
                                 <td style="text-align: right; white-space: nowrap; color: #276749;">
-                                    {{ number_format((int) ($summary->total_credit_entries ?? 0)) }} / {{ $currency }} {{ number_format((float) ($summary->total_credit_sum ?? 0), 2) }}
+                                    {{ number_format((int) ($summary->total_credit_entries ?? 0)) }}
+                                </td>
+                                <td style="text-align: right; white-space: nowrap; color: #276749; font-weight:700;">
+                                    {{ $formatStatementAmount($summary->total_credit_sum ?? 0) }}
                                 </td>
                                 <td style="text-align: right; white-space: nowrap; color: #c53030;">
-                                    {{ number_format((int) ($summary->total_debit_entries ?? 0)) }} / {{ $currency }} {{ number_format((float) ($summary->total_debit_sum ?? 0), 2) }}
+                                    {{ number_format((int) ($summary->total_debit_entries ?? 0)) }}
+                                </td>
+                                <td style="text-align: right; white-space: nowrap; color: #c53030; font-weight:700;">
+                                    {{ $formatStatementAmount(-abs((float) ($summary->total_debit_sum ?? 0))) }}
                                 </td>
                                 <td style="white-space: nowrap; color: #4a5568;">{{ $summary->source_file }}</td>
                             </tr>
@@ -480,6 +428,22 @@
 
     <div id="bank-tab-pane-transactions" style="{{ $activeTab === 'transactions' ? '' : 'display:none;' }}">
         @if($entries->count())
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                <div>
+                    <div style="font-size:11px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Transaction Date</div>
+                    <div style="font-size:20px;font-weight:800;color:#1a365d;line-height:1.15;margin-top:3px;">{{ $dateScopeLabel ?? 'All Transaction Dates' }}</div>
+                </div>
+                <div style="text-align:center;min-width:190px;">
+                    <div style="font-size:11px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Net Transaction Total</div>
+                    @forelse($currencyTotals as $currencyTotal)
+                        @php $headerNet = (float) $currencyTotal->total_credits - (float) $currencyTotal->total_debits; @endphp
+                        <div style="font-size:18px;font-weight:800;color:{{ $headerNet < 0 ? '#c53030' : '#2f855a' }};line-height:1.2;margin-top:3px;white-space:nowrap;">{{ $formatCurrencyTotal($headerNet, $currencyTotal->currency, true) }}</div>
+                    @empty
+                        <div style="font-size:18px;font-weight:800;color:#718096;">—</div>
+                    @endforelse
+                </div>
+                <div style="margin-left:auto;">@include('bank-entries._table-controls')</div>
+            </div>
             <div style="overflow-x: auto;">
                 <table style="width: 100%; border-collapse: collapse;" class="mono-grid">
                     <thead>
@@ -504,16 +468,16 @@
                             <th style="text-align: right; font-weight: 600; color: #2d3748;">
                                 <a href="{{ $sortUrl('amount') }}" style="color: inherit; text-decoration: none;">Amount{{ $arrow('amount') }}</a>
                             </th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Currency</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748;">CURR</th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748;">
-                                <a href="{{ $sortUrl('memo_type') }}" style="color: inherit; text-decoration: none;">Memo Type{{ $arrow('memo_type') }}</a>
+                                <a href="{{ $sortUrl('memo_type') }}" style="color: inherit; text-decoration: none;"><span style="display:block;">Memo</span><span style="display:block;">Type{{ $arrow('memo_type') }}</span></a>
                             </th>
                             <th style="text-align: left; font-weight: 600; color: #2d3748;">
                                 <a href="{{ $sortUrl('counterparty') }}" style="color: inherit; text-decoration: none;">Counterparty{{ $arrow('counterparty') }}</a>
                             </th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Settlement #</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Wire Ref</th>
-                            <th style="text-align: left; font-weight: 600; color: #2d3748;">Source File</th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748;"><a href="{{ $sortUrl('settlement_number') }}" style="color:inherit;text-decoration:none;">Sequence{{ $arrow('settlement_number') }}</a></th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748;"><span style="display:block;">Wire</span><span style="display:block;">Ref</span></th>
+                            <th style="text-align: left; font-weight: 600; color: #2d3748;"><span style="display:block;">Source</span><span style="display:block;">File</span></th>
                         </tr>
                     </thead>
                     <tbody>

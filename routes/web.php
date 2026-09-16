@@ -13,6 +13,7 @@ use App\Http\Controllers\SettlementInstructionController;
 use App\Http\Controllers\EftFileController;
 use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
+use App\Http\Controllers\TransactionReconciliationController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -38,6 +39,8 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 // Protected routes - require authentication
 Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
+    Route::get('/dashboard/stats-status', [ReconciliationController::class, 'dashboardStatsStatus'])->name('dashboard.stats-status');
+    Route::get('/viefund-transactions', [RemoteVieFundController::class, 'allTransactions'])->name('viefund-transactions.index');
 
     Route::get('/docs', [DocumentationController::class, 'index'])->name('docs.index');
     Route::get('/docs/{document}', [DocumentationController::class, 'show'])->name('docs.show');
@@ -81,6 +84,7 @@ Route::middleware('auth.check')->group(function () {
 
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
+        Route::get('/transactions', [TransactionReconciliationController::class, 'index'])->name('reconciliations.transactions');
         Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
         Route::get('/bank-fsp', [DailyTotalsComparisonController::class, 'fspIndex'])->name('reconciliations.bank-fsp');
         Route::get('/bank-fsp/{source}/{date}/compare', [DailyTotalsDrilldownController::class, 'fspComparison'])
@@ -155,6 +159,12 @@ Route::middleware('auth.check')->group(function () {
 
     Route::get('/eft-files', [EftFileController::class, 'index'])->name('eft-files.index');
     Route::get('/eft-files/export', [EftFileController::class, 'export'])->name('eft-files.export');
+    Route::post('/eft-files/sync', [EftFileController::class, 'sync'])->name('eft-files.sync');
+    Route::get('/eft-files/sync-status', [EftFileController::class, 'syncStatus'])->name('eft-files.sync-status');
+    Route::get('/eft-files/bank-records/{sequence}/{date}', [EftFileController::class, 'bankRecords'])
+        ->whereNumber('sequence')
+        ->where('date', '\\d{4}-\\d{2}-\\d{2}')
+        ->name('eft-files.bank-records');
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');

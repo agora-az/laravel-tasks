@@ -311,8 +311,13 @@ class SettlementInstructionController extends Controller
                 ->with('sync_error', 'An FSP sync is already in progress.');
         }
 
+        $runId = (string) \Illuminate\Support\Str::uuid();
+        $startedAt = now()->toIso8601String();
+        $request->session()->put('fsp_sync_run_id', $runId);
         file_put_contents($lockFile, date('c'));
         file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
+            'trigger' => 'Sync button',
             'inProgress' => true,
             'success' => null,
             'dry_run' => $dryRun,
@@ -320,16 +325,18 @@ class SettlementInstructionController extends Controller
             'processed_files' => 0,
             'total_files' => null,
             'progress_pct' => 0,
-            'started_at' => now()->toIso8601String(),
-            'updated_at' => now()->toIso8601String(),
+            'started_at' => $startedAt,
+            'updated_at' => $startedAt,
         ], JSON_PRETTY_PRINT));
 
         $command = sprintf(
-            '%s %s settlement:sync-instructions --lock-file=%s --status-file=%s%s >> %s 2>&1 &',
+            '%s %s settlement:sync-instructions --lock-file=%s --status-file=%s --run-id=%s --trigger=%s%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg($lockFile),
             escapeshellarg($statusFile),
+            escapeshellarg($runId),
+            escapeshellarg('Sync button'),
             $dryRun ? ' --dry-run' : '',
             escapeshellarg($logPath)
         );
@@ -356,7 +363,7 @@ class SettlementInstructionController extends Controller
                 : 'FSP sync started. Settlement instruction files will be downloaded and imported in the background.');
     }
 
-    public function syncStatus(): JsonResponse
+    public function syncStatus(Request $request): JsonResponse
     {
         $lockFile = storage_path('app/settlement-instructions-sync.lock');
         $statusFile = storage_path('app/settlement-instructions-sync-status.json');
@@ -388,6 +395,8 @@ class SettlementInstructionController extends Controller
             $payload['message'] = 'FSP sync stopped before reporting completion. Check the settlement sync log and retry.';
             $payload['completed_at'] = $payload['completed_at'] ?? now()->toIso8601String();
         }
+        $payload['initiatedByCurrentSession'] = isset($payload['run_id'])
+            && hash_equals((string) $payload['run_id'], (string) $request->session()->get('fsp_sync_run_id', ''));
 
         return response()->json($payload);
     }

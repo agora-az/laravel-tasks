@@ -5,7 +5,8 @@
 @section('content')
 @php
     $todayDate = now()->toDateString();
-    $nowDateTimeLocal = now()->format('Y-m-d\TH:i');
+    $simulatedReportTimezone = config('viefund.simulated_report_timezone', 'America/Toronto');
+    $nowDateTimeLocal = now($simulatedReportTimezone)->format('Y-m-d\TH:i');
 @endphp
 <style>
     .reports-page {
@@ -200,7 +201,7 @@
                     </div>
 
                     <div>
-                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Simulated Report Generation Time (optional)</label>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Simulated Report Generation Time — Eastern (EST/EDT) (optional)</label>
                         <input
                             type="datetime-local"
                             name="daily_balance_opened_before"
@@ -459,7 +460,7 @@
                     </div>
 
                     <div>
-                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Simulated Report Generation Time (optional)</label>
+                        <label style="display: block; font-size: 12px; font-weight: 600; color: #4a5568; margin-bottom: 4px;">Simulated Report Generation Time — Eastern (EST/EDT) (optional)</label>
                         <input
                             type="datetime-local"
                             name="customer_balance_opened_before"

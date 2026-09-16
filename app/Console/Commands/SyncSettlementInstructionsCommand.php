@@ -24,14 +24,22 @@ class SyncSettlementInstructionsCommand extends Command
         {--force : Import files even when the filename was already completed}
         {--rebuild : Truncate settlement instruction tables before importing all matched files}
         {--status-file= : Optional path for sync progress JSON}
-        {--lock-file= : Optional lock file marking a sync in progress}';
+        {--lock-file= : Optional lock file marking a sync in progress}
+        {--run-id= : Identifier supplied by the initiating web session}
+        {--trigger=Command line : Description of what initiated the sync}';
 
     protected $description = 'Download FSP settlement instruction files from SFTP and import them';
+
+    private ?string $runId = null;
+
+    private string $trigger = 'Command line';
 
     public function handle(): int
     {
         $lockFile = $this->stringOption('lock-file');
         $statusFile = $this->stringOption('status-file');
+        $this->runId = $this->stringOption('run-id');
+        $this->trigger = $this->stringOption('trigger') ?? 'Command line';
 
         if ($lockFile) {
             @file_put_contents($lockFile, date('c'));
@@ -503,6 +511,8 @@ class SyncSettlementInstructionsCommand extends Command
         $now = now()->toIso8601String();
 
         return [
+            'run_id' => $this->runId,
+            'trigger' => $this->trigger,
             'inProgress' => $inProgress,
             'success' => $success,
             'dry_run' => $dryRun,
@@ -519,7 +529,10 @@ class SyncSettlementInstructionsCommand extends Command
     private function writeStatus(?string $statusFile, array $payload): void
     {
         if ($statusFile) {
-            @file_put_contents($statusFile, json_encode($payload, JSON_PRETTY_PRINT));
+            @file_put_contents($statusFile, json_encode(array_merge([
+                'run_id' => $this->runId,
+                'trigger' => $this->trigger,
+            ], $payload), JSON_PRETTY_PRINT));
         }
     }
 }

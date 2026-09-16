@@ -4,6 +4,8 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Services\Reconciliation\VieFundFundservMatcher;
+use App\Jobs\RefreshVieFundDashboardStats;
+use App\Jobs\RefreshVieFundReportInceptionDates;
 
 Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', function () {
     $rule = $this->option('rule');
@@ -26,6 +28,16 @@ Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', functi
 
     return 0;
 })->purpose('Run reconciliation matching rules');
+
+Schedule::job(new RefreshVieFundDashboardStats, 'default', 'database')
+    ->hourly()
+    ->timezone('America/Toronto')
+    ->withoutOverlapping();
+
+Schedule::job(new RefreshVieFundReportInceptionDates, 'default', 'database')
+    ->dailyAt('20:45')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping();
 
 Schedule::command('viefund:sync-daily-totals --days=90')
     ->dailyAt('21:00')
@@ -63,13 +75,13 @@ Schedule::command('viefund:sync-customers')
     ->withoutOverlapping()
     ->runInBackground();
 
-Schedule::command('bank:sync-entries --parser=v2 --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
+Schedule::command('bank:sync-entries --parser=v2 --trigger="Scheduled sync" --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
     ->dailyAt('23:00')
     ->timezone('America/Toronto')
     ->withoutOverlapping()
     ->runInBackground();
 
-Schedule::command('settlement:sync-instructions --lock-file=' . storage_path('app/settlement-instructions-sync.lock') . ' --status-file=' . storage_path('app/settlement-instructions-sync-status.json'))
+Schedule::command('settlement:sync-instructions --trigger="Scheduled sync" --lock-file=' . storage_path('app/settlement-instructions-sync.lock') . ' --status-file=' . storage_path('app/settlement-instructions-sync-status.json'))
     ->dailyAt('23:15')
     ->timezone('America/Toronto')
     ->withoutOverlapping()

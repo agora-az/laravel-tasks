@@ -24,6 +24,54 @@ class RemoteVieFundController extends Controller
         private readonly VieFundRemoteService $remoteService
     ) {}
 
+    public function allTransactions(Request $request): View
+    {
+        $search = trim((string) $request->query('search', ''));
+        $trxTypesSelected = array_values(array_filter((array) $request->query('filter_trx_type', [])));
+        $statusGroupsSelected = array_values(array_intersect(
+            (array) $request->query('filter_status_group', []),
+            ['not_completed', 'open', 'completed']
+        ));
+        $filters = array_filter([
+            'customer_name' => trim((string) $request->query('filter_customer_name', '')),
+            'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
+            'trx_id' => trim((string) $request->query('filter_trx_id', '')),
+            'source_id' => trim((string) $request->query('filter_source_id', '')),
+            'created_from' => trim((string) $request->query('filter_created_from', '')),
+            'created_to' => trim((string) $request->query('filter_created_to', '')),
+            'trx_type' => $trxTypesSelected ?: null,
+            'status_group' => $statusGroupsSelected ?: null,
+        ]);
+        $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
+            ? (int) $request->query('per_page', 100)
+            : 100;
+        $connectionError = null;
+        $transactions = null;
+        $availableTrxTypes = [];
+
+        try {
+            $transactions = $this->remoteService->fetchAllTransactions(
+                $perPage,
+                max(1, (int) $request->query('page', 1)),
+                $search ?: null,
+                $filters
+            );
+            $availableTrxTypes = $this->remoteService->fetchDistinctTrxTypes();
+        } catch (Exception $e) {
+            Log::error('Unable to load the complete VieFund transaction ledger.', ['exception' => $e]);
+            $connectionError = 'Could not connect to the remote VieFund database: ' . $e->getMessage();
+        }
+
+        return view('viefund-transactions.index', compact(
+            'transactions',
+            'connectionError',
+            'perPage',
+            'search',
+            'filters',
+            'availableTrxTypes'
+        ));
+    }
+
     public function index(Request $request): View
     {
         $search = trim((string) $request->query('search', ''));

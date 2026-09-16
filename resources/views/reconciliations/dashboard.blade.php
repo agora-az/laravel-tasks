@@ -3,11 +3,20 @@
 @section('title', 'Dashboard')
 
 @section('content')
-    <h2 style="margin-bottom: 30px;">Dashboard</h2>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;margin-bottom:30px;">
+        <h2 style="margin:0;">Dashboard</h2>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
+            <span>
+                <strong>VieFund data:</strong>
+                {{ $statsRefreshedAt ? \Carbon\Carbon::parse($statsRefreshedAt)->setTimezone($dashboardTimezone)->format('M j, Y g:i A T') : 'Waiting for first update' }}
+            </span>
+            <span><strong>Next update:</strong> {{ $nextStatsRefreshAt->format('M j, Y g:i A T') }}</span>
+        </div>
+    </div>
 
-    @if($connectionError)
-        <div style="background:#fff5f5;border:1px solid #fc8181;border-radius:8px;padding:20px;color:#c53030;margin-bottom:30px;">
-            Unable to connect to remote VieFund database: {{ $connectionError }}
+    @if($statsLoading)
+        <div style="background:#ebf8ff;border:1px solid #90cdf4;border-radius:8px;padding:20px;color:#2c5282;margin-bottom:30px;">
+            Remote VieFund statistics are loading in the background. The rest of the dashboard is ready to use.
         </div>
     @elseif($stats)
 
@@ -114,6 +123,32 @@
     </script>
 
     @endif
+
+    <script>
+        (() => {
+            const displayedRefresh = @json($statsRefreshedAt);
+
+            const checkForDashboardUpdate = async () => {
+                try {
+                    const response = await fetch(@json(route('dashboard.stats-status')), {
+                        headers: { 'Accept': 'application/json' },
+                        cache: 'no-store',
+                    });
+
+                    if (!response.ok) return;
+
+                    const status = await response.json();
+                    if (status.available && status.refreshed_at && status.refreshed_at !== displayedRefresh) {
+                        window.location.reload();
+                    }
+                } catch (error) {
+                    // A temporary network error should not interrupt dashboard use.
+                }
+            };
+
+            window.setInterval(checkForDashboardUpdate, 30000);
+        })();
+    </script>
 
     {{-- Bank Entry Pipeline --}}
     <div style="background:white;padding:25px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:30px;">

@@ -27,25 +27,31 @@
             <div class="container">
                 <div class="top-nav-menu">
                     <a href="/dashboard">Dashboard</a>
-                    @if(!in_array('transaction_data', config('app.nav_hide')))
-                    <a href="/imports/transactions">Transaction Data</a>
-                    @endif
-                    <a href="/bank-entries">Bank Entries</a>
+                    <details class="top-nav-dropdown">
+                        <summary>VieFund Transactions <span aria-hidden="true">▾</span></summary>
+                        <div class="top-nav-submenu">
+                            <a href="{{ route('viefund-transactions.index') }}">All Transactions</a>
+                            <a href="{{ route('remote-viefund.index') }}">Customer Transactions</a>
+                        </div>
+                    </details>
                     @if(!in_array('eft_files', config('app.nav_hide')))
                     <a href="{{ route('eft-files.index') }}">EFT Files</a>
                     @endif
                     @if(!in_array('settlement_instructions', config('app.nav_hide')))
                     <a href="{{ route('settlement-instructions.index') }}">FSP Files</a>
                     @endif
-                    <a href="/reconciliations/daily-totals">Reconciliation</a>
-                    <a href="/remote-viefund">Customer Transactions</a>
-                    @if(!in_array('reconciliation', config('app.nav_hide')))
-                    <a href="/reconciliations/matches">Matches</a>
-                    @endif
+                    <a href="{{ route('bank-entries.index') }}">Bank Statements</a>
+                    <a href="{{ route('reconciliations.transactions') }}">Reconciliation</a>
                     @if(!in_array('reports', config('app.nav_hide')))
                     <a href="{{ route('reports.index') }}">Reports</a>
                     @endif
                     <a href="{{ route('docs.index') }}">Docs</a>
+                    @if(!in_array('transaction_data', config('app.nav_hide')))
+                    <a href="/imports/transactions">Transaction Data</a>
+                    @endif
+                    @if(!in_array('reconciliation', config('app.nav_hide')))
+                    <a href="/reconciliations/matches">Matches</a>
+                    @endif
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="top-nav-logout-btn">Logout</button>

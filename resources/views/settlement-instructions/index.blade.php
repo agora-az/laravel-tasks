@@ -14,8 +14,12 @@
         $settlementDateTo => 'Through ' . \Carbon\Carbon::parse($settlementDateTo)->format('F j, Y'),
         default => 'All settlement dates',
     };
+    $sourceViewUrl = static fn(string $sourceType): string => route(
+        'settlement-instructions.index',
+        array_merge(request()->except(['source_type', 'source_file', 'agra_page', 'ltm_page', 'agra_summary_page', 'ltm_summary_page']), ['source_type' => $sourceType])
+    );
 @endphp
-<div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:20px 0;flex-wrap:wrap;">
     <div>
         <h2 style="margin: 0;">FSP Files</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: AGRA and 7960 feeds</div>
@@ -24,25 +28,9 @@
             <button type="button" id="settlement-sync-status-dismiss" aria-label="Dismiss FSP sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
-    <div style="display:flex;align-items:center;gap:10px;">
-        <a href="{{ route('settlement-instructions.export', request()->query()) }}" class="sync-action-pill sync-action-pill-secondary" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none;">
-            <span>↓ Export Excel</span>
-        </a>
-        @if($showSyncButtons)
-            <form method="POST" action="{{ route('settlement-instructions.sync') }}" style="margin:0;">
-                @csrf
-                @foreach(request()->query() as $key => $value)
-                    @if(is_array($value))
-                        @foreach($value as $item)
-                            <input type="hidden" name="{{ $key }}[]" value="{{ $item }}">
-                        @endforeach
-                    @else
-                        <input type="hidden" name="{{ $key }}" value="{{ $value }}">
-                    @endif
-                @endforeach
-                <button type="submit" id="settlement-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync FSP Files</button>
-            </form>
-        @endif
+    <div id="settlement-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
+        <span><strong>Last sync:</strong> <span id="settlement-last-sync-time">checking…</span></span>
+        <span id="settlement-last-sync-detail">&nbsp;</span>
     </div>
 </div>
 
@@ -62,12 +50,14 @@
     const wrap = document.getElementById('settlement-sync-status-wrap');
     const text = document.getElementById('settlement-sync-status');
     const dismiss = document.getElementById('settlement-sync-status-dismiss');
-    const button = document.getElementById('settlement-sync-btn');
+    const lastSyncTime = document.getElementById('settlement-last-sync-time');
+    const lastSyncDetail = document.getElementById('settlement-last-sync-detail');
     if (!wrap || !text) return;
 
     const setVisible = (visible) => { wrap.style.display = visible ? 'inline-flex' : 'none'; };
     const setMessage = (message) => { text.textContent = message || ''; };
     const setBusy = (busy) => {
+        const button = document.getElementById('settlement-sync-btn');
         if (!button) return;
         button.disabled = busy;
         button.style.opacity = busy ? '0.65' : '';
@@ -85,6 +75,24 @@
         })
             .then((response) => response.json())
             .then((data) => {
+                if (lastSyncTime && lastSyncDetail) {
+                    if (data.completed_at) {
+                        const completed = new Date(data.completed_at);
+                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
+                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+                        });
+                        const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
+                        const trigger = data.trigger ? `Started via ${data.trigger}` : '';
+                        lastSyncTime.textContent = when;
+                        lastSyncDetail.textContent = trigger ? `${result} · ${trigger}` : result;
+                    } else if (data.inProgress && data.started_at) {
+                        lastSyncTime.textContent = 'currently running';
+                        lastSyncDetail.textContent = data.message || 'FSP sync in progress…';
+                    } else {
+                        lastSyncTime.textContent = 'no completed sync recorded';
+                        lastSyncDetail.innerHTML = '&nbsp;';
+                    }
+                }
                 if (data.inProgress) {
                     wrap.className = 'sync-chip sync-chip-progress';
                     setVisible(true);
@@ -94,11 +102,11 @@
                 }
 
                 setBusy(false);
-                if (data.success === true) {
+                if (data.success === true && data.initiatedByCurrentSession) {
                     wrap.className = 'sync-chip sync-chip-success';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync completed.');
-                } else if (data.success === false) {
+                } else if (data.success === false && data.initiatedByCurrentSession) {
                     wrap.className = 'sync-chip sync-chip-error';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync failed.');
@@ -240,99 +248,38 @@
     </form>
 </div>
 
-<script>
-(function () {
-    const initializeSettlementTabs = () => {
-        const tabs = Array.from(document.querySelectorAll('[data-settlement-tab]'));
-        const panes = Array.from(document.querySelectorAll('[data-settlement-source-pane]'));
-        const sourceInput = document.getElementById('settlement-source-type');
-        const sourceFileSelect = document.getElementById('settlement-source-file');
-        const sourceFilesBySource = @json($sourceFilesBySource);
-
-        if (!tabs.length || !panes.length || !sourceInput) {
-            return;
-        }
-
-        const applyTab = (sourceType, updateUrl) => {
-            const activeSource = sourceType === 'ltm' ? 'ltm' : 'fundserv_agra';
-
-            tabs.forEach((tab) => {
-                const isActive = tab.getAttribute('data-settlement-tab') === activeSource;
-                tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
-                tab.style.background = isActive ? '#2b6cb0' : '#e2e8f0';
-                tab.style.color = isActive ? '#fff' : '#2d3748';
-            });
-
-            panes.forEach((pane) => {
-                pane.style.display = pane.getAttribute('data-settlement-source-pane') === activeSource ? '' : 'none';
-            });
-
-            sourceInput.value = activeSource;
-
-            if (sourceFileSelect) {
-                const currentValue = sourceFileSelect.value;
-                const files = Array.isArray(sourceFilesBySource[activeSource]) ? sourceFilesBySource[activeSource] : [];
-
-                sourceFileSelect.innerHTML = '';
-                const allOption = document.createElement('option');
-                allOption.value = '';
-                allOption.textContent = 'All files';
-                sourceFileSelect.appendChild(allOption);
-
-                files.forEach((fileName) => {
-                    const option = document.createElement('option');
-                    option.value = fileName;
-                    option.textContent = fileName;
-                    sourceFileSelect.appendChild(option);
-                });
-
-                if (currentValue && files.includes(currentValue)) {
-                    sourceFileSelect.value = currentValue;
-                } else {
-                    sourceFileSelect.value = '';
-                }
-            }
-
-            if (updateUrl && window.history && window.history.replaceState) {
-                const url = new URL(window.location.href);
-                url.searchParams.set('source_type', activeSource);
-                window.history.replaceState({}, '', url.toString());
-            }
-        };
-
-        tabs.forEach((tab) => {
-            tab.addEventListener('click', () => {
-                const sourceType = tab.getAttribute('data-settlement-tab') || 'fundserv_agra';
-                applyTab(sourceType, true);
-            });
-        });
-
-        applyTab('{{ $activeSourceTab }}', false);
-    };
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeSettlementTabs, { once: true });
-    } else {
-        initializeSettlementTabs();
-    }
-})();
-</script>
-
 <div class="card" style="padding-top: 0;">
     <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #e2e8f0; padding: 12px 14px; background: #f8fafc; flex-wrap: wrap;">
         <div>
             <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Settlement Date</div>
             <div style="font-size:20px;font-weight:800;color:#1a365d;line-height:1.15;margin-top:4px;">{{ $settlementDateLabel }}</div>
         </div>
-        <div style="display: flex; gap: 8px;">
-            <button type="button" data-settlement-tab="fundserv_agra" aria-selected="{{ $activeSourceTab === 'fundserv_agra' ? 'true' : 'false' }}"
-               style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeSourceTab === 'fundserv_agra' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-                AGRA
-            </button>
-            <button type="button" data-settlement-tab="ltm" aria-selected="{{ $activeSourceTab === 'ltm' ? 'true' : 'false' }}"
-               style="border: 0; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.03em; {{ $activeSourceTab === 'ltm' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
-                7960
-            </button>
+        <div style="display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-left:auto;">
+            <label style="display:flex;flex-direction:column;gap:4px;color:#4a5568;font-size:11px;font-weight:700;">
+                <span>View</span>
+                <select aria-label="FSP data source" onchange="window.location.href=this.value" style="min-width:205px;padding:7px 30px 7px 10px;border:1px solid #cbd5e0;border-radius:5px;background:#fff;color:#2d3748;font-size:12px;font-weight:600;">
+                    <option value="{{ $sourceViewUrl('fundserv_agra') }}" @selected($activeSourceTab === 'fundserv_agra')>AGRA Files</option>
+                    <option value="{{ $sourceViewUrl('ltm') }}" @selected($activeSourceTab === 'ltm')>7960 Files</option>
+                </select>
+            </label>
+            <a href="{{ route('settlement-instructions.export', request()->query()) }}" class="sync-action-pill sync-action-pill-secondary" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;">
+                <span>↓ Export Excel</span>
+            </a>
+            @if($showSyncButtons)
+                <form method="POST" action="{{ route('settlement-instructions.sync') }}" style="margin:0;">
+                    @csrf
+                    @foreach(request()->query() as $key => $value)
+                        @if(is_array($value))
+                            @foreach($value as $item)
+                                <input type="hidden" name="{{ $key }}[]" value="{{ $item }}">
+                            @endforeach
+                        @else
+                            <input type="hidden" name="{{ $key }}" value="{{ $value }}">
+                        @endif
+                    @endforeach
+                    <button type="submit" id="settlement-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync FSP Files</button>
+                </form>
+            @endif
         </div>
     </div>
 

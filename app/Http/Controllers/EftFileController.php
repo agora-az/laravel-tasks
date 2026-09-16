@@ -3,15 +3,22 @@
 namespace App\Http\Controllers;
 
 use App\Exports\EftFilesWorkbookExport;
+use App\Models\BankEftFile;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class EftFileController extends Controller
 {
+    private const LOCK_TTL_SECONDS = 14400;
+
     public function __construct(
         private readonly SqlServerEftRemoteRepository $repository
     ) {}
@@ -21,6 +28,7 @@ class EftFileController extends Controller
         $filters = $this->filters($request);
         $fileSort = $this->sort($request, 'file_sort', [
             'created_at', 'effective_date', 'type', 'status', 'total_amount', 'item_count', 'sequence',
+            'bank_count_variance', 'bank_amount_variance',
         ], 'created_at');
         $itemSort = $this->sort($request, 'item_sort', [
             'created_at', 'effective_date', 'type', 'status', 'amount', 'holder', 'file',
@@ -42,7 +50,12 @@ class EftFileController extends Controller
             $drilldownDate = '';
         }
 
-        $files = $this->repository->paginateFiles($filters, $fileSort, $fileSortDir);
+        if (in_array($fileSort, ['bank_count_variance', 'bank_amount_variance'], true)) {
+            $files = $this->bankSortedFiles($filters, $fileSort, $fileSortDir, $request);
+        } else {
+            $files = $this->repository->paginateFiles($filters, $fileSort, $fileSortDir);
+            $this->attachBankEftReconciliation($files->getCollection());
+        }
         $items = match ($activeTab) {
             'missing' => $this->repository->missingCandidates($filters, $drilldownDate ?: null),
             'excluded' => $this->repository->excludedCandidates($filters, $drilldownDate ?: null),
@@ -84,16 +97,22 @@ class EftFileController extends Controller
             'Type ID',
             'Type',
             'Status ID',
-            'Trust Bank Account ID',
+            'Trust Account',
             'Sequence',
             'Total Amount',
             'Item Count',
+            'Bank Record Count',
+            'Bank Total Amount',
+            'Count Variance',
+            'Bank Amount Variance',
             'Option ID',
             'File Name',
             'Notes',
         ]];
 
-        foreach ($this->repository->exportFiles($filters) as $file) {
+        $exportFiles = $this->repository->exportFiles($filters);
+        $this->attachBankEftReconciliation($exportFiles);
+        foreach ($exportFiles as $file) {
             $fileRows[] = [
                 (int) $file->id,
                 $this->dateTime($file->created_at),
@@ -101,10 +120,14 @@ class EftFileController extends Controller
                 $file->type_id !== null ? (int) $file->type_id : null,
                 (string) ($file->type_name ?? ''),
                 $file->status_id !== null ? (int) $file->status_id : null,
-                $file->trust_bank_account_id !== null ? (int) $file->trust_bank_account_id : null,
+                match ((int) $file->trust_bank_account_id) { 1 => 'AGRP', 2 => 'AGRA', default => $file->trust_bank_account_id },
                 $file->sequence_number !== null ? (int) $file->sequence_number : null,
                 $file->total_amount !== null ? (float) $file->total_amount : null,
                 (int) ($file->item_count ?? 0),
+                $file->bank_record_count,
+                $file->bank_total_amount,
+                $file->bank_count_variance,
+                $file->bank_amount_variance,
                 $file->option_id !== null ? (int) $file->option_id : null,
                 (string) ($file->file_name ?? ''),
                 (string) ($file->notes ?? ''),
@@ -171,6 +194,167 @@ class EftFileController extends Controller
             'eft-files-' . now()->format('Ymd-His') . '.xlsx',
             ExcelWriter::XLSX
         );
+    }
+
+    public function sync(Request $request): RedirectResponse
+    {
+        $lockFile = storage_path('app/bank-eft-sync.lock');
+        $statusFile = storage_path('app/bank-eft-sync-status.json');
+        if (file_exists($lockFile) && time() - filemtime($lockFile) < self::LOCK_TTL_SECONDS) {
+            return redirect()->route('eft-files.index', $request->except('_token'))
+                ->with('sync_error', 'A bank EFT file sync is already in progress.');
+        }
+
+        $runId = (string) \Illuminate\Support\Str::uuid();
+        $startedAt = now()->toIso8601String();
+        $request->session()->put('bank_eft_sync_run_id', $runId);
+        file_put_contents($lockFile, date('c'));
+        file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
+            'trigger' => 'Sync button',
+            'started_at' => $startedAt,
+            'inProgress' => true,
+            'success' => null,
+            'message' => 'Bank EFT sync queued...',
+            'updated_at' => $startedAt,
+        ], JSON_PRETTY_PRINT));
+        $command = sprintf(
+            '%s %s bank:sync-eft-files --lock-file=%s --status-file=%s --run-id=%s >> %s 2>&1 &',
+            escapeshellarg(env('PHP_PATH', '/usr/local/bin/php')),
+            escapeshellarg(base_path('artisan')),
+            escapeshellarg($lockFile),
+            escapeshellarg($statusFile),
+            escapeshellarg($runId),
+            escapeshellarg(storage_path('logs/bank-eft-sync.log'))
+        );
+        Log::info('Dispatching bank:sync-eft-files in background: ' . $command);
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (is_resource($process)) {
+            foreach ($pipes as $pipe) {
+                fclose($pipe);
+            }
+            proc_close($process);
+        }
+
+        return redirect()->route('eft-files.index', $request->except('_token'))
+            ->with('sync_success', 'Bank EFT sync started. Unprocessed files from /EFT_Files will be downloaded and imported.');
+    }
+
+    public function syncStatus(Request $request): JsonResponse
+    {
+        $lockFile = storage_path('app/bank-eft-sync.lock');
+        $statusFile = storage_path('app/bank-eft-sync-status.json');
+        $inProgress = file_exists($lockFile) && time() - filemtime($lockFile) < self::LOCK_TTL_SECONDS;
+        $payload = ['inProgress' => $inProgress, 'success' => null, 'message' => $inProgress ? 'Bank EFT sync in progress...' : 'Idle'];
+        if (file_exists($statusFile)) {
+            $stored = json_decode(file_get_contents($statusFile) ?: '{}', true);
+            if (is_array($stored)) {
+                $payload = array_merge($payload, $stored, ['inProgress' => $inProgress]);
+            }
+        }
+        $payload['initiatedByCurrentSession'] = isset($payload['run_id'])
+            && hash_equals((string) $payload['run_id'], (string) $request->session()->get('bank_eft_sync_run_id', ''));
+
+        return response()->json($payload);
+    }
+
+    public function bankRecords(Request $request, int $sequence, string $date)
+    {
+        abort_unless($this->validDate($date), 404);
+        $mode = $request->query('mode') === 'variance' ? 'variance' : 'all';
+        $bankFiles = BankEftFile::query()
+            ->where('sequence_number', $sequence)
+            ->whereDate('file_date', $date)
+            ->with(['transactions' => fn($query) => $query->orderBy('line_number')->orderBy('segment_number')])
+            ->orderBy('source_file')
+            ->get();
+        abort_if($bankFiles->isEmpty(), 404, 'No imported bank EFT file was found for this sequence and date.');
+
+        $eftItems = $this->repository->itemsForSequenceDate($sequence, $date);
+        $eftMatchCounts = $eftItems->countBy(fn($item) => $this->bankMatchKey($item->holder_id, $item->amount));
+        $bankRecords = $bankFiles->flatMap->transactions->map(function ($record) use ($eftMatchCounts) {
+            $key = $this->bankMatchKey($record->holder_id, $record->amount);
+            $record->matches_eft = (int) $eftMatchCounts->get($key, 0) > 0;
+            if ($record->matches_eft) {
+                $eftMatchCounts->put($key, (int) $eftMatchCounts->get($key) - 1);
+            }
+
+            return $record;
+        })->values();
+        $unmatchedBankCount = $bankRecords->where('matches_eft', false)->count();
+        $unmatchedEftCount = $eftMatchCounts->sum();
+        $displayRecords = $mode === 'variance'
+            ? $bankRecords->where('matches_eft', false)->values()
+            : $bankRecords;
+        $bankTotal = $bankRecords->sum(fn($record) => (float) $record->amount);
+        $eftTotal = $eftItems->sum(fn($item) => (float) $item->amount);
+
+        return view('eft-files.bank-records', compact(
+            'sequence',
+            'date',
+            'mode',
+            'bankFiles',
+            'displayRecords',
+            'bankTotal',
+            'eftTotal',
+            'eftItems',
+            'unmatchedBankCount',
+            'unmatchedEftCount'
+        ));
+    }
+
+    private function attachBankEftReconciliation($files): void
+    {
+        $sequences = $files->pluck('sequence_number')->filter()->unique()->values();
+        if ($sequences->isEmpty()) {
+            return;
+        }
+        $bankFiles = BankEftFile::query()
+            ->whereIn('sequence_number', $sequences)
+            ->selectRaw('sequence_number, file_date, sum(parsed_transaction_count) bank_record_count, sum(parsed_total_amount) bank_total_amount')
+            ->groupBy('sequence_number', 'file_date')
+            ->get()
+            ->keyBy(fn(BankEftFile $file) => $file->sequence_number . '|' . $file->file_date->toDateString());
+
+        foreach ($files as $file) {
+            $effectiveDate = $this->date($file->effective_date);
+            $bank = $bankFiles->get((int) $file->sequence_number . '|' . $effectiveDate);
+            $file->bank_record_count = $bank ? (int) $bank->bank_record_count : null;
+            $file->bank_total_amount = $bank ? (float) $bank->bank_total_amount : null;
+            $file->bank_count_variance = $bank ? (int) $file->item_count - (int) $bank->bank_record_count : null;
+            $file->bank_amount_variance = $bank ? round((float) $file->item_amount - (float) $bank->bank_total_amount, 2) : null;
+        }
+    }
+
+    private function bankSortedFiles(
+        array $filters,
+        string $sort,
+        string $direction,
+        Request $request
+    ): LengthAwarePaginator {
+        $allFiles = $this->repository->exportFiles($filters);
+        $this->attachBankEftReconciliation($allFiles);
+
+        $sorted = $allFiles
+            ->filter(fn($file) => $file->bank_record_count !== null)
+            ->sortBy($sort, SORT_REGULAR, $direction === 'desc')
+            ->values()
+            ->concat($allFiles->filter(fn($file) => $file->bank_record_count === null)->values());
+        $perPage = 50;
+        $page = LengthAwarePaginator::resolveCurrentPage('file_page');
+
+        return (new LengthAwarePaginator(
+            $sorted->forPage($page, $perPage)->values(),
+            $sorted->count(),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'pageName' => 'file_page']
+        ))->appends($request->query());
+    }
+
+    private function bankMatchKey(mixed $holderId, mixed $amount): string
+    {
+        return mb_strtoupper(trim((string) $holderId), 'UTF-8') . '|' . (int) round((float) $amount * 100);
     }
 
     private function filters(Request $request): array

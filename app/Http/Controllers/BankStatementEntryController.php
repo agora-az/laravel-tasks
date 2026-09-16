@@ -141,6 +141,9 @@ class BankStatementEntryController extends Controller
             ->orderByDesc('id')
             ->paginate(50, ['*'], 'summary_page')
             ->appends(array_merge($request->except('summary_page'), ['view' => 'summaries']));
+        $selectedStatement = $request->filled('statement_summary_id')
+            ? BankStatementSummary::query()->find((int) $request->input('statement_summary_id'))
+            : null;
 
         // Filter options
         $channels = DB::table('bank_statement_entry_analyses')
@@ -172,6 +175,7 @@ class BankStatementEntryController extends Controller
             'totals',
             'statementSummaryTotals',
             'statementSummaries',
+            'selectedStatement',
             'channels',
             'currencies',
             'memoTypes',
@@ -351,9 +355,14 @@ class BankStatementEntryController extends Controller
                 ->with('sync_error', 'A bank entries sync is already in progress.');
         }
 
+        $runId = (string) \Illuminate\Support\Str::uuid();
+        $startedAt = now()->toIso8601String();
+        $request->session()->put('bank_entries_sync_run_id', $runId);
         // Create lock immediately so UI reflects in-progress state without delay.
         file_put_contents($lockFile, date('c'));
         file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
+            'trigger' => 'Sync button',
             'inProgress' => true,
             'success' => null,
             'dry_run' => $dryRun,
@@ -361,19 +370,21 @@ class BankStatementEntryController extends Controller
             'processed_files' => 0,
             'total_files' => null,
             'progress_pct' => 0,
-            'started_at' => now()->toIso8601String(),
-            'updated_at' => now()->toIso8601String(),
+            'started_at' => $startedAt,
+            'updated_at' => $startedAt,
         ], JSON_PRETTY_PRINT));
 
         $extraArgs = $dryRun ? ' --dry-run' : '';
 
         $command = sprintf(
-            '%s %s bank:sync-entries --parser=%s --lock-file=%s --status-file=%s%s >> %s 2>&1 &',
+            '%s %s bank:sync-entries --parser=%s --lock-file=%s --status-file=%s --run-id=%s --trigger=%s%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
             escapeshellarg(self::PARSER_VERSION),
             escapeshellarg($lockFile),
             escapeshellarg($statusFile),
+            escapeshellarg($runId),
+            escapeshellarg('Sync button'),
             $extraArgs,
             escapeshellarg($logPath)
         );
@@ -400,7 +411,7 @@ class BankStatementEntryController extends Controller
                 : 'Bank entries sync started. Files will be downloaded from SFTP and processed in the background.');
     }
 
-    public function syncStatus(): JsonResponse
+    public function syncStatus(Request $request): JsonResponse
     {
         $lockFile = storage_path('app/bank-entries-sync.lock');
         $statusFile = storage_path('app/bank-entries-sync-status.json');
@@ -439,6 +450,8 @@ class BankStatementEntryController extends Controller
             $payload['message'] = 'Bank sync stopped before reporting completion. Check the sync log and retry.';
             $payload['completed_at'] = $payload['completed_at'] ?? now()->toIso8601String();
         }
+        $payload['initiatedByCurrentSession'] = isset($payload['run_id'])
+            && hash_equals((string) $payload['run_id'], (string) $request->session()->get('bank_entries_sync_run_id', ''));
 
         return response()->json($payload);
     }
@@ -497,6 +510,9 @@ class BankStatementEntryController extends Controller
 
     private function applyFilters(Builder $query, Request $request): void
     {
+        if ($request->filled('statement_summary_id') && ctype_digit((string) $request->input('statement_summary_id'))) {
+            $query->where('bank_statement_entries.bank_statement_summary_id', (int) $request->input('statement_summary_id'));
+        }
         if ($request->filled('date_from')) {
             $query->where('bank_statement_entries.value_date', '>=', $request->date_from);
         }
@@ -563,7 +579,7 @@ class BankStatementEntryController extends Controller
      */
     private function resolveSort(Request $request): array
     {
-        $sortField = in_array($request->sort, ['value_date', 'account_number', 'amount', 'inferred_channel', 'memo_type', 'counterparty'], true)
+        $sortField = in_array($request->sort, ['value_date', 'account_number', 'amount', 'inferred_channel', 'memo_type', 'counterparty', 'settlement_number'], true)
             ? $request->sort
             : 'value_date';
 
@@ -581,10 +597,17 @@ class BankStatementEntryController extends Controller
             'inferred_channel' => 'a.inferred_channel',
             'memo_type' => 'a.memo_type',
             'counterparty' => 'a.counterparty',
+            'settlement_number' => 'a.settlement_number',
         ];
 
-        $query->orderBy($columnMap[$sortField], $sortDir)
-            ->orderBy('bank_statement_entries.id');
+        if ($sortField === 'settlement_number') {
+            $query->orderByRaw('cast(nullif(a.settlement_number, ?) as unsigned) ' . $sortDir, [''])
+                ->orderBy('a.settlement_number', $sortDir);
+        } else {
+            $query->orderBy($columnMap[$sortField], $sortDir);
+        }
+
+        $query->orderBy('bank_statement_entries.id');
     }
 
     /**

@@ -7,12 +7,15 @@ use App\Models\Reconciliation;
 use App\Models\BankStatementEntry;
 use App\Models\VieFundTransaction;
 use App\Models\MatchingSession;
+use App\Jobs\RefreshVieFundDashboardStats;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use App\Services\Reconciliation\VieFundFundservMatcher;
 use App\Services\Reconciliation\FeeTransactionMatcher;
 use App\Services\VieFund\VieFundRemoteService;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Carbon\Carbon;
 
 class ReconciliationController extends Controller
 {
@@ -689,8 +692,9 @@ class ReconciliationController extends Controller
      */
     public function dashboard()
     {
-        $stats = null;
-        $connectionError = null;
+        $stats = Cache::get('viefund_dashboard_stats');
+        $statsRefreshedAt = Cache::get('viefund_dashboard_stats_refreshed_at');
+        $statsLoading = false;
         $bankStats = [
             'entry_count' => 0,
             'source_file_count' => 0,
@@ -709,15 +713,39 @@ class ReconciliationController extends Controller
             Log::warning('Failed to load bank dashboard metrics: ' . $e->getMessage());
         }
 
-        try {
-            $stats = \Illuminate\Support\Facades\Cache::remember('viefund_dashboard_stats', 86400, function () {
-                return app(VieFundRemoteService::class)->getDashboardStats();
-            });
-        } catch (\Exception $e) {
-            $connectionError = $e->getMessage();
+        if ($stats === null) {
+            // Never make page rendering (including the post-login redirect) wait on
+            // the remote VieFund database. The short lock also prevents a burst of
+            // dashboard requests from flooding the queue while the cache is cold.
+            if (Cache::add('viefund_dashboard_stats_refresh_queued', true, now()->addMinutes(5))) {
+                RefreshVieFundDashboardStats::dispatch()->onConnection('database');
+            }
+
+            $statsLoading = true;
         }
 
-        return view('reconciliations.dashboard', compact('stats', 'connectionError', 'bankStats'));
+        $dashboardTimezone = 'America/Toronto';
+        $nextStatsRefreshAt = Carbon::now($dashboardTimezone)->startOfHour()->addHour();
+
+        return view('reconciliations.dashboard', compact(
+            'stats',
+            'statsLoading',
+            'statsRefreshedAt',
+            'nextStatsRefreshAt',
+            'dashboardTimezone',
+            'bankStats'
+        ));
+    }
+
+    /**
+     * Return cache metadata for the dashboard's lightweight background polling.
+     */
+    public function dashboardStatsStatus()
+    {
+        return response()->json([
+            'available' => Cache::has('viefund_dashboard_stats'),
+            'refreshed_at' => Cache::get('viefund_dashboard_stats_refreshed_at'),
+        ]);
     }
 
     /**

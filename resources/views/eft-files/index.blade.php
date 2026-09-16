@@ -28,6 +28,10 @@
         1 => 'Client payment',
         2 => 'Supplier payment',
     ];
+    $trustAccountLabels = [
+        1 => ['code' => 'AGRP', 'description' => 'Agora portfolio'],
+        2 => ['code' => 'AGRA', 'description' => 'Agora multiple dealer services'],
+    ];
     $statusColors = [
         0 => ['bg' => '#edf2f7', 'text' => '#4a5568'],
         1 => ['bg' => '#c6f6d5', 'text' => '#22543d'],
@@ -69,11 +73,94 @@
     <div>
         <h2 style="margin:0;">EFT Files</h2>
         <div style="color:#718096;font-size:13px;margin-top:4px;">Live, read-only VieFund data from UB_EFTFile and UB_EFTItem</div>
+        <div id="bank-eft-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none;margin-top:8px;width:max-content;align-items:center;gap:8px;">
+            <span id="bank-eft-sync-status"></span>
+            <button type="button" id="bank-eft-sync-status-dismiss" aria-label="Dismiss bank EFT sync status" style="border:none;background:transparent;color:inherit;font-size:14px;font-weight:700;cursor:pointer;line-height:1;padding:0;">×</button>
+        </div>
     </div>
-    <a href="{{ route('eft-files.export', request()->query()) }}" class="sync-action-pill sync-action-pill-secondary" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;">
-        <span>↓ Export Excel</span>
-    </a>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div id="bank-eft-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
+            <span><strong>Last sync:</strong> <span id="bank-eft-last-sync-time">checking…</span></span>
+            <span id="bank-eft-last-sync-detail">&nbsp;</span>
+        </div>
+    </div>
 </div>
+
+@if(session('sync_success'))
+    <div style="margin-bottom:16px;padding:10px 14px;border-radius:6px;background:#c6f6d5;color:#22543d;border:1px solid #9ae6b4;font-size:13px;">{{ session('sync_success') }}</div>
+@endif
+@if(session('sync_error'))
+    <div style="margin-bottom:16px;padding:10px 14px;border-radius:6px;background:#fff5f5;color:#742a2a;border:1px solid #feb2b2;font-size:13px;">{{ session('sync_error') }}</div>
+@endif
+
+<script>
+(function () {
+    const wrap = document.getElementById('bank-eft-sync-status-wrap');
+    const text = document.getElementById('bank-eft-sync-status');
+    const dismiss = document.getElementById('bank-eft-sync-status-dismiss');
+    const lastSyncTime = document.getElementById('bank-eft-last-sync-time');
+    const lastSyncDetail = document.getElementById('bank-eft-last-sync-detail');
+    if (!wrap || !text) return;
+
+    const setVisible = (visible) => { wrap.style.display = visible ? 'inline-flex' : 'none'; };
+    const setBusy = (busy) => {
+        const button = document.getElementById('bank-eft-sync-btn');
+        if (!button) return;
+        button.disabled = busy;
+        button.style.opacity = busy ? '0.65' : '';
+        button.style.cursor = busy ? 'not-allowed' : '';
+    };
+    if (dismiss) dismiss.addEventListener('click', () => setVisible(false));
+
+    const poll = () => {
+        fetch('{{ route('eft-files.sync-status') }}', {
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin',
+        })
+            .then((response) => response.json())
+            .then((data) => {
+                setBusy(Boolean(data.inProgress));
+                if (lastSyncTime && lastSyncDetail) {
+                    if (data.completed_at) {
+                        const completed = new Date(data.completed_at);
+                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
+                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+                        });
+                        const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
+                        const trigger = data.trigger ? `Started via ${data.trigger}` : '';
+                        lastSyncTime.textContent = when;
+                        lastSyncDetail.textContent = trigger ? `${result} · ${trigger}` : result;
+                    } else if (data.inProgress && data.started_at) {
+                        lastSyncTime.textContent = 'currently running';
+                        lastSyncDetail.textContent = data.message || 'Bank EFT sync in progress…';
+                    } else {
+                        lastSyncTime.textContent = 'no completed sync recorded';
+                        lastSyncDetail.innerHTML = '&nbsp;';
+                    }
+                }
+                if (data.inProgress) {
+                    wrap.className = 'sync-chip sync-chip-progress';
+                    text.textContent = data.message || 'Bank EFT sync in progress...';
+                    setVisible(true);
+                } else if (data.success === true && data.initiatedByCurrentSession) {
+                    wrap.className = 'sync-chip sync-chip-success';
+                    text.textContent = data.message || 'Bank EFT sync completed.';
+                    setVisible(true);
+                } else if (data.success === false && data.initiatedByCurrentSession) {
+                    wrap.className = 'sync-chip sync-chip-error';
+                    text.textContent = data.message || 'Bank EFT sync failed.';
+                    setVisible(true);
+                } else {
+                    setVisible(false);
+                }
+            })
+            .catch(() => {});
+    };
+
+    poll();
+    setInterval(poll, 5000);
+})();
+</script>
 
 <div style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:24px;">
     <div class="card" style="background:linear-gradient(135deg,#345262 0%,#5a7585 100%);color:#fff;text-align:center;">
@@ -204,7 +291,7 @@
 </div>
 
 <div class="card" style="padding-top:0;">
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:18px;border-bottom:1px solid #e2e8f0;padding:12px 14px;background:#f8fafc;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;border-bottom:1px solid #e2e8f0;padding:12px 14px;background:#f8fafc;">
         <div>
             @if($drilldownDateLabel)
                 <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Settlement Date</div>
@@ -219,14 +306,27 @@
                 <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">Net Total</div>
                 <div style="font-size:20px;font-weight:800;color:{{ $candidatesNetTotal < 0 ? '#c53030' : '#2f855a' }};line-height:1.15;margin-top:4px;white-space:nowrap;">{{ $formatAmount($candidatesNetTotal) }}</div>
             </div>
-        @else
-            <div></div>
         @endif
-        <div style="display:flex;gap:8px;justify-self:end;">
-            <a href="{{ $tabUrl('files') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'files' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">File Summaries</a>
-            <a href="{{ $tabUrl('items') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'items' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">EFT Items</a>
-            <a href="{{ $tabUrl('missing') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'missing' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">Other Settlement Dates</a>
-            <a href="{{ $tabUrl('excluded') }}" style="text-decoration:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:700;{{ $activeTab === 'excluded' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">Txns from Other Files</a>
+        <div style="display:flex;align-items:flex-end;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-left:auto;">
+            <label style="display:flex;flex-direction:column;gap:4px;color:#4a5568;font-size:11px;font-weight:700;">
+                <span>View</span>
+                <select aria-label="Table data view" onchange="window.location.href=this.value" style="min-width:205px;padding:7px 30px 7px 10px;border:1px solid #cbd5e0;border-radius:5px;background:#fff;color:#2d3748;font-size:12px;font-weight:600;">
+                    <option value="{{ $tabUrl('files') }}" @selected($activeTab === 'files')>File Summaries</option>
+                    <option value="{{ $tabUrl('items') }}" @selected($activeTab === 'items')>EFT Items</option>
+                    <option value="{{ $tabUrl('missing') }}" @selected($activeTab === 'missing')>Other Settlement Dates</option>
+                    <option value="{{ $tabUrl('excluded') }}" @selected($activeTab === 'excluded')>Transactions from Other Files</option>
+                </select>
+            </label>
+            <a href="{{ route('eft-files.export', request()->query()) }}" class="sync-action-pill sync-action-pill-secondary" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none;">
+                <span>↓ Export Excel</span>
+            </a>
+            <form method="POST" action="{{ route('eft-files.sync') }}" style="margin:0;">
+                @csrf
+                @foreach(request()->except('_token') as $key => $value)
+                    @if(is_scalar($value))<input type="hidden" name="{{ $key }}" value="{{ $value }}">@endif
+                @endforeach
+                <button type="submit" id="bank-eft-sync-btn" class="sync-action-pill sync-action-pill-primary">↻ Sync Bank EFT Files</button>
+            </form>
         </div>
     </div>
 
@@ -234,7 +334,7 @@
         @if($files->count())
             <div style="padding:12px 14px;color:#4a5568;font-size:13px;">Showing {{ number_format($files->count()) }} of {{ number_format($files->total()) }} matching files.</div>
             <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;min-width:1280px;" class="mono-grid">
+                <table style="width:100%;border-collapse:collapse;min-width:1660px;" class="mono-grid">
                     <thead><tr style="background:#e2e8f0;border-bottom:2px solid #cbd5e0;white-space:nowrap;">
                         <th style="text-align:left;"><a href="{{ $fileSortUrl('created_at') }}" style="color:inherit;text-decoration:none;">Created{{ $fileSortArrow('created_at') }}</a></th>
                         <th style="text-align:left;"><a href="{{ $fileSortUrl('effective_date') }}" style="color:inherit;text-decoration:none;">Effective{{ $fileSortArrow('effective_date') }}</a></th>
@@ -243,7 +343,11 @@
                         <th style="text-align:right;"><a href="{{ $fileSortUrl('item_count') }}" style="color:inherit;text-decoration:none;">Items{{ $fileSortArrow('item_count') }}</a></th>
                         <th style="text-align:right;"><a href="{{ $fileSortUrl('total_amount') }}" style="color:inherit;text-decoration:none;">File Total{{ $fileSortArrow('total_amount') }}</a></th>
                         <th style="text-align:right;">Item Total</th>
-                        <th style="text-align:right;">Variance</th>
+                        <th style="text-align:right;">File / Item Variance</th>
+                        <th style="text-align:right;">Bank Records</th>
+                        <th style="text-align:right;">Bank Total</th>
+                        <th style="text-align:right;"><a href="{{ $fileSortUrl('bank_count_variance') }}" style="color:inherit;text-decoration:none;">Count Variance{{ $fileSortArrow('bank_count_variance') }}</a></th>
+                        <th style="text-align:right;"><a href="{{ $fileSortUrl('bank_amount_variance') }}" style="color:inherit;text-decoration:none;">Bank Variance{{ $fileSortArrow('bank_amount_variance') }}</a></th>
                         <th style="text-align:left;">Trust Account</th>
                     </tr></thead>
                     <tbody>
@@ -252,6 +356,16 @@
                             $colors = $typeColors[(int) $file->type_id] ?? ['bg' => '#edf2f7', 'text' => '#2d3748'];
                             $amountColor = (int) $file->type_id === 10 ? '#2f855a' : '#c53030';
                             $fileVariance = (float) $file->total_amount - (float) ($file->item_amount ?? 0);
+                            $bankBalanced = $file->bank_record_count !== null
+                                && (int) $file->bank_count_variance === 0
+                                && abs((float) $file->bank_amount_variance) < .005;
+                            $trustAccount = $trustAccountLabels[(int) $file->trust_bank_account_id] ?? null;
+                            $bankRecordsUrl = $file->bank_record_count !== null
+                                ? route('eft-files.bank-records', [
+                                    'sequence' => $file->sequence_number,
+                                    'date' => $formatDate($file->effective_date),
+                                ])
+                                : null;
                         @endphp
                         <tr style="border-bottom:1px solid #d9e2ec;background:{{ $loop->even ? 'rgba(56,161,105,0.07)' : 'transparent' }};">
                             <td style="white-space:nowrap;line-height:1.2;"><span style="display:block;">{{ $formatDate($file->created_at) }}</span><span style="display:block;opacity:.85;">{{ $formatTime($file->created_at) }}</span></td>
@@ -264,7 +378,15 @@
                             <td style="text-align:right;white-space:nowrap;font-weight:700;color:{{ $amountColor }};">{{ $formatAmount($file->total_amount) }}</td>
                             <td style="text-align:right;white-space:nowrap;font-weight:700;color:{{ $amountColor }};">{{ $formatAmount($file->item_amount) }}</td>
                             <td style="text-align:right;white-space:nowrap;color:{{ abs($fileVariance) < .005 ? '#4a5568' : '#c53030' }};font-weight:{{ abs($fileVariance) < .005 ? '400' : '700' }};">{{ $formatAmount($fileVariance) }}</td>
-                            <td style="white-space:nowrap;">{{ $file->trust_bank_account_id ?? '—' }}</td>
+                            <td style="text-align:right;white-space:nowrap;">{{ $file->bank_record_count === null ? '—' : number_format($file->bank_record_count) }}</td>
+                            <td style="text-align:right;white-space:nowrap;font-weight:{{ $bankBalanced ? '400' : '700' }};color:{{ $file->bank_record_count === null ? '#718096' : ($bankBalanced ? '#2f855a' : '#c53030') }};">
+                                @if($bankRecordsUrl)<a href="{{ $bankRecordsUrl }}" style="color:inherit;text-decoration:underline;">{{ $formatAmount($file->bank_total_amount) }}</a>@else — @endif
+                            </td>
+                            <td style="text-align:right;white-space:nowrap;font-weight:{{ $bankBalanced ? '400' : '700' }};color:{{ $file->bank_record_count === null ? '#718096' : ($bankBalanced ? '#2f855a' : '#c53030') }};">
+                                @if($bankRecordsUrl)<a href="{{ $bankRecordsUrl }}?mode=variance" style="color:inherit;text-decoration:underline;">{{ number_format($file->bank_count_variance) }}</a>@else — @endif
+                            </td>
+                            <td style="text-align:right;white-space:nowrap;font-weight:{{ $bankBalanced ? '400' : '700' }};color:{{ $file->bank_record_count === null ? '#718096' : ($bankBalanced ? '#2f855a' : '#c53030') }};">{{ $formatAmount($file->bank_amount_variance) }}</td>
+                            <td style="white-space:nowrap;" title="{{ $trustAccount['description'] ?? '' }}">{{ $trustAccount['code'] ?? ($file->trust_bank_account_id ?? '—') }}</td>
                         </tr>
                     @endforeach
                     </tbody>

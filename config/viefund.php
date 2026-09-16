@@ -180,4 +180,8 @@ return [
         ))),
     ],
 
+    // User-entered simulated report cutoffs are VieFund business timestamps.
+    // America/Toronto applies EST in winter and EDT in summer.
+    'simulated_report_timezone' => env('VIEFUND_SIMULATED_REPORT_TIMEZONE', 'America/Toronto'),
+
 ];

@@ -109,6 +109,61 @@ header .header-nav .top-nav-menu a:hover {
     color: #ffffff;
 }
 
+header .header-nav .top-nav-dropdown {
+    position: relative;
+}
+
+header .header-nav .top-nav-dropdown summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 7px 12px;
+    border-radius: 8px;
+    color: #f7fafc;
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+header .header-nav .top-nav-dropdown summary::-webkit-details-marker {
+    display: none;
+}
+
+header .header-nav .top-nav-dropdown summary:hover,
+header .header-nav .top-nav-dropdown summary:focus-visible,
+header .header-nav .top-nav-dropdown[open] summary {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+
+header .header-nav .top-nav-submenu {
+    position: absolute;
+    z-index: 1000;
+    top: calc(100% + 8px);
+    left: 0;
+    min-width: 190px;
+    padding: 6px;
+    border: 1px solid #cbd5e0;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 10px 24px rgba(26, 54, 93, 0.2);
+}
+
+header .header-nav .top-nav-submenu a {
+    display: block;
+    padding: 9px 10px;
+    color: var(--text-dark);
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+header .header-nav .top-nav-submenu a:hover,
+header .header-nav .top-nav-submenu a:focus-visible {
+    background: #edf2f7;
+    color: var(--dark-blue);
+}
+
 header .header-nav .top-nav-menu form {
     margin: 0 0 0 auto;
 }
@@ -620,6 +675,11 @@ header .tagline {
     }
 
     header .header-nav .top-nav-menu a {
+        padding-left: 9px;
+        padding-right: 9px;
+    }
+
+    header .header-nav .top-nav-dropdown summary {
         padding-left: 9px;
         padding-right: 9px;
     }

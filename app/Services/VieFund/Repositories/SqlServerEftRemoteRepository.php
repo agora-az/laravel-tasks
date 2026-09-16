@@ -12,6 +12,61 @@ class SqlServerEftRemoteRepository
 {
     private const CONNECTION = 'viefund_sqlsrv';
 
+    public function itemsByLinkedIds(array $linkedIds): Collection
+    {
+        $linkedIds = collect($linkedIds)->filter()->map(fn($id) => (int) $id)->unique()->values();
+        if ($linkedIds->isEmpty()) {
+            return collect();
+        }
+
+        return $this->connection()
+            ->table($this->table('UB_EFTItem') . ' as i')
+            // Unprocessed EFT items use iProcessingID = 0 and therefore have no
+            // UB_EFTFile row yet. Keep them visible in reconciliation.
+            ->leftJoin($this->table('UB_EFTFile') . ' as f', 'f.ID', '=', 'i.iProcessingID')
+            ->leftJoin($this->table('UB_Def_EFTType') . ' as t', 't.ID', '=', 'i.iLinkedType')
+            ->leftJoin($this->table('UB_Def_EFTSource') . ' as s', 's.FSCode', '=', 'i.SourceCode')
+            ->whereIn('i.iLinkedID', $linkedIds->all())
+            ->select([
+                'i.ID as id',
+                'i.iLinkedID as linked_id',
+                'i.dtCreated as created_at',
+                'i.dtEffective as effective_date',
+                'i.iStatus as status_id',
+                'i.HolderName as holder_name',
+                'i.HolderID as holder_id',
+                'i.SourceCode as source_code',
+                's.NameEN as source_name',
+                'i.Notes as notes',
+                'i.mAmount as amount',
+                'f.ID as file_id',
+                'f.iSequenceNumber as sequence_number',
+                'f.FileName as file_name',
+                't.NameEN as type_name',
+            ])
+            ->orderByDesc('i.dtCreated')
+            ->orderByDesc('i.ID')
+            ->get();
+    }
+
+    public function linkedIdsForSequences(array $sequences): Collection
+    {
+        $sequences = collect($sequences)->filter()->map(fn($sequence) => (int) $sequence)->unique()->values();
+        if ($sequences->isEmpty()) {
+            return collect();
+        }
+
+        return $this->connection()
+            ->table($this->table('UB_EFTItem') . ' as i')
+            ->join($this->table('UB_EFTFile') . ' as f', 'f.ID', '=', 'i.iProcessingID')
+            ->whereIn('f.iSequenceNumber', $sequences->all())
+            ->whereNotNull('i.iLinkedID')
+            ->distinct()
+            ->pluck('i.iLinkedID')
+            ->map(fn($id) => (int) $id)
+            ->values();
+    }
+
     public function types(): Collection
     {
         return $this->connection()
@@ -321,6 +376,7 @@ class SqlServerEftRemoteRepository
             ])
             ->selectRaw('f.mTotalAmount as total_amount')
             ->selectRaw('(select count(*) from ' . $this->table('UB_EFTItem') . ' ei where ei.iProcessingID = f.ID) as item_count')
+            ->selectRaw('(select sum(ei.mAmount) from ' . $this->table('UB_EFTItem') . ' ei where ei.iProcessingID = f.ID) as item_amount')
             ->orderByDesc('f.dtCreated')
             ->orderByDesc('f.ID')
             ->get();
@@ -407,6 +463,27 @@ class SqlServerEftRemoteRepository
                     ->get();
             })
             ->values();
+    }
+
+    public function itemsForSequenceDate(int $sequenceNumber, string $effectiveDate): Collection
+    {
+        $from = Carbon::parse($effectiveDate)->startOfDay();
+        $to = Carbon::parse($effectiveDate)->addDay()->startOfDay();
+
+        return $this->connection()
+            ->table($this->table('UB_EFTFile') . ' as f')
+            ->join($this->table('UB_EFTItem') . ' as i', 'i.iProcessingID', '=', 'f.ID')
+            ->where('f.iSequenceNumber', $sequenceNumber)
+            ->where('f.dtEffective', '>=', $from)
+            ->where('f.dtEffective', '<', $to)
+            ->select([
+                'i.ID as id',
+                'i.HolderID as holder_id',
+                'i.HolderName as holder_name',
+            ])
+            ->selectRaw('i.mAmount as amount')
+            ->orderBy('i.ID')
+            ->get();
     }
 
     private function fileQuery(array $filters): Builder

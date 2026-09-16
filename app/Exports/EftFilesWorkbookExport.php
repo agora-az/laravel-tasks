@@ -19,7 +19,11 @@ class EftFilesWorkbookExport implements WithMultipleSheets
     public function sheets(): array
     {
         $fileFormats = count($this->fileRows) > 1
-            ? ['I2:I' . count($this->fileRows) => self::ACCOUNTING_CURRENCY_FORMAT]
+            ? [
+                'I2:I' . count($this->fileRows) => self::ACCOUNTING_CURRENCY_FORMAT,
+                'L2:L' . count($this->fileRows) => self::ACCOUNTING_CURRENCY_FORMAT,
+                'N2:N' . count($this->fileRows) => self::ACCOUNTING_CURRENCY_FORMAT,
+            ]
             : [];
         $itemFormats = count($this->itemRows) > 1
             ? [

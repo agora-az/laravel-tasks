@@ -6,6 +6,7 @@ use App\Exports\VieFundDailyBalanceWorkbookExport;
 use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundCashDailySnapshotChange;
 use App\Models\VieFundCashSnapshotRun;
+use App\Jobs\RefreshVieFundReportInceptionDates;
 use App\Services\VieFund\VieFundCashSnapshotService;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
@@ -92,6 +93,12 @@ class VieFundReportsController extends Controller
         foreach (array_keys(self::DATE_BASIS_OPTIONS) as $basisKey) {
             $inceptionDates[$basisKey] = $this->resolveInceptionDate($basisKey);
             $legacyInceptionDates[$basisKey] = $this->resolveLegacyInceptionDate($basisKey);
+        }
+
+        if (in_array(null, $inceptionDates, true) || in_array(null, $legacyInceptionDates, true)) {
+            if (Cache::add('viefund:report-inception-dates-refresh-queued', true, now()->addMinutes(30))) {
+                RefreshVieFundReportInceptionDates::dispatch()->onConnection('database');
+            }
         }
 
         $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
@@ -271,16 +278,12 @@ class VieFundReportsController extends Controller
             }
         }
 
-        return $this->vieFundRemoteService->fetchInceptionDateByDateColumn($dateBasis);
+        return Cache::get("viefund:inception-date:{$dateBasis}");
     }
 
     private function resolveLegacyInceptionDate(string $dateBasis): ?string
     {
-        return Cache::remember(
-            "viefund:legacy-inception-date:{$dateBasis}",
-            now()->addDay(),
-            fn() => $this->vieFundRemoteService->fetchLegacyInceptionDateByDateColumn($dateBasis)
-        );
+        return Cache::get("viefund:legacy-inception-date:{$dateBasis}");
     }
 
     public function exportDailyBalance(Request $request): BinaryFileResponse|StreamedResponse
@@ -307,12 +310,12 @@ class VieFundReportsController extends Controller
         config([
             'viefund.balance_report_cash_account_scope.currency_code' => $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']),
             'viefund.balance_report_cash_account_scope.opened_before' => !empty($validated['daily_balance_opened_before'])
-                ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+                ? $this->parseSimulatedReportTime($validated['daily_balance_opened_before'])
                 : null,
         ]);
 
         $openedBefore = !empty($validated['daily_balance_opened_before'])
-            ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+            ? $this->parseSimulatedReportTime($validated['daily_balance_opened_before'])
             : null;
         $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']) ?? '00';
         $snapshotResult = $openedBefore === null
@@ -400,7 +403,7 @@ class VieFundReportsController extends Controller
             ['Output Order', $outputOrderLabel],
             ['Balance Source', $snapshotResult ? 'Audited Daily Cash Snapshots' : 'Direct Cash Ledger (Live)'],
             ['Cash Transaction Statuses', $statusLabel],
-            ['Simulated Generation Time', !empty($validated['daily_balance_opened_before']) ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s') : 'Not set'],
+            ['Simulated Generation Time', $openedBefore ? $openedBefore . ' Eastern Time (EST/EDT)' : 'Not set'],
             ['Snapshot Last Verified At', $snapshotResult['last_verified_at'] ?? 'Not applicable'],
             ['Unreviewed Changed Days', $snapshotResult['changed_days'] ?? 0],
             ['Generated At', now()->toDateTimeString()],
@@ -587,7 +590,7 @@ class VieFundReportsController extends Controller
         $statuses = $this->resolveStatuses($validated['status'] ?? null);
         $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']) ?? '00';
         $openedBefore = !empty($validated['daily_balance_opened_before'])
-            ? Carbon::parse($validated['daily_balance_opened_before'])->format('Y-m-d H:i:s')
+            ? $this->parseSimulatedReportTime($validated['daily_balance_opened_before'])
             : null;
         $format = $validated['format'];
 
@@ -830,7 +833,7 @@ class VieFundReportsController extends Controller
         }
         $openedBefore = null;
         if (!empty($validated['customer_balance_opened_before'])) {
-            $openedBefore = Carbon::parse((string) $validated['customer_balance_opened_before'])->format('Y-m-d H:i:s');
+            $openedBefore = $this->parseSimulatedReportTime((string) $validated['customer_balance_opened_before']);
         }
         $format = $validated['format'];
 
@@ -1328,6 +1331,12 @@ class VieFundReportsController extends Controller
         }
 
         return $formatted;
+    }
+
+    private function parseSimulatedReportTime(string $value): string
+    {
+        return Carbon::parse($value, config('viefund.simulated_report_timezone', 'America/Toronto'))
+            ->format('Y-m-d H:i:s');
     }
 
     private function normalizeCustomerBalanceCurrencyCode(string $value): ?string

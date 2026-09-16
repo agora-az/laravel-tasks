@@ -5,8 +5,11 @@ namespace App\Services\VieFund\Repositories;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
+use Illuminate\Contracts\Pagination\Paginator as PaginatorContract;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -225,6 +228,356 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         ]);
     }
 
+    /** Database-paginated ledger for the unfiltered All Transactions page. */
+    public function fetchAllTransactions(int $perPage = 100, int $page = 1, ?string $search = null, array $filters = []): PaginatorContract
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $perPage = in_array($perPage, [50, 100, 250], true) ? $perPage : 100;
+        $rawTransactionIds = trim((string) ($filters['trx_id'] ?? ''));
+        $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
+        $queryFilters = $filters;
+        unset($queryFilters['trx_id']);
+
+        $fund = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_FundTrxLookup as l")
+            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
+            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
+            ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
+            ->leftJoin("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
+            ->leftJoin("{$schema}.UB_Def_TrxStatus as ts", 'ts.ID', '=', 'ct.iStatus')
+            ->whereNotNull('ct.ID')
+            ->select([
+                DB::raw("CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id"),
+                DB::raw('CAST(t.SourceID AS NVARCHAR(100)) AS source_id'),
+                DB::raw("LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name"),
+                DB::raw('CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id'),
+                DB::raw('ISNULL(tt.NameEN, CAST(l.iType AS NVARCHAR(100))) AS transaction_type'),
+                DB::raw('ts.NameEN AS status'),
+                DB::raw('CAST(NULL AS NVARCHAR(1000)) AS notes'),
+                DB::raw('t.dtCreated AS created_date'),
+                DB::raw('ct.dtTrade AS trade_date'),
+                DB::raw('ct.dtProcessing AS processing_date'),
+                DB::raw('ct.dtSettlement AS settlement_date'),
+                DB::raw('ct.mAmount AS amount'),
+                DB::raw('ct.ID AS sort_id'),
+                DB::raw('l.iTrxID AS fund_transaction_id'),
+                DB::raw('ct.iTrustTrxID AS related_trust_id'),
+            ]);
+
+        $this->applyFiltersAndSearch($fund, $search, $queryFilters, $schema);
+        if (!empty($filters['has_reconciliation_match'])) {
+            $fund->whereExists(function ($query) use ($schema) {
+                $query->selectRaw('1')
+                    ->from("{$schema}.UB_EFTItem as reconciliation_eft")
+                    ->whereColumn('reconciliation_eft.iLinkedID', 'ct.iTrustTrxID');
+            });
+        }
+
+        $fundQueries = [];
+        if ($rawTransactionIds === '') {
+            $fundQueries[] = $fund;
+        } elseif (!empty($transactionIds)) {
+            $cashIds = collect($transactionIds)
+                ->filter(fn($item) => in_array($item['prefix'], ['', 'C'], true))
+                ->pluck('id')->unique()->values()->all();
+
+            if (!empty($cashIds)) {
+                $fundQueries[] = (clone $fund)->whereIn('ct.ID', $cashIds);
+            }
+        }
+
+        $trust = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_TrustTrx as tr")
+            ->leftJoin("{$schema}.UB_Plan as p", 'p.ID', '=', 'tr.iPlanID')
+            ->leftJoin("{$schema}.UB_Customer as c", function ($join) {
+                $join->whereRaw('c.ID = ISNULL(NULLIF(tr.iClientID, 0), p.iClientID)');
+            })
+            ->leftJoin("{$schema}.UB_Def_TrustType as ttype", 'ttype.ID', '=', 'tr.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustStatus as ts", 'ts.ID', '=', 'tr.iStatus')
+            ->leftJoin("{$schema}.UB_Def_TrustDepositType as tdtype", function ($join) {
+                $join->on('tdtype.ID', '=', 'tr.iDepositType')
+                    ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
+            })
+            ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
+            ->select([
+                DB::raw("CONCAT('T-', CAST(tr.ID AS NVARCHAR(30))) AS transaction_id"),
+                DB::raw('CAST(NULL AS NVARCHAR(100)) AS source_id'),
+                DB::raw("LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name"),
+                DB::raw('CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id'),
+                DB::raw("ISNULL(CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN tdtype.NameEN ELSE ttype.NameEN END, CAST(tr.iType AS NVARCHAR(100))) AS transaction_type"),
+                DB::raw('ts.NameEN AS status'),
+                DB::raw('CAST(tr.Notes AS NVARCHAR(1000)) AS notes'),
+                DB::raw('tr.dtCreated AS created_date'),
+                DB::raw('tr.dtEffective AS trade_date'),
+                DB::raw('CAST(NULL AS DATETIME) AS processing_date'),
+                DB::raw('tr.dtSettlement AS settlement_date'),
+                DB::raw('tr.mAmount AS amount'),
+                DB::raw('tr.ID AS sort_id'),
+                DB::raw('CAST(NULL AS INT) AS fund_transaction_id'),
+                DB::raw('tr.ID AS related_trust_id'),
+            ]);
+
+        $this->applyTrustFiltersAndSearch($trust, $search, $queryFilters, $schema);
+        if (!empty($filters['has_reconciliation_match'])) {
+            $trust->whereExists(function ($query) use ($schema) {
+                $query->selectRaw('1')
+                    ->from("{$schema}.UB_EFTItem as reconciliation_eft")
+                    ->whereColumn('reconciliation_eft.iLinkedID', 'tr.ID');
+            });
+        }
+        if ($rawTransactionIds !== '') {
+            $trustIds = collect($transactionIds)
+                ->filter(fn($item) => in_array($item['prefix'], ['', 'T'], true))
+                ->pluck('id')->unique()->values()->all();
+            empty($trustIds)
+                ? $trust->whereRaw('1 = 0')
+                : $trust->whereIn('tr.ID', $trustIds);
+        }
+
+        $countCacheKey = 'viefund_all_transactions_count:' . sha1(serialize([
+            'search' => $search,
+            'filters' => $filters,
+        ]));
+        $total = Cache::remember($countCacheKey, 300, function () use ($fundQueries, $trust): int {
+            $fundCount = collect($fundQueries)->sum(
+                fn($query) => (int) (clone $query)->distinct()->count('ct.ID')
+            );
+            $trustCount = (int) (clone $trust)->distinct()->count('tr.ID');
+
+            return $fundCount + $trustCount;
+        });
+
+        $page = max(1, $page);
+        $offset = ($page - 1) * $perPage;
+        $fetchLimit = ($offset + $perPage + 1) * 2;
+
+        // Taking the newest rows from each source separately avoids forcing SQL
+        // Server to sort the complete multi-million-row UNION on every page load.
+        $fundRows = collect();
+        foreach ($fundQueries as $fundQuery) {
+            $fundRows = $fundRows->concat(
+                $fundQuery
+                    ->orderByDesc('t.dtCreated')
+                    ->orderByDesc('ct.ID')
+                    ->limit($fetchLimit)
+                    ->get()
+            );
+        }
+        $fundRows = $fundRows->unique(fn($row) => $row->transaction_id . '|' . $row->plan_account_id);
+        $trustRows = $trust
+            ->orderByDesc('tr.dtCreated')
+            ->orderByDesc('tr.ID')
+            ->limit($fetchLimit)
+            ->get();
+
+        $rows = $fundRows->concat($trustRows)
+            ->sortByDesc(fn($row) => sprintf('%s|%020d', $row->created_date ?? '', $row->sort_id ?? 0))
+            ->values();
+        $pageRows = $rows->slice($offset, $perPage + 1)->values();
+        return new LengthAwarePaginator($pageRows->take($perPage), $total, $perPage, $page, [
+            'path' => Paginator::resolveCurrentPath(),
+            'query' => Paginator::resolveQueryString(),
+        ]);
+    }
+
+    /**
+     * Locate the newest displayed VieFund transaction linked to an EFT item and
+     * return its page in the normal created-date-descending ledger order.
+     *
+     * @return array{page: int, transaction_id: string, created_date: string}|null
+     */
+    public function latestEftMatchedTransactionPage(int $perPage = 100): ?array
+    {
+        return $this->latestMatchedTransactionPage($perPage);
+    }
+
+    public function fetchTransactionStatuses(): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+
+        return Cache::remember('viefund_transaction_status_names', 3600, function () use ($schema) {
+            $cash = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_Def_TrxStatus")
+                ->whereNotNull('NameEN')
+                ->pluck('NameEN');
+            $trust = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_Def_TrustStatus")
+                ->whereNotNull('NameEN')
+                ->pluck('NameEN');
+
+            return $cash->concat($trust)
+                ->map(fn($status) => trim((string) $status))
+                ->filter()
+                ->unique(fn($status) => mb_strtolower($status))
+                ->sort()
+                ->values();
+        });
+    }
+
+    public function latestTransactionPageForTrustIds(array $trustIds, int $perPage = 100): ?array
+    {
+        $trustIds = collect($trustIds)->filter()->map(fn($id) => (int) $id)->unique()->values()->all();
+        if (empty($trustIds)) {
+            return null;
+        }
+
+        return $this->latestMatchedTransactionPage($perPage, $trustIds);
+    }
+
+    public function latestBankMatchedTransactionPage(array $sequences, int $perPage = 100): ?array
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $sequences = collect($sequences)->filter()->map(fn($sequence) => (int) $sequence)->unique()->values();
+        if ($sequences->isEmpty()) {
+            return null;
+        }
+
+        $targets = collect();
+        foreach ($sequences->chunk(1500) as $sequenceChunk) {
+            $values = $sequenceChunk->all();
+            $fundMatch = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_FundTrxLookup as l")
+                ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
+                ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
+                ->join("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
+                ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
+                ->join("{$schema}.UB_EFTItem as ei", 'ei.iLinkedID', '=', 'ct.iTrustTrxID')
+                ->join("{$schema}.UB_EFTFile as ef", 'ef.ID', '=', 'ei.iProcessingID')
+                ->whereIn('ef.iSequenceNumber', $values)
+                ->selectRaw('ct.iTrustTrxID AS trust_id, t.dtCreated AS created_date, ct.ID AS sort_id')
+                ->orderByDesc('t.dtCreated')
+                ->orderByDesc('ct.ID')
+                ->first();
+
+            $trustMatch = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_TrustTrx as tr")
+                ->join("{$schema}.UB_EFTItem as ei", 'ei.iLinkedID', '=', 'tr.ID')
+                ->join("{$schema}.UB_EFTFile as ef", 'ef.ID', '=', 'ei.iProcessingID')
+                ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
+                ->whereIn('ef.iSequenceNumber', $values)
+                ->selectRaw('tr.ID AS trust_id, tr.dtCreated AS created_date, tr.ID AS sort_id')
+                ->orderByDesc('tr.dtCreated')
+                ->orderByDesc('tr.ID')
+                ->first();
+
+            $targets->push($fundMatch, $trustMatch);
+        }
+
+        $target = $targets->filter()
+            ->sortByDesc(fn($row) => sprintf('%s|%020d', $row->created_date ?? '', $row->sort_id ?? 0))
+            ->first();
+
+        return $target
+            ? $this->latestMatchedTransactionPage($perPage, [(int) $target->trust_id])
+            : null;
+    }
+
+    private function latestMatchedTransactionPage(int $perPage, ?array $trustIds = null): ?array
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $perPage = in_array($perPage, [50, 100, 250], true) ? $perPage : 100;
+
+        $fundMatch = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_FundTrxLookup as l")
+            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
+            ->join("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
+            ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
+            ->whereNotNull('ct.iTrustTrxID')
+            ->when($trustIds !== null,
+                fn($query) => $query->whereIn('ct.iTrustTrxID', $trustIds),
+                fn($query) => $query->whereExists(function ($exists) use ($schema) {
+                    $exists->selectRaw('1')
+                        ->from("{$schema}.UB_EFTItem as ei")
+                        ->whereColumn('ei.iLinkedID', 'ct.iTrustTrxID');
+                }))
+            ->selectRaw("CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id, t.dtCreated AS created_date, ct.ID AS sort_id")
+            ->orderByDesc('t.dtCreated')
+            ->orderByDesc('ct.ID')
+            ->first();
+
+        $trustMatch = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_TrustTrx as tr")
+            ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
+            ->when($trustIds !== null,
+                fn($query) => $query->whereIn('tr.ID', $trustIds),
+                fn($query) => $query->whereExists(function ($exists) use ($schema) {
+                    $exists->selectRaw('1')
+                        ->from("{$schema}.UB_EFTItem as ei")
+                        ->whereColumn('ei.iLinkedID', 'tr.ID');
+                }))
+            ->selectRaw("CONCAT('T-', CAST(tr.ID AS NVARCHAR(30))) AS transaction_id, tr.dtCreated AS created_date, tr.ID AS sort_id")
+            ->orderByDesc('tr.dtCreated')
+            ->orderByDesc('tr.ID')
+            ->first();
+
+        $target = collect([$fundMatch, $trustMatch])
+            ->filter()
+            ->sortByDesc(fn($row) => sprintf('%s|%020d', $row->created_date ?? '', $row->sort_id ?? 0))
+            ->first();
+        if (!$target) {
+            return null;
+        }
+
+        $newerFundCount = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_FundTrxLookup as l")
+            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
+            ->join("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
+            ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
+            ->where(function ($query) use ($target) {
+                $query->where('t.dtCreated', '>', $target->created_date)
+                    ->orWhere(function ($tie) use ($target) {
+                        $tie->where('t.dtCreated', '=', $target->created_date)
+                            ->where('ct.ID', '>', $target->sort_id);
+                    });
+            })
+            ->distinct()
+            ->count('ct.ID');
+
+        $newerTrustCount = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_TrustTrx as tr")
+            ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
+            ->where(function ($query) use ($target) {
+                $query->where('tr.dtCreated', '>', $target->created_date)
+                    ->orWhere(function ($tie) use ($target) {
+                        $tie->where('tr.dtCreated', '=', $target->created_date)
+                            ->where('tr.ID', '>', $target->sort_id);
+                    });
+            })
+            ->distinct()
+            ->count('tr.ID');
+
+        return [
+            'page' => (int) floor(($newerFundCount + $newerTrustCount) / $perPage) + 1,
+            'transaction_id' => (string) $target->transaction_id,
+            'created_date' => (string) $target->created_date,
+        ];
+    }
+
+    /**
+     * @return array<int, array{prefix: string, id: int}>
+     */
+    private function parseAllTransactionIds(string $value): array
+    {
+        $ids = [];
+
+        foreach (array_filter(array_map('trim', explode(',', $value))) as $candidate) {
+            if (!preg_match('/^(?:([CFT])-?)?(\d+)$/i', $candidate, $matches)) {
+                continue;
+            }
+
+            $ids[] = [
+                'prefix' => strtoupper($matches[1] ?? ''),
+                'id' => (int) $matches[2],
+            ];
+        }
+
+        return $ids;
+    }
+
     // ── Distinct type helpers ────────────────────────────────────────────────
 
     public function fetchDistinctTrxTypes(array $filters = []): array
@@ -409,8 +762,17 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 $query->whereIn('ct.iStatus', $statusIds);
             }
         }
+        if (!empty($filters['transaction_status'])) {
+            $query->whereIn('ts.NameEN', (array) $filters['transaction_status']);
+        }
+        $dateColumn = match ($filters['date_basis'] ?? 'created') {
+            'trade' => 'ct.dtTrade',
+            'processing' => 'ct.dtProcessing',
+            'settlement' => 'ct.dtSettlement',
+            default => 't.dtCreated',
+        };
         if (!empty($filters['created_from'])) {
-            $query->where('t.dtCreated', '>=', $filters['created_from'] . ' 00:00:00');
+            $query->where($dateColumn, '>=', $filters['created_from'] . ' 00:00:00');
         }
         if (!empty($filters['account_id'])) {
             $query->where('p.DealerAccountID', '=', $filters['account_id']);
@@ -418,8 +780,11 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if (!empty($filters['customer_id'])) {
             $query->where('c.ID', '=', $filters['customer_id']);
         }
+        if (!empty($filters['customer_name'])) {
+            $query->whereRaw("CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')) LIKE ?", ['%' . $filters['customer_name'] . '%']);
+        }
         if (!empty($filters['created_to'])) {
-            $query->where('t.dtCreated', '<=', $filters['created_to'] . ' 23:59:59');
+            $query->where($dateColumn, '<=', $filters['created_to'] . ' 23:59:59');
         }
     }
 
@@ -1925,6 +2290,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         if (!empty($filters['trust_trx_id'])) {
             $query->where('tr.ID', (int) $filters['trust_trx_id']);
         }
+        // Standalone trust transactions do not have a UB_FundTrx SourceID.
+        if (!empty($filters['source_id'])) {
+            $query->whereRaw('1 = 0');
+        }
         if (!empty($filters['trx_type'])) {
             $types = (array) $filters['trx_type'];
             $query->where(function ($q) use ($types) {
@@ -1937,11 +2306,25 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 $query->whereIn('ts.NameEN', $statusNames);
             }
         }
-        if (!empty($filters['created_from'])) {
-            $query->where('tr.dtCreated', '>=', $filters['created_from'] . ' 00:00:00');
+        if (!empty($filters['transaction_status'])) {
+            $query->whereIn('ts.NameEN', (array) $filters['transaction_status']);
         }
-        if (!empty($filters['created_to'])) {
-            $query->where('tr.dtCreated', '<=', $filters['created_to'] . ' 23:59:59');
+        $dateColumn = match ($filters['date_basis'] ?? 'created') {
+            'trade' => 'tr.dtEffective',
+            'settlement' => 'tr.dtSettlement',
+            'processing' => null,
+            default => 'tr.dtCreated',
+        };
+        if ($dateColumn === null && (!empty($filters['created_from']) || !empty($filters['created_to']))) {
+            // Standalone trust transactions do not have a processing date.
+            $query->whereRaw('1 = 0');
+        } else {
+            if (!empty($filters['created_from'])) {
+                $query->where($dateColumn, '>=', $filters['created_from'] . ' 00:00:00');
+            }
+            if (!empty($filters['created_to'])) {
+                $query->where($dateColumn, '<=', $filters['created_to'] . ' 23:59:59');
+            }
         }
         if (!empty($filters['customer_id'])) {
             $query->where(function ($q) use ($filters) {
@@ -1949,8 +2332,14 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                     ->orWhere('p.iClientID', '=', $filters['customer_id']);
             });
         }
+        if (!empty($filters['customer_name'])) {
+            $query->whereRaw("CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')) LIKE ?", ['%' . $filters['customer_name'] . '%']);
+        }
         if (!empty($filters['account_id'])) {
             $query->where('p.DealerAccountID', '=', $filters['account_id']);
+        }
+        if (!empty($filters['plan_account_id'])) {
+            $query->where('p.DealerAccountID', 'like', '%' . $filters['plan_account_id'] . '%');
         }
     }
 

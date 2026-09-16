@@ -298,7 +298,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ['Output Order', $outputOrderLabel],
             ['Balance Source', $balanceSource],
             ['Cash Transaction Statuses', $statusLabel],
-            ['Simulated Generation Time', $simulatedGenerationTime ?: 'Not set'],
+            ['Simulated Generation Time', $simulatedGenerationTime ? $simulatedGenerationTime . ' Eastern Time (EST/EDT)' : 'Not set'],
             ['Snapshot Last Verified At', $snapshotLastVerifiedAt ?: 'Not applicable'],
             ['Unreviewed Changed Days', $format === 'excel' ? $changedDays : number_format($changedDays)],
             ['Generated At', now()->toDateTimeString()],

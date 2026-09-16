@@ -246,7 +246,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ['Balance Source', self::BALANCE_SOURCE_LABELS[$balanceSource]],
             ['Cash Statuses', $statusLabel],
             ['Status Evaluation', 'Current replica status; historical inference shown separately for review'],
-            ['Simulated Generation Time', $simulatedGenerationTime !== '' ? $simulatedGenerationTime : 'Not set'],
+            ['Simulated Generation Time', $simulatedGenerationTime !== '' ? $simulatedGenerationTime . ' Eastern Time (EST/EDT)' : 'Not set'],
             ['Plan Accounts (Distinct)', $format === 'excel' ? $totalPlanAccounts : number_format($totalPlanAccounts)],
             ['Duplicate Cash Account Rows (Included)', $format === 'excel' ? $duplicateAccountRowCount : number_format($duplicateAccountRowCount)],
             ['Reported Account Rows', $format === 'excel' ? $totalAccounts : number_format($totalAccounts)],

@@ -24,14 +24,22 @@ class SyncBankEntriesCommand extends Command
         {--force : Import files even if filename already imported}
         {--rebuild : Truncate existing bank raw/analysis/summary tables before importing selected files}
         {--status-file= : Optional path to write sync progress JSON}
-        {--lock-file= : Optional lock file path to mark sync in progress}';
+        {--lock-file= : Optional lock file path to mark sync in progress}
+        {--run-id= : Identifier supplied by the initiating web session}
+        {--trigger=Command line : Description of what initiated the sync}';
 
     protected $description = 'Download bank CAMT files from SFTP, import raw entries, and analyze parsed fields';
+
+    private ?string $runId = null;
+
+    private string $trigger = 'Command line';
 
     public function handle(): int
     {
         $lockFile = $this->resolveStringOptionValue($this->option('lock-file'));
         $statusFile = $this->resolveStringOptionValue($this->option('status-file'));
+        $this->runId = $this->resolveStringOptionValue($this->option('run-id'));
+        $this->trigger = $this->resolveStringOptionValue($this->option('trigger')) ?? 'Command line';
         if ($lockFile) {
             @file_put_contents($lockFile, date('c'));
         }
@@ -484,7 +492,10 @@ class SyncBankEntriesCommand extends Command
             return;
         }
 
-        @file_put_contents($statusFile, json_encode($payload, JSON_PRETTY_PRINT));
+        @file_put_contents($statusFile, json_encode(array_merge([
+            'run_id' => $this->runId,
+            'trigger' => $this->trigger,
+        ], $payload), JSON_PRETTY_PRINT));
     }
 
     private function resolveOption(string $option, string $envKey, ?string $default = null): ?string

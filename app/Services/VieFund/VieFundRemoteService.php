@@ -4,6 +4,7 @@ namespace App\Services\VieFund;
 
 use Carbon\CarbonInterface;
 use App\Services\VieFund\Repositories\SqlServerVieFundRemoteRepository;
+use Illuminate\Contracts\Pagination\Paginator;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
@@ -31,6 +32,31 @@ class VieFundRemoteService
     public function fetchTransactions(?string $search = null, array $filters = []): LengthAwarePaginator
     {
         return $this->repository->fetchTransactions($search, $filters);
+    }
+
+    public function fetchAllTransactions(int $perPage = 100, int $page = 1, ?string $search = null, array $filters = []): Paginator
+    {
+        return $this->repository->fetchAllTransactions($perPage, $page, $search, $filters);
+    }
+
+    public function latestEftMatchedTransactionPage(int $perPage = 100): ?array
+    {
+        return $this->repository->latestEftMatchedTransactionPage($perPage);
+    }
+
+    public function latestTransactionPageForTrustIds(array $trustIds, int $perPage = 100): ?array
+    {
+        return $this->repository->latestTransactionPageForTrustIds($trustIds, $perPage);
+    }
+
+    public function latestBankMatchedTransactionPage(array $sequences, int $perPage = 100): ?array
+    {
+        return $this->repository->latestBankMatchedTransactionPage($sequences, $perPage);
+    }
+
+    public function fetchTransactionStatuses(): Collection
+    {
+        return $this->repository->fetchTransactionStatuses();
     }
 
     public function countTransactions(): int

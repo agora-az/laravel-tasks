@@ -62,6 +62,10 @@ fi
 cp /home/site/wwwroot/supervisor/laravel-scheduler.conf \
    /etc/supervisor/conf.d/laravel-scheduler.conf
 
+# Install the Laravel queue worker configuration
+cp /home/site/wwwroot/supervisor/laravel-queue.conf \
+   /etc/supervisor/conf.d/laravel-queue.conf
+
 echo "Starting supervisord..." >> /home/site/wwwroot/storage/logs/startup.log
 
 # Start Supervisor in foreground mode

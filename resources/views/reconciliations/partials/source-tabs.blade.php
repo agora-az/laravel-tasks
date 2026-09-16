@@ -1,4 +1,8 @@
 <div style="display:flex;gap:8px;margin:20px 0 24px;padding-bottom:12px;border-bottom:1px solid #e2e8f0;">
+    <a href="{{ route('reconciliations.transactions') }}"
+       style="padding:9px 14px;border-radius:6px;font-size:13px;font-weight:700;text-decoration:none;{{ ($activeReconciliation ?? '') === 'transactions' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
+        Transactions
+    </a>
     <a href="{{ route('reconciliations.daily-totals') }}"
        style="padding:9px 14px;border-radius:6px;font-size:13px;font-weight:700;text-decoration:none;{{ ($activeReconciliation ?? '') === 'eft' ? 'background:#2b6cb0;color:#fff;' : 'background:#e2e8f0;color:#2d3748;' }}">
         Bank / EFT
