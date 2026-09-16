@@ -122,6 +122,17 @@ cp /home/site/wwwroot/supervisor/laravel-scheduler.conf \
 cp /home/site/wwwroot/supervisor/laravel-queue.conf \
    /etc/supervisor/conf.d/laravel-queue.conf
 
+# Azure starts nginx before invoking the custom startup command, but PHP-FPM
+# still needs to be running before Supervisor takes over the foreground process.
+if ! pgrep -x php-fpm >/dev/null 2>&1; then
+    log_startup "Starting PHP-FPM..."
+
+    if ! /usr/local/sbin/php-fpm -D >> "$STARTUP_LOG_PATH" 2>&1; then
+        log_startup "ERROR: PHP-FPM failed to start."
+        exit 1
+    fi
+fi
+
 log_startup "Starting supervisord..."
 
 # Start Supervisor in foreground mode
