@@ -69,18 +69,18 @@
         : null;
 @endphp
 
-<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:20px 0;flex-wrap:wrap;">
-    <div>
+<div class="sync-page-header">
+    <div class="sync-page-header-main">
         <h2 style="margin:0;">EFT Files</h2>
         <div style="color:#718096;font-size:13px;margin-top:4px;">Live, read-only VieFund data from UB_EFTFile and UB_EFTItem</div>
-        <div id="bank-eft-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none;margin-top:8px;width:max-content;align-items:center;gap:8px;">
+        <div id="bank-eft-sync-status-wrap" class="sync-chip sync-chip-progress sync-page-notification" style="display:none;">
             <span id="bank-eft-sync-status"></span>
             <button type="button" id="bank-eft-sync-status-dismiss" aria-label="Dismiss bank EFT sync status" style="border:none;background:transparent;color:inherit;font-size:14px;font-weight:700;cursor:pointer;line-height:1;padding:0;">×</button>
         </div>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+    <div class="sync-page-header-meta">
         <div id="bank-eft-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
-            <span><strong>Last sync:</strong> <span id="bank-eft-last-sync-time">checking…</span></span>
+            <span><strong>Last bank EFT file sync:</strong> <span id="bank-eft-last-sync-time">checking…</span></span>
             <span id="bank-eft-last-sync-detail">&nbsp;</span>
         </div>
     </div>
@@ -102,6 +102,10 @@
     const lastSyncDetail = document.getElementById('bank-eft-last-sync-detail');
     if (!wrap || !text) return;
 
+    let observedInProgress = false;
+    let displayObservedCompletion = false;
+    let notificationDismissed = false;
+
     const setVisible = (visible) => { wrap.style.display = visible ? 'inline-flex' : 'none'; };
     const setBusy = (busy) => {
         const button = document.getElementById('bank-eft-sync-btn');
@@ -110,7 +114,12 @@
         button.style.opacity = busy ? '0.65' : '';
         button.style.cursor = busy ? 'not-allowed' : '';
     };
-    if (dismiss) dismiss.addEventListener('click', () => setVisible(false));
+    if (dismiss) {
+        dismiss.addEventListener('click', () => {
+            notificationDismissed = true;
+            setVisible(false);
+        });
+    }
 
     const poll = () => {
         fetch('{{ route('eft-files.sync-status') }}', {
@@ -122,10 +131,7 @@
                 setBusy(Boolean(data.inProgress));
                 if (lastSyncTime && lastSyncDetail) {
                     if (data.completed_at) {
-                        const completed = new Date(data.completed_at);
-                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
-                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-                        });
+                        const when = window.formatOperationalDateTime(data.completed_at);
                         const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
                         const trigger = data.trigger ? `Started via ${data.trigger}` : '';
                         lastSyncTime.textContent = when;
@@ -139,14 +145,28 @@
                     }
                 }
                 if (data.inProgress) {
+                    if (!observedInProgress) {
+                        displayObservedCompletion = false;
+                        notificationDismissed = false;
+                    }
+                    observedInProgress = true;
                     wrap.className = 'sync-chip sync-chip-progress';
                     text.textContent = data.message || 'Bank EFT sync in progress...';
-                    setVisible(true);
-                } else if (data.success === true && data.initiatedByCurrentSession) {
+                    setVisible(!notificationDismissed);
+                    return;
+                }
+
+                if ((data.success === true || data.success === false) && observedInProgress) {
+                    observedInProgress = false;
+                    displayObservedCompletion = true;
+                    notificationDismissed = false;
+                }
+
+                if (displayObservedCompletion && !notificationDismissed && data.success === true) {
                     wrap.className = 'sync-chip sync-chip-success';
                     text.textContent = data.message || 'Bank EFT sync completed.';
                     setVisible(true);
-                } else if (data.success === false && data.initiatedByCurrentSession) {
+                } else if (displayObservedCompletion && !notificationDismissed && data.success === false) {
                     wrap.className = 'sync-chip sync-chip-error';
                     text.textContent = data.message || 'Bank EFT sync failed.';
                     setVisible(true);

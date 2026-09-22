@@ -68,7 +68,7 @@ When supplied, the report:
 - excludes transactions created after that timestamp
 - lists known post-cutoff accounts and relevant backdated transactions on the **Cutoff Review** sheet
 
-The settled balance does not reconstruct historical transaction statuses. Confirmed-only output excludes transactions that are currently Deleted, even if they may have had another status when an older client report was generated.
+The cash balance does not reconstruct historical transaction statuses. Confirmed-only output excludes transactions that are currently Deleted, even if they may have had another status when an older client report was generated.
 
 When a simulated generation time is supplied, the report separately identifies currently Deleted cash transactions whose linked fund or trust record changed after the cutoff. Their amounts appear as **Historical Inference Adjustment (Review Required)** and are added only to **Inferred Client Balance (Review Required)**. Linked modification timestamps do not identify the changed field, so these rows are candidates for review rather than proof of historical status.
 
@@ -85,7 +85,7 @@ The main report flags positive Confirmed cash linked to an Unsettled trust trans
 - **Next Settlement Date**
 - **Clarification Note**
 
-Future-settlement cash is not automatically added to the settled balance.
+Future-settlement cash is shown separately and is not automatically applied as an adjustment to the cash balance.
 
 The Summary reports one **Future Settlement Cash (Review Required)** amount. It no longer classifies this evidence as included in or excluded from the client report. On a trade-date report, eligible future-settling cash may already be represented in the strict balance through the selected date basis.
 
@@ -95,7 +95,7 @@ The Summary sheet includes **Inferred Client Balance (Review Required)** as a pr
 
 ```text
 Inferred Client Balance (Review Required)
-	= Total Settled Balance
+	= Total Cash Balance
 	+ Historical Inference Adjustment (Review Required)
 ```
 
@@ -110,10 +110,10 @@ For historical inference candidates, **Linked Trust Amount Left** shows the link
 | Client Name                    | Customer name from the owning VieFund plan                      |
 | Rep Code                       | Representative code found through the included cash activity    |
 | Plan Account ID                | VieFund dealer/plan account identifier                          |
-| Account ID                     | Normalized cash account identifier                              |
+| Cash Account ID                | Normalized identifier from the VieFund cash-account record      |
 | Account Status                 | Current selected cash-account status, such as `A` or `T`        |
 | Cash Transactions              | Number of included cash ledger transactions                     |
-| Settled Balance                | Sum of included cash transaction amounts for the selected basis |
+| Cash Balance                   | Sum of included cash transaction amounts for the selected basis |
 | Future Settlement Transactions | Count of flagged positive future-settlement cash transactions   |
 | Future Settlement Cash (Info)  | Informational total of those flagged transactions               |
 | Next Settlement Date           | Earliest settlement date among the flagged transactions         |
@@ -131,6 +131,8 @@ Excel is recommended for reconciliation work. The workbook contains:
 - **Summary** sheet containing criteria, strict totals, review counts, and the inferred client balance
 - **Cutoff Review** sheet containing historical inference candidates, accounts opened after the cutoff, relevant transactions created after the cutoff, and duplicate cash-account patterns
 - blank **Review Decision** and **Review Notes** columns for offline review
+
+When Excel is exported from the Customer Balances reconciliation table, the workbook's Customer Balances sheet uses the table's current search filter and sort order across the complete matching result set, not only the visible page. The Summary sheet records the applied search and sort criteria.
 
 Because balances are numeric cells rather than formatted text, they can be sorted, filtered, summed, and used in formulas.
 
@@ -204,7 +206,7 @@ Confirm these values before comparing totals:
 - **Plan Accounts**
 - **Deduped Accounts (AGRA / AGRA CASH Pattern)**
 - **Inferred Client Plan Accounts**
-- **Total Settled Balance**
+- **Total Cash Balance**
 - **Future Settlement Cash (Review Required)**
 - **Cutoff Review Records**
 - **Historical Inference Candidates**
@@ -237,9 +239,9 @@ The VieFund replica is refreshed from production. Current balances, statuses, an
 
 The strict report applies selected current cash transaction statuses. The separate inference treats a currently Deleted cash transaction as a candidate when a linked fund or trust record changed after the simulated generation time. That timestamp does not identify which field changed, so unrelated linked changes can produce false positives. Review the candidate rows before relying on the inferred balance.
 
-### Future-settlement information is not a settled balance
+### Future-settlement information is not an automatic balance adjustment
 
-Do not add the entire **Future Settlement Cash (Review Required)** amount to the settled total. The report intentionally does not decide whether each future-settlement row appeared in a historical client report.
+Do not automatically add the entire **Future Settlement Cash (Review Required)** amount to the cash balance. Depending on the selected date basis, some future-settling cash may already be represented in that balance. The report intentionally does not decide whether each future-settlement row appeared in a historical client report.
 
 ### Account Status is current descriptive data
 

@@ -133,7 +133,7 @@
                 <table style="width: 100%; border-collapse: collapse;">
                     <thead>
                         <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">
-                            <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Date & Time</th>
+                            <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Import Started (Eastern)</th>
                             <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Type</th>
                             <th style="padding: 12px; text-align: left; font-weight: 600; color: #2d3748;">Filename</th>
                             <th style="padding: 12px; text-align: center; font-weight: 600; color: #2d3748;">Size</th>
@@ -149,7 +149,7 @@
                         @foreach($imports as $import)
                             <tr style="border-bottom: 1px solid #e2e8f0;">
                                 <td style="padding: 12px; color: #4a5568; font-family: monospace;">
-                                    {{ $import->created_at->format('Y-m-d H:i:s') }}
+                                    {{ $import->created_at->copy()->setTimezone(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T') }}
                                 </td>
                                 <td style="padding: 12px;">
                                     <span style="background: {{ $import->type == 'viefund' ? '#e6fffa' : ($import->type == 'fundserv' ? '#ebf8ff' : ($import->type == 'bank' ? '#fffaf0' : ($import->type == 'account-fees' ? '#faf5ff' : '#fef5e7'))) }}; 

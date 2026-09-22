@@ -715,7 +715,7 @@ class ReconciliationController extends Controller
 
         if ($stats === null) {
             // Never make page rendering (including the post-login redirect) wait on
-            // the remote VieFund database. The short lock also prevents a burst of
+            // the remote VieFund database. The short lock prevents a burst of
             // dashboard requests from flooding the queue while the cache is cold.
             if (Cache::add('viefund_dashboard_stats_refresh_queued', true, now()->addMinutes(5))) {
                 RefreshVieFundDashboardStats::dispatch()->onConnection('database');
@@ -724,14 +724,29 @@ class ReconciliationController extends Controller
             $statsLoading = true;
         }
 
-        $dashboardTimezone = 'America/Toronto';
-        $nextStatsRefreshAt = Carbon::now($dashboardTimezone)->startOfHour()->addHour();
+        $dashboardTimezone = config('app.display_timezone', 'America/Toronto');
+        $dashboardNow = Carbon::now($dashboardTimezone);
+        $nextStatsRefreshAt = $dashboardNow->copy()->startOfHour()->addHour();
+
+        // VieFund is supplied from a separate nightly database replication. We
+        // cannot inspect that external job, so publish its agreed 7:00 p.m.
+        // snapshot after the 7:15 p.m. confirmation window has passed.
+        $snapshotConfirmationAt = $dashboardNow->copy()->setTime(19, 15);
+        if ($dashboardNow->greaterThanOrEqualTo($snapshotConfirmationAt)) {
+            $vieFundSnapshotUpdatedAt = $dashboardNow->copy()->setTime(19, 0);
+            $nextVieFundSnapshotAt = $vieFundSnapshotUpdatedAt->copy()->addDay();
+        } else {
+            $nextVieFundSnapshotAt = $dashboardNow->copy()->setTime(19, 0);
+            $vieFundSnapshotUpdatedAt = $nextVieFundSnapshotAt->copy()->subDay();
+        }
 
         return view('reconciliations.dashboard', compact(
             'stats',
             'statsLoading',
             'statsRefreshedAt',
             'nextStatsRefreshAt',
+            'vieFundSnapshotUpdatedAt',
+            'nextVieFundSnapshotAt',
             'dashboardTimezone',
             'bankStats'
         ));

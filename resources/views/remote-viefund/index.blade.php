@@ -76,7 +76,7 @@
             <div id="sync-status-badge">
                 @if($syncInProgress)
                     <span class="sync-chip sync-chip-progress">
-                        ⟳ Transaction Sync In Progress…
+                        ⟳ Customer/Account Refresh In Progress…
                     </span>
                 @elseif($syncNeeded && $showSyncButtons)
                     <form method="POST" action="{{ route('remote-viefund.sync') }}" style="margin:0;">
@@ -91,22 +91,22 @@
                             @endif
                         @endforeach
                         <button type="submit" class="sync-action-pill sync-action-pill-secondary">
-                            ↻ Sync New Transactions
+                            ↻ Refresh Customer/Account Data
                         </button>
                     </form>
                 @elseif($syncNeeded)
                     <span class="sync-chip sync-chip-progress">
-                        Transactions Sync Needed
+                        Customer/Account Refresh Needed
                     </span>
                 @else
                     <span class="sync-chip sync-chip-success">
-                        ✓ Transactions Synced
+                        ✓ Customer/Account Data Refreshed
                     </span>
                 @endif
             </div>
             <div id="last-synced-at" style="font-size: 12px; color: #718096; white-space: nowrap;">
-                Last synced:
-                <span style="font-family: monospace; color: #4a5568;">{{ $lastSyncedAt?->timezone(config('app.timezone'))->format('M j, Y g:i A T') ?? 'Not recorded' }}</span>
+                Customer and account lookup refreshed:
+                <span style="font-family: monospace; color: #4a5568;">{{ $lastSyncedAt?->timezone(config('app.display_timezone', 'America/Toronto'))->format('M j, Y g:i A T') ?? 'Not recorded' }}</span>
             </div>
         </div>
     </div>
@@ -1620,7 +1620,7 @@ const sharedCols = [
                             location.reload();
                         } else {
                             // All caught up
-                            badge.innerHTML = '<span class="sync-chip sync-chip-success">✓ Transactions Synced</span>';
+                            badge.innerHTML = '<span class="sync-chip sync-chip-success">✓ Customer/Account Data Refreshed</span>';
                             if (lastSyncedAt && data.lastSyncedAt) {
                                 lastSyncedAt.textContent = data.lastSyncedAt;
                             }

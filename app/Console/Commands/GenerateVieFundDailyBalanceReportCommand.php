@@ -184,7 +184,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ? $this->snapshotService->completeSeries($dateFrom, $dateTo, $dateBasis, $currencyCode, $statuses)
             : null;
         $dailyMap = [];
-        $balanceSource = 'Direct Cash Ledger (Live)';
+        $balanceSource = 'Direct Cash Ledger (VieFund database)';
         $snapshotLastVerifiedAt = null;
         $changedDays = 0;
 
@@ -291,6 +291,12 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             $rows = array_reverse($rows);
         }
 
+        $snapshotLastVerifiedAtEastern = $snapshotLastVerifiedAt
+            ? \Carbon\Carbon::parse($snapshotLastVerifiedAt)
+                ->setTimezone(config('app.display_timezone', 'America/Toronto'))
+                ->format('Y-m-d H:i:s T')
+            : 'Not applicable';
+
         $metadataRows = [
             ['Report', 'VieFund Daily Net + Running Balance'],
             ['Date Basis', $dateBasisLabel],
@@ -299,9 +305,9 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ['Balance Source', $balanceSource],
             ['Cash Transaction Statuses', $statusLabel],
             ['Simulated Generation Time', $simulatedGenerationTime ? $simulatedGenerationTime . ' Eastern Time (EST/EDT)' : 'Not set'],
-            ['Snapshot Last Verified At', $snapshotLastVerifiedAt ?: 'Not applicable'],
+            ['Snapshot Last Verified At (Eastern)', $snapshotLastVerifiedAtEastern],
             ['Unreviewed Changed Days', $format === 'excel' ? $changedDays : number_format($changedDays)],
-            ['Generated At', now()->toDateTimeString()],
+            ['Generated At (Eastern)', now(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T')],
             ['Opening Balance', $format === 'excel' ? $openingBalance : $this->formatAccountingCurrency($openingBalance)],
             ['Final Balance', $format === 'excel' ? $finalBalance : $this->formatAccountingCurrency($finalBalance)],
         ];

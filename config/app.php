@@ -8,6 +8,9 @@ return [
     'debug' => (bool) env('APP_DEBUG', false),
     'url' => env('APP_URL', 'http://localhost'),
     'timezone' => env('APP_TIMEZONE', 'UTC'),
+    // User-facing operational timestamps are shown in the client's Eastern
+    // business timezone, independently of the server's storage timezone.
+    'display_timezone' => env('DISPLAY_TIMEZONE', 'America/Toronto'),
     'locale' => env('APP_LOCALE', 'en'),
     'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
     'faker_locale' => env('APP_FAKER_LOCALE', 'en_US'),

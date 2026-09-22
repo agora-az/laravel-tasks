@@ -7,7 +7,7 @@
     <div class="docs-page-header">
         <div>
             <h2>Documentation</h2>
-            <p>Reference guides, report criteria, and VieFund integration notes.</p>
+            <p>Reference guides, scheduled operations, report criteria, and VieFund integration notes.</p>
         </div>
     </div>
 

@@ -72,6 +72,23 @@ class TransactionReconciliationController extends Controller
             'status.*' => ['integer', 'between:0,6'],
         ])->validate();
 
+        $inceptionDates = [];
+        foreach (array_keys(self::DATE_BASIS_OPTIONS) as $dateBasis) {
+            $inceptionDates[$dateBasis] = $this->resolveInceptionDate($dateBasis);
+        }
+
+        $viewData = [
+            'filters' => $filters,
+            'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
+            'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
+            'statusOptions' => self::STATUS_OPTIONS,
+            'inceptionDates' => $inceptionDates,
+        ];
+
+        if (!$request->boolean('_results')) {
+            return view('reconciliations.transactions', $viewData);
+        }
+
         $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
         $dateTo = Carbon::parse($filters['date_to'])->startOfDay();
         $openedBefore = $filters['opened_before']
@@ -90,19 +107,10 @@ class TransactionReconciliationController extends Controller
             $filters['output_order'],
         );
 
-        $inceptionDates = [];
-        foreach (array_keys(self::DATE_BASIS_OPTIONS) as $dateBasis) {
-            $inceptionDates[$dateBasis] = $this->resolveInceptionDate($dateBasis);
-        }
-
-        return view('reconciliations.transactions', [
+        return view('reconciliations.partials.transaction-results', [
             'rows' => $report['rows'],
             'report' => $report,
             'filters' => $filters,
-            'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
-            'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
-            'statusOptions' => self::STATUS_OPTIONS,
-            'inceptionDates' => $inceptionDates,
         ]);
     }
 

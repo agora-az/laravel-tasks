@@ -565,7 +565,7 @@
                         <th style="padding:8px;">Basis</th>
                         <th style="padding:8px; text-align:right;">Count Δ</th>
                         <th style="padding:8px; text-align:right;">Net Δ</th>
-                        <th style="padding:8px;">Detected</th>
+                        <th style="padding:8px;">Detected (Eastern)</th>
                         <th style="padding:8px;"></th>
                     </tr>
                 </thead>
@@ -576,7 +576,7 @@
                             <td style="padding:8px;">{{ $dateBasisOptions[$change->snapshot->date_basis] ?? $change->snapshot->date_basis }}</td>
                             <td style="padding:8px; text-align:right; font-family:monospace;">{{ number_format($change->transaction_count_delta) }}</td>
                             <td style="padding:8px; text-align:right; font-family:monospace;">{{ $change->net_total_delta < 0 ? '(' : '' }}${{ number_format(abs((float) $change->net_total_delta), 2) }}{{ $change->net_total_delta < 0 ? ')' : '' }}</td>
-                            <td style="padding:8px; font-family:monospace;">{{ $change->detected_at->format('Y-m-d H:i') }}</td>
+                            <td style="padding:8px; font-family:monospace;">{{ $change->detected_at->copy()->setTimezone(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i T') }}</td>
                             <td style="padding:8px; text-align:right;">
                                 <form method="POST" action="{{ route('reports.viefund-cash-snapshots.acknowledge', $change->snapshot) }}">
                                     @csrf

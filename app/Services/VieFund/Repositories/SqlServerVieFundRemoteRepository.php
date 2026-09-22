@@ -1311,6 +1311,16 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoinSub($cashBalances, 'cash_balances', 'cash_balances.plan_id', '=', 'plans.plan_id')
             ->leftJoinSub($futureSettlementCash, 'future_settlement_cash', 'future_settlement_cash.plan_id', '=', 'plans.plan_id');
 
+        $search = trim((string) ($filters['search'] ?? ''));
+        if ($search !== '') {
+            $searchPattern = '%' . $search . '%';
+            $query->where(function ($searchQuery) use ($searchPattern) {
+                $searchQuery->where('plans.client_name', 'like', $searchPattern)
+                    ->orWhere('plans.plan_account_id', 'like', $searchPattern)
+                    ->orWhere('plans.account_id', 'like', $searchPattern);
+            });
+        }
+
         $query->selectRaw("\n            plans.client_name,\n            COALESCE(cash_balances.rep_code, '') AS rep_code,\n            plans.plan_account_id,\n            COALESCE(plans.account_id, plans.plan_account_id) AS account_id,\n            COALESCE(plans.account_status, '') AS account_status,
             CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_transaction_count, 0) ELSE 0 END AS cash_transaction_count,
             CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_ledger_balance, 0) ELSE 0 END AS cash_ledger_balance,
@@ -1320,11 +1330,30 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             CASE WHEN plans.cash_account_rank = 1 THEN future_settlement_cash.next_settlement_date ELSE NULL END AS next_settlement_date
         ");
 
-        return $query
+        $sortColumns = [
+            'plan_account_id' => 'plans.plan_account_id',
+            'client_name' => 'plans.client_name',
+            'account_status' => 'account_status',
+            'cash_transaction_count' => 'cash_transaction_count',
+            'total_balance' => 'total_balance',
+            'future_settlement_transaction_count' => 'future_settlement_transaction_count',
+            'future_settlement_cash' => 'future_settlement_cash',
+            'next_settlement_date' => 'next_settlement_date',
+        ];
+        $sort = (string) ($filters['sort'] ?? 'plan_account_id');
+        $sortColumn = $sortColumns[$sort] ?? $sortColumns['plan_account_id'];
+        $sortDirection = strtolower((string) ($filters['sort_dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+
+        $query
             ->selectRaw('CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_ledger_balance, 0) ELSE 0 END AS total_balance')
             ->selectRaw('plans.plan_id, plans.cash_account_row_id, plans.cash_account_rank')
-            ->orderBy('plans.plan_account_id')
-            ->orderBy('plans.cash_account_rank');
+            ->orderBy($sortColumn, $sortDirection);
+
+        if ($sortColumn !== 'plans.plan_account_id') {
+            $query->orderBy('plans.plan_account_id');
+        }
+
+        return $query->orderBy('plans.cash_account_rank');
     }
 
     public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection

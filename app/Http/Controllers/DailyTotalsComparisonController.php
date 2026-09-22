@@ -69,6 +69,17 @@ class DailyTotalsComparisonController extends Controller
             : 'total_date';
         $sortDir = $request->query('sort_dir') === 'asc' ? 'asc' : 'desc';
 
+        if (!$request->boolean('_results')) {
+            return view('reconciliations.daily-totals', compact(
+                'dateFrom',
+                'dateTo',
+                'sortField',
+                'sortDir',
+                'perPage',
+                'include3000Sequences',
+            ));
+        }
+
         $bankRows = DB::table('bank_statement_entries')
             ->leftJoin('bank_statement_entry_analyses as a', function ($join) {
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
@@ -223,7 +234,7 @@ class DailyTotalsComparisonController extends Controller
             ]
         );
 
-        return view('reconciliations.daily-totals', compact(
+        return view('reconciliations.partials.daily-totals-results', compact(
             'rows',
             'summary',
             'dateFrom',
@@ -262,6 +273,18 @@ class DailyTotalsComparisonController extends Controller
             'variance',
         ], true) ? $request->query('sort') : 'total_date';
         $sortDir = $request->query('sort_dir') === 'asc' ? 'asc' : 'desc';
+
+        if (!$request->boolean('_results')) {
+            return view('reconciliations.bank-fsp', compact(
+                'dateFrom',
+                'dateTo',
+                'sortField',
+                'sortDir',
+                'perPage',
+                'source',
+                'sourceLabel',
+            ));
+        }
 
         $bankByDate = DB::table('bank_statement_entries as b')
             ->join('bank_statement_entry_analyses as a', function ($join) {
@@ -337,7 +360,7 @@ class DailyTotalsComparisonController extends Controller
             ['path' => route('reconciliations.bank-fsp.source', ['source' => $source]), 'query' => $request->query()]
         );
 
-        return view('reconciliations.bank-fsp', compact(
+        return view('reconciliations.partials.bank-fsp-results', compact(
             'dateFrom',
             'dateTo',
             'rows',

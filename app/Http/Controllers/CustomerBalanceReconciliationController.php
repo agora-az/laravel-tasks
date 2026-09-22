@@ -26,6 +26,17 @@ class CustomerBalanceReconciliationController extends Controller
         6 => 'Confirmed',
     ];
 
+    private const SORT_OPTIONS = [
+        'plan_account_id',
+        'client_name',
+        'account_status',
+        'cash_transaction_count',
+        'total_balance',
+        'future_settlement_transaction_count',
+        'future_settlement_cash',
+        'next_settlement_date',
+    ];
+
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService,
     ) {}
@@ -44,6 +55,9 @@ class CustomerBalanceReconciliationController extends Controller
             'currency' => $request->query('currency', 'CAD'),
             'opened_before' => trim((string) $request->query('opened_before', '')) ?: null,
             'status' => $statuses,
+            'search' => trim((string) $request->query('search', '')) ?: null,
+            'sort' => $request->query('sort', 'plan_account_id'),
+            'sort_dir' => $request->query('sort_dir', 'asc'),
         ], [
             'report_date' => ['required', 'date', 'before_or_equal:today'],
             'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
@@ -51,11 +65,26 @@ class CustomerBalanceReconciliationController extends Controller
             'opened_before' => ['nullable', 'date', 'before_or_equal:now'],
             'status' => ['required', 'array'],
             'status.*' => ['integer', 'between:0,6'],
+            'search' => ['nullable', 'string', 'max:120'],
+            'sort' => ['required', 'in:' . implode(',', self::SORT_OPTIONS)],
+            'sort_dir' => ['required', 'in:asc,desc'],
         ])->validate();
 
         $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
             ? (int) $request->query('per_page', 100)
             : 100;
+
+        $viewData = [
+            'filters' => $filters,
+            'perPage' => $perPage,
+            'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
+            'statusOptions' => self::STATUS_OPTIONS,
+        ];
+
+        if (!$request->boolean('_results')) {
+            return view('reconciliations.customer-balances', $viewData);
+        }
+
         $page = max(1, (int) $request->query('page', 1));
         $openedBefore = $filters['opened_before']
             ? Carbon::parse($filters['opened_before'], config('viefund.simulated_report_timezone', 'America/Toronto'))
@@ -71,19 +100,22 @@ class CustomerBalanceReconciliationController extends Controller
         $result = $this->vieFundRemoteService->fetchCustomerBalancesPageByDate(
             Carbon::parse($filters['report_date'])->startOfDay(),
             $filters['date_basis'],
-            ['status_ids' => $filters['status']],
+            [
+                'status_ids' => $filters['status'],
+                'search' => $filters['search'],
+                'sort' => $filters['sort'],
+                'sort_dir' => $filters['sort_dir'],
+            ],
             $perPage,
             $page,
         );
         $balances = $result['items']->withQueryString();
 
-        return view('reconciliations.customer-balances', [
+        return view('reconciliations.partials.customer-balance-results', [
             'balances' => $balances,
             'summary' => $result['summary'],
             'filters' => $filters,
             'perPage' => $perPage,
-            'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
-            'statusOptions' => self::STATUS_OPTIONS,
         ]);
     }
 }

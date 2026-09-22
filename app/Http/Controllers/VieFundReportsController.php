@@ -40,6 +40,17 @@ class VieFundReportsController extends Controller
         'settlement_date' => 'se',
     ];
 
+    private const CUSTOMER_BALANCE_SORT_OPTIONS = [
+        'plan_account_id' => 'Plan Account ID',
+        'client_name' => 'Client Name',
+        'account_status' => 'Account Status',
+        'cash_transaction_count' => 'Cash Transactions',
+        'total_balance' => 'Cash Balance',
+        'future_settlement_transaction_count' => 'Future Settlement Transactions',
+        'future_settlement_cash' => 'Future Settlement Cash',
+        'next_settlement_date' => 'Next Settlement Date',
+    ];
+
     private const DATE_BASIS_INCEPTION_ENV_KEYS = [
         'create_date' => 'VIEFUND_REPORT_INCEPTION_CREATE_DATE',
         'trade_date' => 'VIEFUND_REPORT_INCEPTION_TRADE_DATE',
@@ -235,7 +246,7 @@ class VieFundReportsController extends Controller
                 'Previous Net',
                 'New Net',
                 'Net Delta',
-                'Detected At',
+                'Detected At (Eastern)',
                 'Run Type',
                 'Run ID',
                 'Algorithm Version',
@@ -251,7 +262,9 @@ class VieFundReportsController extends Controller
                     number_format((float) $change->previous_net_total, 4, '.', ''),
                     number_format((float) $change->new_net_total, 4, '.', ''),
                     number_format((float) $change->net_total_delta, 4, '.', ''),
-                    $change->detected_at->format('Y-m-d H:i:s'),
+                    $change->detected_at->copy()
+                        ->setTimezone(config('app.display_timezone', 'America/Toronto'))
+                        ->format('Y-m-d H:i:s T'),
                     $change->run?->run_type ?? '',
                     $change->run_id,
                     $change->algorithm_version,
@@ -342,6 +355,15 @@ class VieFundReportsController extends Controller
         $outputOrderLabel = self::OUTPUT_ORDER_OPTIONS[$outputOrder];
         $statusLabel = $this->describeStatuses($statuses);
 
+        $snapshotLastVerifiedAt = $report['snapshot_last_verified_at']
+            ? Carbon::parse($report['snapshot_last_verified_at'])
+                ->setTimezone(config('app.display_timezone', 'America/Toronto'))
+                ->format('Y-m-d H:i:s T')
+            : 'Not applicable';
+        $generatedAt = now()
+            ->setTimezone(config('app.display_timezone', 'America/Toronto'))
+            ->format('Y-m-d H:i:s T');
+
         $metadataRows = [
             ['Report', 'VieFund Daily Net + Running Balance'],
             ['Date Basis', $dateBasisLabel],
@@ -350,9 +372,9 @@ class VieFundReportsController extends Controller
             ['Balance Source', $report['balance_source']],
             ['Cash Transaction Statuses', $statusLabel],
             ['Simulated Generation Time', $openedBefore ? $openedBefore . ' Eastern Time (EST/EDT)' : 'Not set'],
-            ['Snapshot Last Verified At', $report['snapshot_last_verified_at'] ?? 'Not applicable'],
+            ['Snapshot Last Verified At (Eastern)', $snapshotLastVerifiedAt],
             ['Unreviewed Changed Days', $report['changed_days']],
-            ['Generated At', now()->toDateTimeString()],
+            ['Generated At (Eastern)', $generatedAt],
             ['Opening Balance', $openingBalance],
             ['Final Balance', $finalBalance],
         ];
@@ -471,7 +493,7 @@ class VieFundReportsController extends Controller
             ['Trust Statuses', $trustStatusLabel],
             ['Opening Balance Method', 'Zero at selected start date'],
             ['Snapshot Cache', 'Not used'],
-            ['Generated At', now()->toDateTimeString()],
+            ['Generated At (Eastern)', now(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T')],
             ['Opening Balance', 0.0],
             ['Final Balance', $runningBalance],
         ];
@@ -745,6 +767,9 @@ class VieFundReportsController extends Controller
             'customer_balance_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
             'customer_balance_currency_code' => ['required', 'in:CAD,USD'],
             'customer_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
+            'customer_balance_search' => ['nullable', 'string', 'max:120'],
+            'customer_balance_sort' => ['nullable', 'in:' . implode(',', array_keys(self::CUSTOMER_BALANCE_SORT_OPTIONS))],
+            'customer_balance_sort_dir' => ['nullable', 'in:asc,desc'],
             'format' => ['required', 'in:csv,excel'],
         ]);
 
@@ -782,6 +807,9 @@ class VieFundReportsController extends Controller
             $openedBefore = $this->parseSimulatedReportTime((string) $validated['customer_balance_opened_before']);
         }
         $format = $validated['format'];
+        $search = trim((string) ($validated['customer_balance_search'] ?? ''));
+        $sort = (string) ($validated['customer_balance_sort'] ?? 'plan_account_id');
+        $sortDirection = (string) ($validated['customer_balance_sort_dir'] ?? 'asc');
 
         $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputFileName = sprintf(
@@ -809,6 +837,8 @@ class VieFundReportsController extends Controller
             'cash_currency_code' => $currencyCode ?: 'Not set',
             'cash_currency_label' => $this->customerBalanceCurrencyLabelFromCode($currencyCode) ?: 'Not set',
             'cash_opened_before' => $openedBefore ?: 'Not set',
+            'search' => $search !== '' ? $search : 'None',
+            'sort' => self::CUSTOMER_BALANCE_SORT_OPTIONS[$sort] . ' (' . ($sortDirection === 'asc' ? 'Ascending' : 'Descending') . ')',
             'format' => strtoupper($format),
             'processed_accounts' => 0,
             'total_accounts' => null,
@@ -838,7 +868,7 @@ class VieFundReportsController extends Controller
         $envPrefix = $envAssignments ? implode(' ', $envAssignments) . ' ' : '';
 
         $command = sprintf(
-            '%s%s %s report:viefund-customer-balances --report-date=%s --date-basis=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-customer-balances --report-date=%s --date-basis=%s %s %s --search=%s --sort=%s --sort-dir=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
@@ -846,6 +876,9 @@ class VieFundReportsController extends Controller
             escapeshellarg($dateBasis),
             $statusArgs,
             $trustStatusArgs,
+            escapeshellarg($search),
+            escapeshellarg($sort),
+            escapeshellarg($sortDirection),
             escapeshellarg($format),
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
@@ -853,7 +886,13 @@ class VieFundReportsController extends Controller
             escapeshellarg($logPath)
         );
 
-        Log::info('Dispatching background VieFund customer balances report: ' . $command);
+        Log::info('Dispatching background VieFund customer balances report.', [
+            'report_date' => $reportDate,
+            'date_basis' => $dateBasis,
+            'has_search' => $search !== '',
+            'sort' => $sort,
+            'sort_direction' => $sortDirection,
+        ]);
 
         $descriptorspec = [
             0 => ['pipe', 'r'],

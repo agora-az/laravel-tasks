@@ -3,22 +3,48 @@
 @section('title', 'Dashboard')
 
 @section('content')
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;margin-bottom:30px;">
+    <div style="margin-bottom:18px;">
         <h2 style="margin:0;">Dashboard</h2>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
-            <span>
-                <strong>VieFund data:</strong>
-                {{ $statsRefreshedAt ? \Carbon\Carbon::parse($statsRefreshedAt)->setTimezone($dashboardTimezone)->format('M j, Y g:i A T') : 'Waiting for first update' }}
-            </span>
-            <span><strong>Next update:</strong> {{ $nextStatsRefreshAt->format('M j, Y g:i A T') }}</span>
+    </div>
+
+    <div class="dashboard-status-grid" aria-label="Dashboard and VieFund update status">
+        <div class="dashboard-status-card dashboard-status-card-teal">
+            <div class="dashboard-status-heading"><span class="dashboard-status-dot"></span>Dashboard Summary</div>
+            <div class="dashboard-status-value">
+                {{ $statsRefreshedAt ? \Carbon\Carbon::parse($statsRefreshedAt)->setTimezone($dashboardTimezone)->format('M j, Y g:i A T') : 'Waiting for first refresh' }}
+            </div>
+            <div class="dashboard-status-note">Application totals last refreshed</div>
+        </div>
+
+        <div class="dashboard-status-card dashboard-status-card-blue">
+            <div class="dashboard-status-heading"><span class="dashboard-status-dot"></span>Next Summary Refresh</div>
+            <div class="dashboard-status-value">{{ $nextStatsRefreshAt->format('M j, Y g:i A T') }}</div>
+            <div class="dashboard-status-note">Hourly application schedule</div>
+        </div>
+
+        <div class="dashboard-status-card dashboard-status-card-purple">
+            <div class="dashboard-status-heading"><span class="dashboard-status-dot"></span>VieFund Data Snapshot</div>
+            <div class="dashboard-status-value">{{ $vieFundSnapshotUpdatedAt->format('M j, Y g:i A T') }}</div>
+            <div class="dashboard-status-note">Nightly database replication</div>
+        </div>
+
+        <div class="dashboard-status-card dashboard-status-card-amber">
+            <div class="dashboard-status-heading"><span class="dashboard-status-dot"></span>Next VieFund Snapshot</div>
+            <div class="dashboard-status-value">{{ $nextVieFundSnapshotAt->format('M j, Y g:i A T') }}</div>
+            <div class="dashboard-status-note">Expected nightly replication</div>
         </div>
     </div>
 
     @if($statsLoading)
         <div style="background:#ebf8ff;border:1px solid #90cdf4;border-radius:8px;padding:20px;color:#2c5282;margin-bottom:30px;">
-            Remote VieFund statistics are loading in the background. The rest of the dashboard is ready to use.
+            The dashboard summary refresh is queued in the background. The rest of the dashboard is ready to use.
+            @env('local')
+                Make sure the local queue listener is running.
+            @endenv
         </div>
-    @elseif($stats)
+    @endif
+
+    @if($stats)
 
     <div style="background:white;padding:25px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:30px;">
         <h3 style="margin:0 0 16px;color:#2d3748;font-size:15px;">Remote VieFund Overview</h3>

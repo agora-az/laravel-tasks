@@ -32,6 +32,16 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         'transaction_rollup' => 'Direct Cash Ledger',
         'cash_snapshot' => 'Cash Snapshot',
     ];
+    private const SORT_LABELS = [
+        'plan_account_id' => 'Plan Account ID',
+        'client_name' => 'Client Name',
+        'account_status' => 'Account Status',
+        'cash_transaction_count' => 'Cash Transactions',
+        'total_balance' => 'Cash Balance',
+        'future_settlement_transaction_count' => 'Future Settlement Transactions',
+        'future_settlement_cash' => 'Future Settlement Cash',
+        'next_settlement_date' => 'Next Settlement Date',
+    ];
 
     protected $signature = 'report:viefund-customer-balances
         {--report-date= : Report date (YYYY-MM-DD)}
@@ -39,6 +49,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         {--status=* : Fund status IDs 0-6}
         {--trust-status=* : Trust status names (Deleted|Unsettled|Settled). Empty excludes trust}
         {--balance-source=transaction_rollup : transaction_rollup|cash_snapshot}
+        {--search= : Filter by client name, plan account ID, or cash account ID}
+        {--sort=plan_account_id : Column used to order the exported result set}
+        {--sort-dir=asc : asc|desc}
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
@@ -86,6 +99,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $statuses = $this->resolveStatuses($this->option('status'));
         $trustStatuses = $this->resolveTrustStatuses($this->option('trust-status'));
         $balanceSource = $this->resolveString($this->option('balance-source')) ?? 'transaction_rollup';
+        $search = trim((string) ($this->resolveString($this->option('search')) ?? ''));
+        $sort = $this->resolveString($this->option('sort')) ?? 'plan_account_id';
+        $sortDirection = strtolower($this->resolveString($this->option('sort-dir')) ?? 'asc');
         $format = $this->resolveString($this->option('format')) ?? 'csv';
         $outputRelativePath = $this->resolveString($this->option('output-file'));
 
@@ -109,11 +125,18 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             return self::FAILURE;
         }
 
+        if (!isset(self::SORT_LABELS[$sort]) || !in_array($sortDirection, ['asc', 'desc'], true)) {
+            $this->error('Invalid customer balance sort options.');
+            return self::FAILURE;
+        }
+
         $reportDate = Carbon::parse($reportDateRaw)->startOfDay();
         $dateBasisLabel = self::DATE_BASIS_LABELS[$dateBasis];
         $statusLabel = $this->describeStatuses($statuses);
         $trustLabel = $trustStatuses ? implode(', ', $trustStatuses) : 'Excluded';
         $simulatedGenerationTime = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', ''));
+        $currencyCode = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '00'));
+        $currencyLabel = $currencyCode === '01' ? 'USD' : 'CAD';
 
         $outputRelativePath = ltrim($outputRelativePath, '/');
         if (!str_starts_with($outputRelativePath, 'reports/')) {
@@ -137,6 +160,8 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'date_basis' => $dateBasisLabel,
             'status' => $statusLabel,
             'trust_status' => $trustLabel,
+            'search' => $search !== '' ? $search : 'None',
+            'sort' => self::SORT_LABELS[$sort] . ' (' . ($sortDirection === 'asc' ? 'Ascending' : 'Descending') . ')',
             'format' => strtoupper($format),
             'processed_accounts' => 0,
             'total_accounts' => null,
@@ -149,6 +174,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $balances = $this->vieFundRemoteService->fetchCustomerBalancesByDate($reportDate, $dateBasis, [
             'status_ids' => $statuses,
             'trust_status_names' => $trustStatuses,
+            'search' => $search,
+            'sort' => $sort,
+            'sort_dir' => $sortDirection,
         ]);
         $cutoffReview = collect();
         if ($balanceSource === 'transaction_rollup' && $simulatedGenerationTime !== '') {
@@ -156,6 +184,28 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                 'cutoff' => $simulatedGenerationTime,
                 'status_ids' => $statuses,
             ]);
+        }
+
+        if ($search !== '' && $cutoffReview->isNotEmpty()) {
+            $includedPlanAccounts = $balances
+                ->pluck('plan_account_id')
+                ->map(fn($value) => $this->normalizeAccountIdentifier((string) $value))
+                ->filter()
+                ->flip();
+            $includedCashAccounts = $balances
+                ->pluck('account_id')
+                ->map(fn($value) => $this->normalizeAccountIdentifier((string) $value))
+                ->filter()
+                ->flip();
+            $cutoffReview = $cutoffReview
+                ->filter(function ($row) use ($includedPlanAccounts, $includedCashAccounts): bool {
+                    $planAccountId = $this->normalizeAccountIdentifier((string) ($row->plan_account_id ?? ''));
+                    $cashAccountId = $this->normalizeAccountIdentifier((string) ($row->account_id ?? ''));
+
+                    return $includedPlanAccounts->has($planAccountId)
+                        || $includedCashAccounts->has($cashAccountId);
+                })
+                ->values();
         }
 
         $cashSnapshotByAccountId = collect();
@@ -250,13 +300,16 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ['Plan Accounts (Distinct)', $format === 'excel' ? $totalPlanAccounts : number_format($totalPlanAccounts)],
             ['Duplicate Cash Account Rows (Included)', $format === 'excel' ? $duplicateAccountRowCount : number_format($duplicateAccountRowCount)],
             ['Reported Account Rows', $format === 'excel' ? $totalAccounts : number_format($totalAccounts)],
-            ['Generated At', now()->toDateTimeString()],
-            ['Total Settled Balance', $format === 'excel' ? $totalBalance : $this->formatAccountingCurrency($totalBalance)],
+            ['Generated At (Eastern)', now(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T')],
+            ['Total Cash Balance', $format === 'excel' ? $totalBalance : $this->formatAccountingCurrency($totalBalance)],
             ['Future Settlement Cash (Review Required)', $format === 'excel' ? $totalFutureSettlementCash : $this->formatAccountingCurrency($totalFutureSettlementCash)],
             ['Cutoff Review Records', $format === 'excel' ? $cutoffReview->count() : number_format($cutoffReview->count())],
             ['Historical Inference Candidates', $format === 'excel' ? $historicalInferenceCandidates->count() : number_format($historicalInferenceCandidates->count())],
             ['Historical Inference Adjustment (Review Required)', $format === 'excel' ? $historicalInferenceAdjustment : $this->formatAccountingCurrency($historicalInferenceAdjustment)],
             ['Inferred Client Balance (Review Required)', $format === 'excel' ? $inferredClientBalance : $this->formatAccountingCurrency($inferredClientBalance)],
+            ['Search Filter', $search !== '' ? $search : 'None'],
+            ['Sort Order', self::SORT_LABELS[$sort] . ' (' . ($sortDirection === 'asc' ? 'Ascending' : 'Descending') . ')'],
+            ['Currency', $currencyLabel],
         ];
 
         $reviewHeaders = [
@@ -312,10 +365,10 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'Client Name',
             'Rep Code',
             'Plan Account ID',
-            'Account ID',
+            'Cash Account ID',
             'Account Status',
             'Cash Transactions',
-            'Settled Balance (CAD)',
+            'Cash Balance (' . $currencyLabel . ')',
             'Future Settlement Transactions',
             'Future Settlement Cash (Info)',
             'Next Settlement Date',
@@ -352,6 +405,8 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'date_basis' => $dateBasisLabel,
             'status' => $statusLabel,
             'trust_status' => $trustLabel,
+            'search' => $search !== '' ? $search : 'None',
+            'sort' => self::SORT_LABELS[$sort] . ' (' . ($sortDirection === 'asc' ? 'Ascending' : 'Descending') . ')',
             'format' => strtoupper($format),
             'processed_accounts' => $totalAccounts,
             'total_accounts' => $totalAccounts,

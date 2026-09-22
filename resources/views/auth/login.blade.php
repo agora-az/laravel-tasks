@@ -49,7 +49,7 @@
             margin-bottom: 8px;
             font-size: 14px;
         }
-        input[type="text"],
+        input[type="email"],
         input[type="password"] {
             width: 100%;
             padding: 12px 14px;
@@ -58,7 +58,7 @@
             font-size: 14px;
             transition: all 0.3s ease;
         }
-        input[type="text"]:focus,
+        input[type="email"]:focus,
         input[type="password"]:focus {
             outline: none;
             border-color: #38a169;
@@ -139,16 +139,17 @@
             @csrf
             
             <div class="form-group">
-                <label for="username">Username</label>
+                <label for="email">Email Address</label>
                 <input 
-                    type="text" 
-                    id="username" 
-                    name="username" 
-                    value="{{ old('username') }}"
+                    type="email"
+                    id="email"
+                    name="email"
+                    value="{{ old('email') }}"
+                    autocomplete="username"
                     autofocus
                     required
                 >
-                @error('username')
+                @error('email')
                     <span style="color: #c53030; font-size: 12px; margin-top: 4px; display: block;">{{ $message }}</span>
                 @enderror
             </div>
@@ -159,6 +160,7 @@
                     type="password" 
                     id="password" 
                     name="password"
+                    autocomplete="current-password"
                     required
                 >
                 @error('password')

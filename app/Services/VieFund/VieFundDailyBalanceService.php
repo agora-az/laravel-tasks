@@ -111,7 +111,7 @@ class VieFundDailyBalanceService
             'rows' => $rows,
             'opening_balance' => $openingBalance,
             'final_balance' => $runningBalance,
-            'balance_source' => $snapshotResult ? 'Audited Daily Cash Snapshots' : 'Direct Cash Ledger (Live)',
+            'balance_source' => $snapshotResult ? 'Audited Daily Cash Snapshots' : 'Direct Cash Ledger (VieFund database)',
             'uses_snapshots' => $snapshotResult !== null,
             'snapshot_last_verified_at' => $snapshotResult['last_verified_at'] ?? null,
             'changed_days' => (int) ($snapshotResult['changed_days'] ?? 0),

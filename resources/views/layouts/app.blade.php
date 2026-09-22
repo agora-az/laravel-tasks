@@ -6,6 +6,23 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', config('app.name'))</title>
     <link rel="stylesheet" href="{{ asset('css/app.css') }}?v={{ filemtime(public_path('css/app.css')) }}">
+    <script>
+        window.applicationDisplayTimeZone = @json(config('app.display_timezone', 'America/Toronto'));
+        window.formatOperationalDateTime = (value) => {
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return value;
+
+            return date.toLocaleString('en-CA', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+                timeZone: window.applicationDisplayTimeZone,
+                timeZoneName: 'short',
+            });
+        };
+    </script>
 </head>
 <body>
     <header>
@@ -52,6 +69,7 @@
                     @if(!in_array('reconciliation', config('app.nav_hide')))
                     <a href="/reconciliations/matches">Matches</a>
                     @endif
+                    <span class="top-nav-user">{{ auth()->user()->name }}</span>
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="top-nav-logout-btn">Logout</button>

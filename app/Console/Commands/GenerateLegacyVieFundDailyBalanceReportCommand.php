@@ -214,7 +214,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
             ['Trust Statuses', $trustLabel],
             ['Opening Balance Method', 'Zero at selected start date'],
             ['Snapshot Cache', 'Not used'],
-            ['Generated At', now()->toDateTimeString()],
+            ['Generated At (Eastern)', now(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T')],
             ['Opening Balance', $format === 'excel' ? 0.0 : $this->formatCurrency(0.0)],
             ['Final Balance', $format === 'excel' ? $runningBalance : $this->formatCurrency($runningBalance)],
         ];

@@ -11,7 +11,7 @@ class DocumentationController extends Controller
     private const CATEGORIES = [
         'customer' => [
             'label' => 'Customer / End User',
-            'description' => 'Guides for running reports and understanding their output.',
+            'description' => 'Guides for scheduled updates, running reports, and understanding their output.',
         ],
         'technical' => [
             'label' => 'Technical',
@@ -20,6 +20,12 @@ class DocumentationController extends Controller
     ];
 
     private const DOCUMENTS = [
+        'scheduled-processes' => [
+            'title' => 'Scheduled Processes Guide',
+            'description' => 'When automated updates run, what they refresh, and why they matter for reconciliation.',
+            'file' => 'scheduled_processes_guide.md',
+            'category' => 'customer',
+        ],
         'customer-balances-guide' => [
             'title' => 'Customer Balances Report Guide',
             'description' => 'Purpose, report criteria, output fields, operating instructions, and caveats.',

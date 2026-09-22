@@ -18,8 +18,8 @@
                 <div style="font-size: 18px; font-weight: bold;">{{ $import->filename }}</div>
             </div>
             <div>
-                <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">Import Date</div>
-                <div style="font-size: 18px; font-weight: bold;">{{ $import->created_at->format('Y-m-d H:i:s') }}</div>
+                <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">Import Started (Eastern)</div>
+                <div style="font-size: 18px; font-weight: bold;">{{ $import->created_at->copy()->setTimezone(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T') }}</div>
             </div>
         </div>
         <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px; text-align: center; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.2);">

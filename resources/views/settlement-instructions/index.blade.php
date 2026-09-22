@@ -19,18 +19,20 @@
         array_merge(request()->except(['source_type', 'source_file', 'agra_page', 'ltm_page', 'agra_summary_page', 'ltm_summary_page']), ['source_type' => $sourceType])
     );
 @endphp
-<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin:20px 0;flex-wrap:wrap;">
-    <div>
+<div class="sync-page-header">
+    <div class="sync-page-header-main">
         <h2 style="margin: 0;">FSP Files</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: AGRA and 7960 feeds</div>
-        <div id="settlement-sync-status-wrap" class="sync-chip sync-chip-progress" style="display:none; margin-top:8px; width:max-content; align-items:center; gap:8px;">
+        <div id="settlement-sync-status-wrap" class="sync-chip sync-chip-progress sync-page-notification" style="display:none;">
             <span id="settlement-sync-status"></span>
             <button type="button" id="settlement-sync-status-dismiss" aria-label="Dismiss FSP sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
-    <div id="settlement-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
-        <span><strong>Last sync:</strong> <span id="settlement-last-sync-time">checking…</span></span>
-        <span id="settlement-last-sync-detail">&nbsp;</span>
+    <div class="sync-page-header-meta">
+        <div id="settlement-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
+            <span><strong>Last FSP file sync:</strong> <span id="settlement-last-sync-time">checking…</span></span>
+            <span id="settlement-last-sync-detail">&nbsp;</span>
+        </div>
     </div>
 </div>
 
@@ -54,6 +56,10 @@
     const lastSyncDetail = document.getElementById('settlement-last-sync-detail');
     if (!wrap || !text) return;
 
+    let observedInProgress = false;
+    let displayObservedCompletion = false;
+    let notificationDismissed = false;
+
     const setVisible = (visible) => { wrap.style.display = visible ? 'inline-flex' : 'none'; };
     const setMessage = (message) => { text.textContent = message || ''; };
     const setBusy = (busy) => {
@@ -65,7 +71,10 @@
     };
 
     if (dismiss) {
-        dismiss.addEventListener('click', () => setVisible(false));
+        dismiss.addEventListener('click', () => {
+            notificationDismissed = true;
+            setVisible(false);
+        });
     }
 
     const poll = () => {
@@ -77,10 +86,7 @@
             .then((data) => {
                 if (lastSyncTime && lastSyncDetail) {
                     if (data.completed_at) {
-                        const completed = new Date(data.completed_at);
-                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
-                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-                        });
+                        const when = window.formatOperationalDateTime(data.completed_at);
                         const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
                         const trigger = data.trigger ? `Started via ${data.trigger}` : '';
                         lastSyncTime.textContent = when;
@@ -94,19 +100,30 @@
                     }
                 }
                 if (data.inProgress) {
+                    if (!observedInProgress) {
+                        displayObservedCompletion = false;
+                        notificationDismissed = false;
+                    }
+                    observedInProgress = true;
                     wrap.className = 'sync-chip sync-chip-progress';
-                    setVisible(true);
                     setMessage(data.message || 'FSP sync in progress...');
+                    setVisible(!notificationDismissed);
                     setBusy(true);
                     return;
                 }
 
                 setBusy(false);
-                if (data.success === true && data.initiatedByCurrentSession) {
+                if ((data.success === true || data.success === false) && observedInProgress) {
+                    observedInProgress = false;
+                    displayObservedCompletion = true;
+                    notificationDismissed = false;
+                }
+
+                if (displayObservedCompletion && !notificationDismissed && data.success === true) {
                     wrap.className = 'sync-chip sync-chip-success';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync completed.');
-                } else if (data.success === false && data.initiatedByCurrentSession) {
+                } else if (displayObservedCompletion && !notificationDismissed && data.success === false) {
                     wrap.className = 'sync-chip sync-chip-error';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync failed.');

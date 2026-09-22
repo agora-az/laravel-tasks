@@ -46,7 +46,7 @@
         </div>
     </div>
     <div id="bank-last-sync" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;color:#4a5568;font-size:12px;text-align:right;line-height:1.4;">
-        <span><strong>Last sync:</strong> <span id="bank-last-sync-time">checking…</span></span>
+        <span><strong>Last bank statement sync:</strong> <span id="bank-last-sync-time">checking…</span></span>
         <span id="bank-last-sync-detail">&nbsp;</span>
     </div>
 </div>
@@ -107,10 +107,7 @@
             .then(data => {
                 if (lastSyncTime && lastSyncDetail) {
                     if (data.completed_at) {
-                        const completed = new Date(data.completed_at);
-                        const when = Number.isNaN(completed.getTime()) ? data.completed_at : completed.toLocaleString([], {
-                            year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-                        });
+                        const when = window.formatOperationalDateTime(data.completed_at);
                         const result = data.success === true ? (data.message || 'Completed successfully') : (data.success === false ? 'Failed' : 'Completed');
                         const trigger = data.trigger ? `Started via ${data.trigger}` : '';
                         lastSyncTime.textContent = when;

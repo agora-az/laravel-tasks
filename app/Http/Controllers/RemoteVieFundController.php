@@ -419,7 +419,7 @@ class RemoteVieFundController extends Controller
         return response()->json([
             'inProgress' => $inProgress,
             'syncNeeded' => $syncNeeded,
-            'lastSyncedAt' => $lastSyncedAt?->timezone(config('app.timezone'))->format('M j, Y g:i A T'),
+            'lastSyncedAt' => $lastSyncedAt?->timezone(config('app.display_timezone', 'America/Toronto'))->format('M j, Y g:i A T'),
         ]);
     }
 

@@ -55,10 +55,28 @@ A Laravel web application for generating and managing reconciliation reports.
 Use the VS Code task "Serve Laravel Application" or run:
 
 ```bash
-php artisan serve
+bash scripts/dev.sh
 ```
 
 The application will be available at [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+The local launcher starts both the web server and the Laravel queue listener. The
+queue listener is required for background work such as dashboard-summary and
+VieFund report-date refreshes. If the web server is started separately with
+`php artisan serve`, run `php artisan queue:listen --queue=default` in a second
+terminal.
+
+## Application Logins
+
+Users sign in with their email address and password. Email matching is case-insensitive, and passwords are stored only as secure hashes. Successful and failed sign-in attempts are recorded in `login_attempts` with the user, normalized email, time, IP address, and browser user agent.
+
+Until account-management screens are added, provision or update a login from the command line:
+
+```bash
+php artisan user:provision person@example.com --name="Person Name" --generate
+```
+
+`--generate` creates an eight-character word-and-number password and displays it once. An explicit eight-character alphanumeric value can instead be supplied with `--password`.
 
 ## Usage
 
@@ -88,7 +106,9 @@ Verify file discovery without downloading, importing, or deleting files:
 php artisan settlement:sync-instructions --dry-run
 ```
 
-The scheduler runs the FSP sync daily at 23:15 in the `America/Toronto` timezone, after the Bank Entries sync. Set `SETTLEMENT_SFTP_REMOTE_PATH` if a dry run reports zero matching remote files.
+The scheduler runs the FSP sync daily at 9:45 p.m. in the `America/Toronto`
+timezone, after the bank EFT file sync and before the bank statement sync. Set
+`SETTLEMENT_SFTP_REMOTE_PATH` if a dry run reports zero matching remote files.
 
 ## Project Structure
 
