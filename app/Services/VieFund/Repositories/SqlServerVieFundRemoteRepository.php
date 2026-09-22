@@ -1155,6 +1155,53 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     public function fetchCustomerBalancesByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
     {
+        return $this->buildCustomerBalancesQuery($asOfDate, $dateColumn, $filters)->get();
+    }
+
+    /**
+     * @return array{items: LengthAwarePaginator, summary: object}
+     */
+    public function fetchCustomerBalancesPageByDate(
+        CarbonInterface $asOfDate,
+        string $dateColumn,
+        array $filters = [],
+        int $perPage = 100,
+        int $page = 1,
+    ): array {
+        $query = $this->buildCustomerBalancesQuery($asOfDate, $dateColumn, $filters);
+        $summary = DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub((clone $query)->reorder(), 'customer_balances')
+            ->selectRaw('COUNT(*) AS account_rows')
+            ->selectRaw('COUNT(DISTINCT plan_id) AS plan_accounts')
+            ->selectRaw('COALESCE(SUM(total_balance), 0) AS total_balance')
+            ->selectRaw('COALESCE(SUM(cash_transaction_count), 0) AS cash_transaction_count')
+            ->selectRaw('COALESCE(SUM(future_settlement_transaction_count), 0) AS future_settlement_transaction_count')
+            ->selectRaw('COALESCE(SUM(future_settlement_cash), 0) AS future_settlement_cash')
+            ->first();
+
+        $items = (clone $query)
+            ->forPage(max(1, $page), $perPage)
+            ->get();
+        $paginator = new LengthAwarePaginator(
+            $items,
+            (int) ($summary->account_rows ?? 0),
+            $perPage,
+            max(1, $page),
+            [
+                'path' => LengthAwarePaginator::resolveCurrentPath(),
+                'query' => LengthAwarePaginator::resolveQueryString(),
+            ]
+        );
+
+        return [
+            'items' => $paginator,
+            'summary' => $summary,
+        ];
+    }
+
+    private function buildCustomerBalancesQuery(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): \Illuminate\Database\Query\Builder
+    {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $to = $asOfDate->copy()->addDay()->startOfDay()->toDateTimeString();
         $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
@@ -1277,8 +1324,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->selectRaw('CASE WHEN plans.cash_account_rank = 1 THEN COALESCE(cash_balances.cash_ledger_balance, 0) ELSE 0 END AS total_balance')
             ->selectRaw('plans.plan_id, plans.cash_account_row_id, plans.cash_account_rank')
             ->orderBy('plans.plan_account_id')
-            ->orderBy('plans.cash_account_rank')
-            ->get();
+            ->orderBy('plans.cash_account_rank');
     }
 
     public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection

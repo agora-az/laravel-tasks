@@ -7,7 +7,7 @@ use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundCashDailySnapshotChange;
 use App\Models\VieFundCashSnapshotRun;
 use App\Jobs\RefreshVieFundReportInceptionDates;
-use App\Services\VieFund\VieFundCashSnapshotService;
+use App\Services\VieFund\VieFundDailyBalanceService;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -68,7 +68,7 @@ class VieFundReportsController extends Controller
 
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService,
-        private readonly VieFundCashSnapshotService $snapshotService
+        private readonly VieFundDailyBalanceService $dailyBalanceService,
     ) {}
 
     public function index(Request $request): View
@@ -318,72 +318,18 @@ class VieFundReportsController extends Controller
             ? $this->parseSimulatedReportTime($validated['daily_balance_opened_before'])
             : null;
         $currencyCode = $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']) ?? '00';
-        $snapshotResult = $openedBefore === null
-            ? $this->snapshotService->completeSeries($dateFrom, $dateTo, $dateBasis, $currencyCode, $statuses)
-            : null;
-        $dailyTotals = $snapshotResult
-            ? $snapshotResult['rows']->map(fn($snapshot) => (object) [
-                'total_date' => $snapshot->total_date,
-                'transaction_count' => $snapshot->transaction_count,
-                'net_total' => $snapshot->net_total,
-            ])
-            : $this->vieFundRemoteService->fetchCustomerCashDailyNetTotalsByDateColumn($dateFrom, $dateTo, $dateBasis, [
-                'status_ids' => $statuses,
-                'availability_as_of' => $dateTo->toDateString(),
-            ]);
-
-        $byDate = [];
-        foreach ($dailyTotals as $row) {
-            $key = Carbon::parse($row->total_date)->toDateString();
-            if (!isset($byDate[$key])) {
-                $byDate[$key] = [
-                    'transaction_count' => 0,
-                    'net_total' => 0.0,
-                ];
-            }
-
-            $byDate[$key]['transaction_count'] += (int) $row->transaction_count;
-            $byDate[$key]['net_total'] += (float) $row->net_total;
-        }
-
-        $rows = [];
-        if ($snapshotResult) {
-            $openingBalance = $snapshotResult['opening_balance'];
-            $endingBalance = $snapshotResult['ending_balance'];
-        } else {
-            $periodNetTotal = array_sum(array_column($byDate, 'net_total'));
-            $endingBalance = (float) $this->vieFundRemoteService
-                ->fetchCustomerBalancesByDate($dateTo, $dateBasis, ['status_ids' => $statuses])
-                ->sum(fn($row) => (float) ($row->total_balance ?? 0));
-            $openingBalance = $endingBalance - $periodNetTotal;
-        }
-        $runningBalance = $openingBalance;
-        $cursor = $dateFrom->copy();
-
-        while ($cursor->lte($dateTo)) {
-            $dateKey = $cursor->toDateString();
-            $day = $byDate[$dateKey] ?? [
-                'transaction_count' => 0,
-                'net_total' => 0.0,
-            ];
-
-            $dailyNet = (float) $day['net_total'];
-            $runningBalance += $dailyNet;
-
-            $rows[] = [
-                'report_date' => $dateKey,
-                'transaction_count' => (int) $day['transaction_count'],
-                'daily_net_transactions' => $dailyNet,
-                'running_daily_balance' => $runningBalance,
-            ];
-
-            $cursor->addDay();
-        }
-
-        $finalBalance = $runningBalance;
-        if ($outputOrder === 'desc') {
-            $rows = array_reverse($rows);
-        }
+        $report = $this->dailyBalanceService->build(
+            $dateFrom,
+            $dateTo,
+            $dateBasis,
+            $currencyCode,
+            $statuses,
+            $openedBefore,
+            $outputOrder,
+        );
+        $rows = $report['rows'];
+        $openingBalance = $report['opening_balance'];
+        $finalBalance = $report['final_balance'];
 
         $baseName = sprintf(
             'viefund_bal_report_%s-%s_%s',
@@ -401,11 +347,11 @@ class VieFundReportsController extends Controller
             ['Date Basis', $dateBasisLabel],
             ['Date Range', $dateFrom->toDateString() . ' to ' . $dateTo->toDateString()],
             ['Output Order', $outputOrderLabel],
-            ['Balance Source', $snapshotResult ? 'Audited Daily Cash Snapshots' : 'Direct Cash Ledger (Live)'],
+            ['Balance Source', $report['balance_source']],
             ['Cash Transaction Statuses', $statusLabel],
             ['Simulated Generation Time', $openedBefore ? $openedBefore . ' Eastern Time (EST/EDT)' : 'Not set'],
-            ['Snapshot Last Verified At', $snapshotResult['last_verified_at'] ?? 'Not applicable'],
-            ['Unreviewed Changed Days', $snapshotResult['changed_days'] ?? 0],
+            ['Snapshot Last Verified At', $report['snapshot_last_verified_at'] ?? 'Not applicable'],
+            ['Unreviewed Changed Days', $report['changed_days']],
             ['Generated At', now()->toDateTimeString()],
             ['Opening Balance', $openingBalance],
             ['Final Balance', $finalBalance],

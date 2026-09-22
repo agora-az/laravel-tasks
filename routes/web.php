@@ -14,6 +14,7 @@ use App\Http\Controllers\EftFileController;
 use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
 use App\Http\Controllers\TransactionReconciliationController;
+use App\Http\Controllers\CustomerBalanceReconciliationController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -85,6 +86,7 @@ Route::middleware('auth.check')->group(function () {
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
         Route::get('/transactions', [TransactionReconciliationController::class, 'index'])->name('reconciliations.transactions');
+        Route::get('/customer-balances', [CustomerBalanceReconciliationController::class, 'index'])->name('reconciliations.customer-balances');
         Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
         Route::get('/bank-fsp', [DailyTotalsComparisonController::class, 'fspIndex'])->name('reconciliations.bank-fsp');
         Route::get('/bank-fsp/{source}/{date}/compare', [DailyTotalsDrilldownController::class, 'fspComparison'])

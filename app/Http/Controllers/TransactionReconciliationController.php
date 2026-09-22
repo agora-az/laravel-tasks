@@ -2,130 +2,124 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
-use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundDailyBalanceService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
-use Illuminate\Http\RedirectResponse;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\View\View;
 
 class TransactionReconciliationController extends Controller
 {
-    private const BANK_PARSER_VERSION = 'v2';
+    private const DATE_BASIS_OPTIONS = [
+        'create_date' => 'Created date',
+        'trade_date' => 'Trade date',
+        'processing_date' => 'Processing date',
+        'settlement_date' => 'Settlement date',
+    ];
+
+    private const DATE_BASIS_INCEPTION_ENV_KEYS = [
+        'create_date' => 'VIEFUND_REPORT_INCEPTION_CREATE_DATE',
+        'trade_date' => 'VIEFUND_REPORT_INCEPTION_TRADE_DATE',
+        'processing_date' => 'VIEFUND_REPORT_INCEPTION_PROCESSING_DATE',
+        'settlement_date' => 'VIEFUND_REPORT_INCEPTION_SETTLEMENT_DATE',
+    ];
+
+    private const OUTPUT_ORDER_OPTIONS = [
+        'asc' => 'Earliest first',
+        'desc' => 'Latest first',
+    ];
+
+    private const STATUS_OPTIONS = [
+        0 => 'Deleted',
+        1 => 'Rejected',
+        2 => 'Cancelled',
+        3 => 'Pending',
+        4 => 'Accepted',
+        5 => 'Contracted',
+        6 => 'Confirmed',
+    ];
 
     public function __construct(
-        private readonly VieFundRemoteService $vieFundService,
-        private readonly SqlServerEftRemoteRepository $eftRepository,
+        private readonly VieFundDailyBalanceService $dailyBalanceService,
     ) {}
 
-    public function index(Request $request): View|RedirectResponse
+    public function index(Request $request): View
     {
-        $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
-            ? (int) $request->query('per_page', 100)
-            : 100;
-
-        if ($request->query('jump') === 'latest_eft') {
-            $location = $this->vieFundService->latestEftMatchedTransactionPage($perPage);
-            if ($location === null) {
-                return redirect()->route('reconciliations.transactions')
-                    ->with('reconciliation_notice', 'No VieFund transaction with a related EFT item was found.');
-            }
-
-            return redirect()->to(route('reconciliations.transactions', [
-                'page' => $location['page'],
-                'per_page' => $perPage,
-            ]) . '#transaction-' . $location['transaction_id']);
+        $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
+        $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
+        $statuses = array_values(array_unique(array_map('intval', (array) $request->query('status'))));
+        $statuses = array_values(array_filter($statuses, fn(int $id) => array_key_exists($id, self::STATUS_OPTIONS)));
+        if ($statuses === []) {
+            $statuses = (array) config('viefund.default_fund_status', [6]);
         }
-        if ($request->query('jump') === 'latest_bank') {
-            $sequences = DB::table('bank_statement_entry_analyses as a')
-                ->join('bank_statement_entries as b', 'b.id', '=', 'a.bank_statement_entry_id')
-                ->where('a.parser_version', self::BANK_PARSER_VERSION)
-                ->whereNotNull('a.settlement_number')
-                ->where('a.settlement_number', '<>', '')
-                ->orderByDesc('b.value_date')
-                ->orderByDesc('b.id')
-                ->limit(500)
-                ->pluck('a.settlement_number')
-                ->unique()
-                ->take(100)
-                ->values();
-            $location = $this->vieFundService->latestBankMatchedTransactionPage($sequences->all(), $perPage);
-            if ($location === null) {
-                return redirect()->route('reconciliations.transactions')
-                    ->with('reconciliation_notice', 'No VieFund transaction with a related bank statement transaction was found.');
-            }
 
-            return redirect()->to(route('reconciliations.transactions', [
-                'page' => $location['page'],
-                'per_page' => $perPage,
-            ]) . '#transaction-' . $location['transaction_id']);
-        }
-        $dateBasis = in_array($request->query('date_basis'), ['created', 'trade', 'processing', 'settlement'], true)
-            ? (string) $request->query('date_basis')
-            : 'created';
-        $transactionStatuses = collect((array) $request->query('transaction_status', []))
-            ->map(fn($status) => trim((string) $status))
-            ->filter()
-            ->unique()
-            ->values()
-            ->all();
-        $filters = array_filter([
-            'trx_id' => trim((string) $request->query('transaction_id', '')),
-            'created_from' => trim((string) $request->query('date_from', '')),
-            'created_to' => trim((string) $request->query('date_to', '')),
-            'date_basis' => $dateBasis,
-            'transaction_status' => $transactionStatuses ?: null,
-            'has_reconciliation_match' => $request->boolean('has_reconciliation_match') ? '1' : null,
-        ]);
+        $filters = validator([
+            'date_from' => $request->query('date_from', $defaultFrom),
+            'date_to' => $request->query('date_to', $defaultTo),
+            'date_basis' => $request->query('date_basis', 'settlement_date'),
+            'output_order' => $request->query('output_order', 'asc'),
+            'currency' => $request->query('currency', 'CAD'),
+            'opened_before' => trim((string) $request->query('opened_before', '')) ?: null,
+            'status' => $statuses,
+        ], [
+            'date_from' => ['required', 'date', 'before_or_equal:today'],
+            'date_to' => ['required', 'date', 'after_or_equal:date_from', 'before_or_equal:today'],
+            'date_basis' => ['required', 'in:' . implode(',', array_keys(self::DATE_BASIS_OPTIONS))],
+            'output_order' => ['required', 'in:' . implode(',', array_keys(self::OUTPUT_ORDER_OPTIONS))],
+            'currency' => ['required', 'in:CAD,USD'],
+            'opened_before' => ['nullable', 'date', 'before_or_equal:now'],
+            'status' => ['required', 'array'],
+            'status.*' => ['integer', 'between:0,6'],
+        ])->validate();
 
-        $transactions = $this->vieFundService->fetchAllTransactions(
-            $perPage,
-            max(1, (int) $request->query('page', 1)),
-            null,
-            $filters,
+        $dateFrom = Carbon::parse($filters['date_from'])->startOfDay();
+        $dateTo = Carbon::parse($filters['date_to'])->startOfDay();
+        $openedBefore = $filters['opened_before']
+            ? Carbon::parse($filters['opened_before'], config('viefund.simulated_report_timezone', 'America/Toronto'))
+                ->format('Y-m-d H:i:s')
+            : null;
+        $currencyCode = $filters['currency'] === 'USD' ? '01' : '00';
+
+        $report = $this->dailyBalanceService->build(
+            $dateFrom,
+            $dateTo,
+            $filters['date_basis'],
+            $currencyCode,
+            $filters['status'],
+            $openedBefore,
+            $filters['output_order'],
         );
 
-        $trustIds = $transactions->getCollection()->pluck('related_trust_id')->filter()->unique()->values();
-        $eftByTrustId = $this->eftRepository->itemsByLinkedIds($trustIds->all())
-            ->groupBy(fn($item) => (string) $item->linked_id);
-        $sequences = $eftByTrustId->flatten()->pluck('sequence_number')->filter()->unique()->values();
+        $inceptionDates = [];
+        foreach (array_keys(self::DATE_BASIS_OPTIONS) as $dateBasis) {
+            $inceptionDates[$dateBasis] = $this->resolveInceptionDate($dateBasis);
+        }
 
-        $bankBySequence = $sequences->isEmpty()
-            ? collect()
-            : DB::table('bank_statement_entries as b')
-                ->join('bank_statement_entry_analyses as a', function ($join) {
-                    $join->on('a.bank_statement_entry_id', '=', 'b.id')
-                        ->where('a.parser_version', self::BANK_PARSER_VERSION);
-                })
-                ->whereIn('a.settlement_number', $sequences->map(fn($value) => (string) $value)->all())
-                ->select([
-                    'b.id',
-                    'b.created_at',
-                    'b.value_date',
-                    'b.account_number',
-                    'b.credit_debit_indicator',
-                    'b.currency',
-                    'b.amount',
-                    'b.additional_info',
-                    'a.settlement_number',
-                    'a.memo_type',
-                    'a.parsed_at',
-                ])
-                ->orderByDesc('b.value_date')
-                ->orderByDesc('b.id')
-                ->get()
-                ->groupBy(fn($entry) => (string) $entry->settlement_number);
+        return view('reconciliations.transactions', [
+            'rows' => $report['rows'],
+            'report' => $report,
+            'filters' => $filters,
+            'dateBasisOptions' => self::DATE_BASIS_OPTIONS,
+            'outputOrderOptions' => self::OUTPUT_ORDER_OPTIONS,
+            'statusOptions' => self::STATUS_OPTIONS,
+            'inceptionDates' => $inceptionDates,
+        ]);
+    }
 
-        $transactions->getCollection()->each(function ($transaction) use ($eftByTrustId, $bankBySequence): void {
-            $transaction->eft_matches = $eftByTrustId->get((string) $transaction->related_trust_id, collect())->values();
-            $transaction->bank_matches = $transaction->eft_matches
-                ->flatMap(fn($eft) => $bankBySequence->get((string) $eft->sequence_number, collect()))
-                ->unique('id')
-                ->values();
-        });
+    private function resolveInceptionDate(string $dateBasis): ?string
+    {
+        $specificEnvKey = self::DATE_BASIS_INCEPTION_ENV_KEYS[$dateBasis] ?? null;
+        $configured = $specificEnvKey ? env($specificEnvKey) : null;
+        $configured = $configured ?: env('VIEFUND_REPORT_INCEPTION_DATE');
 
-        $transactionStatusOptions = $this->vieFundService->fetchTransactionStatuses();
+        if (is_string($configured) && trim($configured) !== '') {
+            try {
+                return Carbon::createFromFormat('Y-m-d', trim($configured))->toDateString();
+            } catch (\Throwable) {
+                // Fall through to the cached value refreshed by the reports workflow.
+            }
+        }
 
-        return view('reconciliations.transactions', compact('transactions', 'filters', 'perPage', 'transactionStatusOptions'));
+        return Cache::get("viefund:inception-date:{$dateBasis}");
     }
 }

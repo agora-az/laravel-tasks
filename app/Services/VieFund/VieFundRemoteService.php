@@ -97,6 +97,14 @@ class VieFundRemoteService
         return $this->repository->fetchCustomerBalancesByDate($asOfDate, $dateColumn, $filters);
     }
 
+    /**
+     * @return array{items: LengthAwarePaginator, summary: object}
+     */
+    public function fetchCustomerBalancesPageByDate(CarbonInterface $asOfDate, string $dateColumn, array $filters = [], int $perPage = 100, int $page = 1): array
+    {
+        return $this->repository->fetchCustomerBalancesPageByDate($asOfDate, $dateColumn, $filters, $perPage, $page);
+    }
+
     public function fetchCustomerBalanceCutoffReview(CarbonInterface $asOfDate, string $dateColumn, array $filters = []): Collection
     {
         return $this->repository->fetchCustomerBalanceCutoffReview($asOfDate, $dateColumn, $filters);

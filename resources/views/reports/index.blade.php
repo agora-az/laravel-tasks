@@ -269,6 +269,7 @@
     </form>
 </div>
 
+@if(false)
 <div class="card report-card" style="margin-bottom:20px; border-left:4px solid #b7791f;">
     <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; margin-bottom:6px;">
         <div style="font-size:16px; font-weight:700; color:#2d3748;">Legacy VieFund Daily Net + Running Balance</div>
@@ -378,6 +379,7 @@
         </div>
     </form>
 </div>
+@endif
 
 <div class="card report-card" style="margin-bottom: 20px;">
     <div style="font-size: 16px; font-weight: 700; color: #2d3748; margin-bottom: 6px;">VieFund Customer Balances</div>
