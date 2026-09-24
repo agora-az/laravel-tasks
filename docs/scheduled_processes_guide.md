@@ -40,6 +40,8 @@ The running daily balance is always based on activity from the applicable incept
 
 The nightly 90-day refresh captures normal recent changes efficiently. Once each week, the full-history checks look back to inception. If an older daily amount has changed, the application records the change and recalculates the running balances that follow it. This provides both timely reporting and a regular historical control.
 
+Before using stored cash snapshots, the report also confirms that the requested dates are covered by a recent completed refresh. If the applicable nightly refresh or weekly full-history verification is stale, the report automatically reads the live VieFund cash ledger instead. This prevents an old snapshot from being presented as current while preserving the faster snapshot path under normal operation.
+
 ## Import and refresh safeguards
 
 The scheduled processes include controls intended to protect the completeness and consistency of the accounting data:

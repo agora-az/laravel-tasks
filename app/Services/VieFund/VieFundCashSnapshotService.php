@@ -31,6 +31,10 @@ class VieFundCashSnapshotService
             return null;
         }
 
+        if (!$this->hasFreshRunCoverage($criteriaKey, $fromDate, $toDate)) {
+            return null;
+        }
+
         $firstDateValue = VieFundCashDailySnapshot::where('criteria_key', $criteriaKey)->min('total_date');
         $lastDateValue = VieFundCashDailySnapshot::where('criteria_key', $criteriaKey)->max('total_date');
         if (!$firstDateValue || !$lastDateValue) {
@@ -90,5 +94,61 @@ class VieFundCashSnapshotService
             'changed_days' => $rows->where('has_unreviewed_change', true)->count(),
             'last_verified_at' => $rows->max('last_verified_at')?->toIso8601String(),
         ];
+    }
+
+    /**
+     * A snapshot series may be complete but stale. Recent rolling runs are
+     * expected to cover the requested range nightly; older ranges may combine
+     * the weekly full verification with a recent overlapping rolling run.
+     */
+    private function hasFreshRunCoverage(
+        string $criteriaKey,
+        CarbonInterface $fromDate,
+        CarbonInterface $toDate
+    ): bool {
+        $recentRunHours = max(1, (int) config('viefund.cash_snapshot_freshness.recent_run_hours', 36));
+        $fullVerificationDays = max(1, (int) config('viefund.cash_snapshot_freshness.full_verification_days', 8));
+        $rangeStart = $fromDate->copy()->startOfDay();
+        $rangeEnd = $toDate->copy()->startOfDay();
+
+        $recentRuns = VieFundCashSnapshotRun::query()
+            ->where('criteria_key', $criteriaKey)
+            ->where('status', 'completed')
+            ->whereNotNull('completed_at')
+            ->where('completed_at', '>=', now()->subHours($recentRunHours))
+            ->whereDate('requested_to', '>=', $rangeEnd->toDateString())
+            ->orderByDesc('completed_at')
+            ->get();
+
+        if ($recentRuns->contains(
+            fn(VieFundCashSnapshotRun $run) => $run->requested_from->lte($rangeStart)
+        )) {
+            return true;
+        }
+
+        $fullRun = VieFundCashSnapshotRun::query()
+            ->where('criteria_key', $criteriaKey)
+            ->where('status', 'completed')
+            ->whereIn('run_type', ['baseline', 'full_verification'])
+            ->whereNotNull('completed_at')
+            ->where('completed_at', '>=', now()->subDays($fullVerificationDays))
+            ->whereDate('requested_from', '<=', $rangeStart->toDateString())
+            ->orderByDesc('completed_at')
+            ->first();
+
+        if (!$fullRun) {
+            return false;
+        }
+
+        $fullCoverageEnd = $fullRun->requested_to->copy()->startOfDay();
+        if ($fullCoverageEnd->gte($rangeEnd)) {
+            return true;
+        }
+
+        $firstDateAfterFullCoverage = $fullCoverageEnd->copy()->addDay();
+
+        return $recentRuns->contains(
+            fn(VieFundCashSnapshotRun $run) => $run->requested_from->lte($firstDateAfterFullCoverage)
+        );
     }
 }

@@ -44,6 +44,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
     ];
 
     protected $signature = 'report:viefund-customer-balances
+        {--run-id= : Unique report generation identifier}
         {--report-date= : Report date (YYYY-MM-DD)}
         {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
         {--status=* : Fund status IDs 0-6}
@@ -59,6 +60,8 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
 
     protected $description = 'Generate VieFund customer balances report asynchronously';
 
+    private ?string $runId = null;
+
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService
     ) {
@@ -69,9 +72,15 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
     {
         $lockFile = $this->resolveString($this->option('lock-file'));
         $statusFile = $this->resolveString($this->option('status-file'));
+        $this->runId = $this->resolveString($this->option('run-id'));
 
-        if ($lockFile) {
-            @file_put_contents($lockFile, date('c'));
+        if ($lockFile && !is_file($lockFile)) {
+            @file_put_contents($lockFile, json_encode([
+                'run_id' => $this->runId,
+                'user_id' => 0,
+                'worker_pid' => getmypid(),
+                'started_at' => now()->toIso8601String(),
+            ], JSON_PRETTY_PRINT));
         }
 
         try {
@@ -221,6 +230,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $totalBalance = 0.0;
         $totalFutureSettlementCash = 0.0;
         $rows = [];
+        $lastReportedProgress = -1;
 
         foreach ($balances->values() as $index => $row) {
             $computedBalance = (float) ($row->total_balance ?? 0);
@@ -263,22 +273,25 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
                 ? (int) floor(($processedAccounts / $totalAccounts) * 100)
                 : 100;
 
-            $this->writeStatus($statusFile, [
-                'inProgress' => true,
-                'success' => null,
-                'message' => sprintf('Writing report rows (%d/%d)...', $processedAccounts, $totalAccounts),
-                'report_date' => $reportDate->toDateString(),
-                'date_basis' => $dateBasisLabel,
-                'status' => $statusLabel,
-                'trust_status' => $trustLabel,
-                'format' => strtoupper($format),
-                'processed_accounts' => $processedAccounts,
-                'total_accounts' => $totalAccounts,
-                'progress_pct' => min(99, $progressPct),
-                'output_relative_path' => $outputRelativePath,
-                'started_at' => $startedAtIso,
-                'updated_at' => now()->toIso8601String(),
-            ]);
+            if ($progressPct !== $lastReportedProgress || $processedAccounts === $totalAccounts) {
+                $lastReportedProgress = $progressPct;
+                $this->writeStatus($statusFile, [
+                    'inProgress' => true,
+                    'success' => null,
+                    'message' => sprintf('Writing report rows (%d/%d)...', $processedAccounts, $totalAccounts),
+                    'report_date' => $reportDate->toDateString(),
+                    'date_basis' => $dateBasisLabel,
+                    'status' => $statusLabel,
+                    'trust_status' => $trustLabel,
+                    'format' => strtoupper($format),
+                    'processed_accounts' => $processedAccounts,
+                    'total_accounts' => $totalAccounts,
+                    'progress_pct' => min(99, $progressPct),
+                    'output_relative_path' => $outputRelativePath,
+                    'started_at' => $startedAtIso,
+                    'updated_at' => now()->toIso8601String(),
+                ]);
+            }
         }
 
         $historicalInferenceCandidates = $cutoffReview
@@ -433,7 +446,19 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             @mkdir($statusDir, 0775, true);
         }
 
-        @file_put_contents($statusFile, json_encode($payload, JSON_PRETTY_PRINT));
+        $encoded = json_encode(array_merge(['run_id' => $this->runId], $payload), JSON_PRETTY_PRINT);
+        if ($encoded === false) {
+            return;
+        }
+
+        $temporaryFile = tempnam($statusDir, basename($statusFile) . '.tmp.');
+        if ($temporaryFile === false) {
+            return;
+        }
+
+        if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $statusFile)) {
+            @unlink($temporaryFile);
+        }
     }
 
     private function openWriter(string $absolutePath, string $format): callable

@@ -28,6 +28,15 @@ interface VieFundRemoteRepositoryInterface
 
     public function exportTransactions(?string $search = null, array $filters = []): Collection;
 
+    public function fetchAllTransactionExportDailyStats(?string $search = null, array $filters = []): Collection;
+
+    public function fetchAllTransactionExportRowsAfter(
+        ?string $search,
+        array $filters,
+        ?array $cursor,
+        int $limit
+    ): Collection;
+
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection;
 
     public function fetchCustomerCashDailyNetTotalsByDateColumn(CarbonInterface $fromDate, CarbonInterface $toDate, string $dateColumn, array $filters = []): Collection;

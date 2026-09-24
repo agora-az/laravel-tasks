@@ -15,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Excel as ExcelWriter;
@@ -531,8 +532,10 @@ class VieFundReportsController extends Controller
             'format' => ['required', 'in:csv,excel'],
         ]);
 
+        $runId = (string) Str::uuid();
+        $userId = (int) auth()->id();
         $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
-        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        $statusFile = $this->dailyBalanceStatusFile($userId, $runId);
         $logPath = storage_path('logs/viefund-daily-balance-report.log');
         $phpPath = env('PHP_PATH', '/usr/local/bin/php');
         $artisanPath = base_path('artisan');
@@ -564,10 +567,11 @@ class VieFundReportsController extends Controller
 
         $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputFileName = sprintf(
-            'viefund_bal_report_%s-%s_%s.%s',
+            'viefund_bal_report_%s-%s_%s_%s.%s',
             Carbon::parse($dateFrom)->format('Ymd'),
             Carbon::parse($dateTo)->format('Ymd'),
             self::DATE_BASIS_FILE_CODES[$dateBasis],
+            substr(str_replace('-', '', $runId), 0, 8),
             $extension
         );
         $outputRelativePath = 'reports/' . $outputFileName;
@@ -577,8 +581,13 @@ class VieFundReportsController extends Controller
             @mkdir($reportsDir, 0775, true);
         }
 
-        file_put_contents($lockFile, date('c'));
+        file_put_contents($lockFile, json_encode([
+            'run_id' => $runId,
+            'user_id' => $userId,
+            'started_at' => now()->toIso8601String(),
+        ], JSON_PRETTY_PRINT));
         file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
             'inProgress' => true,
             'success' => null,
             'message' => 'VieFund daily balance report queued...',
@@ -613,10 +622,11 @@ class VieFundReportsController extends Controller
         $envPrefix = implode(' ', $envAssignments) . ' ';
 
         $command = sprintf(
-            '%s%s %s report:viefund-daily-balance --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-daily-balance --run-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
+            escapeshellarg($runId),
             escapeshellarg($dateFrom),
             escapeshellarg($dateTo),
             escapeshellarg($dateBasis),
@@ -649,6 +659,7 @@ class VieFundReportsController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'VieFund daily balance report started.',
+                'run_id' => $runId,
             ], 202);
         }
 
@@ -773,8 +784,10 @@ class VieFundReportsController extends Controller
             'format' => ['required', 'in:csv,excel'],
         ]);
 
+        $runId = (string) Str::uuid();
+        $userId = (int) auth()->id();
         $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
-        $statusFile = storage_path('app/reports/viefund-customer-balances-status.json');
+        $statusFile = $this->customerBalancesStatusFile($userId, $runId);
         $logPath = storage_path('logs/viefund-customer-balances-report.log');
         $phpPath = env('PHP_PATH', '/usr/local/bin/php');
         $artisanPath = base_path('artisan');
@@ -813,9 +826,10 @@ class VieFundReportsController extends Controller
 
         $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputFileName = sprintf(
-            'viefund_customer_balances_%s_%s.%s',
+            'viefund_customer_balances_%s_%s_%s.%s',
             Carbon::parse($reportDate)->format('Ymd'),
             self::DATE_BASIS_FILE_CODES[$dateBasis],
+            substr(str_replace('-', '', $runId), 0, 8),
             $extension
         );
         $outputRelativePath = 'reports/' . $outputFileName;
@@ -825,8 +839,13 @@ class VieFundReportsController extends Controller
             @mkdir($reportsDir, 0775, true);
         }
 
-        file_put_contents($lockFile, date('c'));
+        file_put_contents($lockFile, json_encode([
+            'run_id' => $runId,
+            'user_id' => $userId,
+            'started_at' => now()->toIso8601String(),
+        ], JSON_PRETTY_PRINT));
         file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
             'inProgress' => true,
             'success' => null,
             'message' => 'VieFund customer balances report queued...',
@@ -868,10 +887,11 @@ class VieFundReportsController extends Controller
         $envPrefix = $envAssignments ? implode(' ', $envAssignments) . ' ' : '';
 
         $command = sprintf(
-            '%s%s %s report:viefund-customer-balances --report-date=%s --date-basis=%s %s %s --search=%s --sort=%s --sort-dir=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-customer-balances --run-id=%s --report-date=%s --date-basis=%s %s %s --search=%s --sort=%s --sort-dir=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
+            escapeshellarg($runId),
             escapeshellarg($reportDate),
             escapeshellarg($dateBasis),
             $statusArgs,
@@ -892,6 +912,8 @@ class VieFundReportsController extends Controller
             'has_search' => $search !== '',
             'sort' => $sort,
             'sort_direction' => $sortDirection,
+            'run_id' => $runId,
+            'user_id' => $userId,
         ]);
 
         $descriptorspec = [
@@ -912,6 +934,7 @@ class VieFundReportsController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'VieFund customer balances report started.',
+                'run_id' => $runId,
             ], 202);
         }
 
@@ -920,14 +943,27 @@ class VieFundReportsController extends Controller
             ->with('customer_balance_report_success', 'VieFund customer balances report started in background.');
     }
 
-    public function reportStatus(): JsonResponse
+    public function reportStatus(Request $request): JsonResponse
     {
-        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
-        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return response()->json([
+                'run_id' => null,
+                'inProgress' => false,
+                'success' => null,
+                'message' => 'Idle',
+                'progress_pct' => null,
+                'download_url' => null,
+            ])->withHeaders($this->reportStatusNoCacheHeaders());
+        }
 
-        $inProgress = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        $userId = (int) auth()->id();
+        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
+        $statusFile = $this->dailyBalanceStatusFile($userId, $runId);
+        $inProgress = $this->reportRunHasLiveLock($lockFile, $runId, $userId);
 
         $payload = [
+            'run_id' => $runId,
             'inProgress' => $inProgress,
             'success' => null,
             'message' => $inProgress ? 'Report in progress...' : 'Idle',
@@ -942,20 +978,21 @@ class VieFundReportsController extends Controller
 
         $parsed = null;
         if (file_exists($statusFile)) {
-            $json = file_get_contents($statusFile);
-            $parsed = json_decode($json ?: '{}', true);
+            $parsed = json_decode((string) file_get_contents($statusFile), true);
             if (is_array($parsed)) {
                 $payload = array_merge($payload, $parsed);
-                $payload['inProgress'] = $inProgress;
+                $payload['inProgress'] = $inProgress
+                    && (($parsed['inProgress'] ?? false) === true)
+                    && (($parsed['success'] ?? null) === null);
             }
         }
 
-        $staleInProgress = !$inProgress
+        if (
+            !$inProgress
             && is_array($parsed)
             && (($parsed['inProgress'] ?? false) === true)
-            && (($parsed['success'] ?? null) === null);
-
-        if ($staleInProgress) {
+            && (($parsed['success'] ?? null) === null)
+        ) {
             $payload['success'] = false;
             $payload['message'] = 'Report stopped before reporting completion. Check logs and retry.';
             $payload['completed_at'] = $payload['completed_at'] ?? now()->toIso8601String();
@@ -964,11 +1001,13 @@ class VieFundReportsController extends Controller
         if (($payload['success'] ?? null) === true && !empty($payload['output_relative_path'])) {
             $outputPath = storage_path('app/' . ltrim((string) $payload['output_relative_path'], '/'));
             if (is_file($outputPath)) {
-                $payload['download_url'] = route('reports.viefund-daily-balance.download-latest');
+                $payload['download_url'] = route('reports.viefund-daily-balance.download-latest', [
+                    'run_id' => $runId,
+                ]);
             }
         }
 
-        return response()->json($payload);
+        return response()->json($payload)->withHeaders($this->reportStatusNoCacheHeaders());
     }
 
     public function legacyDailyBalanceReportStatus(): JsonResponse
@@ -1006,14 +1045,28 @@ class VieFundReportsController extends Controller
         return response()->json($payload);
     }
 
-    public function customerBalancesReportStatus(): JsonResponse
+    public function customerBalancesReportStatus(Request $request): JsonResponse
     {
-        $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
-        $statusFile = storage_path('app/reports/viefund-customer-balances-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return response()->json([
+                'run_id' => null,
+                'inProgress' => false,
+                'success' => null,
+                'message' => 'Idle',
+                'progress_pct' => null,
+                'download_url' => null,
+            ])->withHeaders($this->reportStatusNoCacheHeaders());
+        }
 
-        $inProgress = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        $userId = (int) auth()->id();
+        $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
+        $statusFile = $this->customerBalancesStatusFile($userId, $runId);
+
+        $inProgress = $this->reportRunHasLiveLock($lockFile, $runId, $userId);
 
         $payload = [
+            'run_id' => $runId,
             'inProgress' => $inProgress,
             'success' => null,
             'message' => $inProgress ? 'Report in progress...' : 'Idle',
@@ -1032,7 +1085,9 @@ class VieFundReportsController extends Controller
             $parsed = json_decode($json ?: '{}', true);
             if (is_array($parsed)) {
                 $payload = array_merge($payload, $parsed);
-                $payload['inProgress'] = $inProgress;
+                $payload['inProgress'] = $inProgress
+                    && (($parsed['inProgress'] ?? false) === true)
+                    && (($parsed['success'] ?? null) === null);
             }
         }
 
@@ -1050,16 +1105,23 @@ class VieFundReportsController extends Controller
         if (($payload['success'] ?? null) === true && !empty($payload['output_relative_path'])) {
             $outputPath = storage_path('app/' . ltrim((string) $payload['output_relative_path'], '/'));
             if (is_file($outputPath)) {
-                $payload['download_url'] = route('reports.viefund-customer-balances.download-latest');
+                $payload['download_url'] = route('reports.viefund-customer-balances.download-latest', [
+                    'run_id' => $runId,
+                ]);
             }
         }
 
-        return response()->json($payload);
+        return response()->json($payload)->withHeaders($this->reportStatusNoCacheHeaders());
     }
 
-    public function downloadLatestReport(): BinaryFileResponse|RedirectResponse
+    public function downloadLatestReport(Request $request): BinaryFileResponse|RedirectResponse
     {
-        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return redirect()->route('reports.index')->with('report_error', 'No report run was selected.');
+        }
+
+        $statusFile = $this->dailyBalanceStatusFile((int) auth()->id(), $runId);
         if (!file_exists($statusFile)) {
             return redirect()->route('reports.index')->with('report_error', 'No report output found to download.');
         }
@@ -1103,9 +1165,14 @@ class VieFundReportsController extends Controller
         return response()->download($absolutePath, basename($absolutePath));
     }
 
-    public function downloadLatestCustomerBalancesReport(): BinaryFileResponse|RedirectResponse
+    public function downloadLatestCustomerBalancesReport(Request $request): BinaryFileResponse|RedirectResponse
     {
-        $statusFile = storage_path('app/reports/viefund-customer-balances-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return redirect()->route('reports.index')->with('customer_balance_report_error', 'No report run was selected.');
+        }
+
+        $statusFile = $this->customerBalancesStatusFile((int) auth()->id(), $runId);
         if (!file_exists($statusFile)) {
             return redirect()->route('reports.index')->with('customer_balance_report_error', 'No report output found to download.');
         }
@@ -1129,12 +1196,18 @@ class VieFundReportsController extends Controller
         return response()->download($absolutePath, basename($absolutePath));
     }
 
-    public function dismissLatestReport(): JsonResponse
+    public function dismissLatestReport(Request $request): JsonResponse
     {
-        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
-        $statusFile = storage_path('app/reports/viefund-daily-balance-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return response()->json(['success' => false, 'message' => 'No report run was selected.'], 422);
+        }
 
-        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        $userId = (int) auth()->id();
+        $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
+        $statusFile = $this->dailyBalanceStatusFile($userId, $runId);
+
+        $hasLiveLock = $this->reportRunHasLiveLock($lockFile, $runId, $userId);
         if ($hasLiveLock) {
             return response()->json([
                 'success' => false,
@@ -1190,12 +1263,21 @@ class VieFundReportsController extends Controller
         return response()->json(['success' => true, 'deleted_output' => $deletedOutput]);
     }
 
-    public function dismissLatestCustomerBalancesReport(): JsonResponse
+    public function dismissLatestCustomerBalancesReport(Request $request): JsonResponse
     {
-        $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
-        $statusFile = storage_path('app/reports/viefund-customer-balances-status.json');
+        $runId = $this->reportRunId($request);
+        if ($runId === null) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No report run was selected.',
+            ], 422);
+        }
 
-        $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
+        $userId = (int) auth()->id();
+        $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
+        $statusFile = $this->customerBalancesStatusFile($userId, $runId);
+
+        $hasLiveLock = $this->reportRunHasLiveLock($lockFile, $runId, $userId);
         if ($hasLiveLock) {
             return response()->json([
                 'success' => false,
@@ -1228,6 +1310,46 @@ class VieFundReportsController extends Controller
             'deleted_output' => $deletedOutput,
             'deleted_status' => $deletedStatus,
         ]);
+    }
+
+    private function reportRunId(Request $request): ?string
+    {
+        $runId = strtolower(trim((string) $request->input('run_id', '')));
+
+        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $runId)
+            ? $runId
+            : null;
+    }
+
+    private function customerBalancesStatusFile(int $userId, string $runId): string
+    {
+        return storage_path("app/reports/viefund-customer-balances-{$userId}-{$runId}-status.json");
+    }
+
+    private function dailyBalanceStatusFile(int $userId, string $runId): string
+    {
+        return storage_path("app/reports/viefund-daily-balance-{$userId}-{$runId}-status.json");
+    }
+
+    private function reportRunHasLiveLock(string $lockFile, string $runId, int $userId): bool
+    {
+        if (!is_file($lockFile) || (time() - filemtime($lockFile)) >= self::LOCK_TTL_SECONDS) {
+            return false;
+        }
+
+        $lock = json_decode((string) file_get_contents($lockFile), true);
+
+        return is_array($lock)
+            && hash_equals((string) ($lock['run_id'] ?? ''), $runId)
+            && (int) ($lock['user_id'] ?? 0) === $userId;
+    }
+
+    private function reportStatusNoCacheHeaders(): array
+    {
+        return [
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma' => 'no-cache',
+        ];
     }
 
     private function streamCsv(array $rows, string $filename, array $metadataRows): StreamedResponse

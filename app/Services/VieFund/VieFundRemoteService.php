@@ -69,6 +69,20 @@ class VieFundRemoteService
         return $this->repository->exportTransactions($search, $filters);
     }
 
+    public function fetchAllTransactionExportDailyStats(?string $search = null, array $filters = []): Collection
+    {
+        return $this->repository->fetchAllTransactionExportDailyStats($search, $filters);
+    }
+
+    public function fetchAllTransactionExportRowsAfter(
+        ?string $search,
+        array $filters,
+        ?array $cursor,
+        int $limit
+    ): Collection {
+        return $this->repository->fetchAllTransactionExportRowsAfter($search, $filters, $cursor, $limit);
+    }
+
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection
     {
         return $this->repository->fetchDailyNetTotals($fromDate, $toDate, $filters, $basis);

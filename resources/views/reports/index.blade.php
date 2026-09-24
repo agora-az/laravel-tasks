@@ -635,12 +635,15 @@
 
     const inceptionDates = JSON.parse(form.dataset.inceptionDates || '{}');
     const DISMISS_KEY = 'viefundReportRunDismissedMessage';
+    const ACTIVE_RUN_KEY = 'viefundDailyBalanceActiveRunId';
     let currentRunMessage = '';
     let lastStatus = null;
     let cleanupRequested = false;
     let pollTimer = null;
     let autoDownloadPending = false;
     let downloadedUrl = null;
+    let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
+    let lastProgress = 0;
 
     const refreshNote = () => {
         const selected = dateBasis.value;
@@ -696,7 +699,7 @@
         autoDownloadPending = true;
         downloadedUrl = null;
         if (pollTimer) {
-            clearInterval(pollTimer);
+            clearTimeout(pollTimer);
             pollTimer = null;
         }
         localStorage.removeItem(DISMISS_KEY);
@@ -723,6 +726,10 @@
                     : null;
                 throw new Error(validationMessage || data.message);
             }
+            activeRunId = data.run_id || null;
+            if (!activeRunId) throw new Error('The report started without a tracking ID.');
+            localStorage.setItem(ACTIVE_RUN_KEY, activeRunId);
+            lastProgress = 0;
             setRunMessage(data.message || 'Report started. Preparing your download...');
             poll();
         } catch (error) {
@@ -745,7 +752,9 @@
         try {
             const tokenMeta = document.querySelector('meta[name="csrf-token"]');
             const csrfToken = tokenMeta ? tokenMeta.getAttribute('content') : '';
-            await fetch('{{ route('reports.viefund-daily-balance.dismiss-latest') }}', {
+            const dismissUrl = new URL('{{ route('reports.viefund-daily-balance.dismiss-latest') }}', window.location.origin);
+            if (activeRunId) dismissUrl.searchParams.set('run_id', activeRunId);
+            await fetch(dismissUrl.toString(), {
                 method: 'POST',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
@@ -774,6 +783,9 @@
                 if (progressBar) progressBar.style.width = '0%';
                 if (progressMeta) progressMeta.textContent = '';
                 lastStatus = null;
+                activeRunId = null;
+                lastProgress = 0;
+                localStorage.removeItem(ACTIVE_RUN_KEY);
             }
 
             localStorage.setItem(DISMISS_KEY, currentRunMessage);
@@ -782,11 +794,25 @@
     }
 
     const poll = () => {
-        fetch('{{ route('reports.viefund-daily-balance.status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        if (!activeRunId) {
+            setRunStatusVisible(false);
+            runBtn.disabled = false;
+            return;
+        }
+
+        const statusUrl = new URL('{{ route('reports.viefund-daily-balance.status') }}', window.location.origin);
+        statusUrl.searchParams.set('run_id', activeRunId);
+        fetch(statusUrl.toString(), {
+            cache: 'no-store',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        })
             .then(r => r.json())
             .then(data => {
+                if (data.run_id !== activeRunId) return;
                 lastStatus = data;
-                const pct = Number(data.progress_pct ?? 0);
+                const reportedPct = Number(data.progress_pct ?? 0);
+                const pct = data.inProgress ? Math.max(lastProgress, reportedPct) : reportedPct;
+                if (data.inProgress) lastProgress = pct;
                 const processed = data.processed_days ?? 0;
                 const total = data.total_days ?? '?';
                 const dismissed = localStorage.getItem(DISMISS_KEY);
@@ -803,10 +829,8 @@
 
                     if (downloadWrap) downloadWrap.style.display = 'none';
 
-                    if (pollTimer) {
-                        clearInterval(pollTimer);
-                    }
-                    pollTimer = setInterval(poll, 1000);
+                    if (pollTimer) clearTimeout(pollTimer);
+                    pollTimer = setTimeout(poll, 1000);
                     return;
                 }
 
@@ -839,7 +863,7 @@
                     }
 
                     if (pollTimer) {
-                        clearInterval(pollTimer);
+                        clearTimeout(pollTimer);
                         pollTimer = null;
                     }
                     return;
@@ -855,7 +879,7 @@
                     if (downloadWrap) downloadWrap.style.display = 'none';
 
                     if (pollTimer) {
-                        clearInterval(pollTimer);
+                        clearTimeout(pollTimer);
                         pollTimer = null;
                     }
                     return;
@@ -866,12 +890,15 @@
                 if (downloadWrap) downloadWrap.style.display = 'none';
 
                 if (pollTimer) {
-                    clearInterval(pollTimer);
+                    clearTimeout(pollTimer);
                     pollTimer = null;
                 }
+                activeRunId = null;
+                lastProgress = 0;
+                localStorage.removeItem(ACTIVE_RUN_KEY);
             })
             .catch(() => {
-                // Keep UI stable if polling fails.
+                pollTimer = window.setTimeout(poll, 5000);
             });
     };
 
@@ -1080,12 +1107,15 @@
     if (!form || !runStatusWrap || !runStatusText || !runWrap || !runBtn || !runPanel || !formatInput) return;
 
     const DISMISS_KEY = 'viefundCustomerBalanceRunDismissedMessage';
+    const ACTIVE_RUN_KEY = 'viefundCustomerBalanceActiveRunId';
     let currentRunMessage = '';
     let lastStatus = null;
     let cleanupRequested = false;
     let pollTimer = null;
     let autoDownloadPending = false;
     let downloadedUrl = null;
+    let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
+    let lastProgress = 0;
 
     const setRunStatusVisible = (visible) => {
         runStatusWrap.style.display = visible ? 'inline-flex' : 'none';
@@ -1148,6 +1178,10 @@
                     : null;
                 throw new Error(validationMessage || data.message);
             }
+            activeRunId = data.run_id || null;
+            if (!activeRunId) throw new Error('The report started without a tracking ID.');
+            localStorage.setItem(ACTIVE_RUN_KEY, activeRunId);
+            lastProgress = 0;
             setRunMessage(data.message || 'Report started. Preparing your download...');
             poll();
         } catch (error) {
@@ -1186,7 +1220,9 @@
         try {
             const tokenMeta = document.querySelector('meta[name="csrf-token"]');
             const csrfToken = tokenMeta ? tokenMeta.getAttribute('content') : '';
-            await fetch('{{ route('reports.viefund-customer-balances.dismiss-latest') }}', {
+            const dismissUrl = new URL('{{ route('reports.viefund-customer-balances.dismiss-latest') }}', window.location.origin);
+            if (activeRunId) dismissUrl.searchParams.set('run_id', activeRunId);
+            await fetch(dismissUrl.toString(), {
                 method: 'POST',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
@@ -1215,6 +1251,9 @@
                 if (progressBar) progressBar.style.width = '0%';
                 if (progressMeta) progressMeta.textContent = '';
                 lastStatus = null;
+                activeRunId = null;
+                lastProgress = 0;
+                localStorage.removeItem(ACTIVE_RUN_KEY);
             }
 
             localStorage.setItem(DISMISS_KEY, currentRunMessage);
@@ -1223,11 +1262,25 @@
     }
 
     const poll = () => {
-        fetch('{{ route('reports.viefund-customer-balances.status') }}', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        if (!activeRunId) {
+            setRunStatusVisible(false);
+            runBtn.disabled = false;
+            return;
+        }
+
+        const statusUrl = new URL('{{ route('reports.viefund-customer-balances.status') }}', window.location.origin);
+        statusUrl.searchParams.set('run_id', activeRunId);
+        fetch(statusUrl.toString(), {
+            cache: 'no-store',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        })
             .then(r => r.json())
             .then(data => {
+                if (data.run_id !== activeRunId) return;
                 lastStatus = data;
-                const pct = Number(data.progress_pct ?? 0);
+                const reportedPct = Number(data.progress_pct ?? 0);
+                const pct = data.inProgress ? Math.max(lastProgress, reportedPct) : reportedPct;
+                if (data.inProgress) lastProgress = pct;
                 const processed = data.processed_accounts ?? 0;
                 const total = data.total_accounts ?? '?';
 
@@ -1267,11 +1320,13 @@
                     if (!window.__customerBalanceReportJustStarted) {
                         setRunStatusVisible(false);
                     }
+                    activeRunId = null;
+                    lastProgress = 0;
+                    localStorage.removeItem(ACTIVE_RUN_KEY);
                 }
 
-                const shouldContinue = data.inProgress || data.success === true || data.success === false;
-                if (shouldContinue) {
-                    pollTimer = window.setTimeout(poll, data.inProgress ? 2000 : 15000);
+                if (data.inProgress) {
+                    pollTimer = window.setTimeout(poll, 2000);
                 }
             })
             .catch(() => {

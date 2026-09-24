@@ -42,6 +42,9 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
     Route::get('/dashboard/stats-status', [ReconciliationController::class, 'dashboardStatsStatus'])->name('dashboard.stats-status');
     Route::get('/viefund-transactions', [RemoteVieFundController::class, 'allTransactions'])->name('viefund-transactions.index');
+    Route::post('/viefund-transactions/export', [RemoteVieFundController::class, 'startAllTransactionsExport'])->name('viefund-transactions.export.start');
+    Route::get('/viefund-transactions/export/status', [RemoteVieFundController::class, 'allTransactionsExportStatus'])->name('viefund-transactions.export.status');
+    Route::get('/viefund-transactions/export/download', [RemoteVieFundController::class, 'downloadAllTransactionsExport'])->name('viefund-transactions.export.download');
 
     Route::get('/docs', [DocumentationController::class, 'index'])->name('docs.index');
     Route::get('/docs/{document}', [DocumentationController::class, 'show'])->name('docs.show');

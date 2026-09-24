@@ -184,4 +184,47 @@ return [
     // America/Toronto applies EST in winter and EDT in summer.
     'simulated_report_timezone' => env('VIEFUND_SIMULATED_REPORT_TIMEZONE', 'America/Toronto'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Cash Snapshot Freshness
+    |--------------------------------------------------------------------------
+    |
+    | Reports only use locally stored cash snapshots when completed sync runs
+    | provide sufficiently recent coverage. Otherwise they fall back to the
+    | live VieFund cash ledger. Rolling nightly coverage gets a short window;
+    | older dates may rely on the weekly full-history verification.
+    |
+    */
+
+    'cash_snapshot_freshness' => [
+        'recent_run_hours' => max(1, (int) env('VIEFUND_CASH_SNAPSHOT_RECENT_RUN_HOURS', 36)),
+        'full_verification_days' => max(1, (int) env('VIEFUND_CASH_SNAPSHOT_FULL_VERIFICATION_DAYS', 8)),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | All Transactions Excel Export
+    |--------------------------------------------------------------------------
+    |
+    | Only the All Transactions export uses the streaming writer. Database rows
+    | are read in small batches. Optional smaller sheets target 65,000 rows but
+    | prefer Created Date boundaries; the larger value is Excel's safety cap.
+    |
+    */
+
+    'all_transactions_export_rows_per_sheet' => max(
+        1000,
+        min(1000000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_ROWS_PER_SHEET', 1000000))
+    ),
+
+    'all_transactions_export_split_target_rows' => max(
+        1000,
+        min(250000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_SPLIT_TARGET_ROWS', 65000))
+    ),
+
+    'all_transactions_export_batch_size' => max(
+        500,
+        min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_BATCH_SIZE', 5000))
+    ),
+
 ];

@@ -54,6 +54,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
     private const DEFAULT_TRUST_STATUSES = ['Settled'];
 
     protected $signature = 'report:viefund-daily-balance
+        {--run-id= : Unique report generation identifier}
         {--date-from= : Report start date (YYYY-MM-DD)}
         {--date-to= : Report end date (YYYY-MM-DD)}
         {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
@@ -69,6 +70,8 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
 
     protected $description = 'Generate VieFund daily net + running balance report asynchronously';
 
+    private ?string $runId = null;
+
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService,
         private readonly VieFundCashSnapshotService $snapshotService
@@ -80,9 +83,15 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
     {
         $lockFile = $this->resolveString($this->option('lock-file'));
         $statusFile = $this->resolveString($this->option('status-file'));
+        $this->runId = $this->resolveString($this->option('run-id'));
 
-        if ($lockFile) {
-            @file_put_contents($lockFile, date('c'));
+        if ($lockFile && !is_file($lockFile)) {
+            @file_put_contents($lockFile, json_encode([
+                'run_id' => $this->runId,
+                'user_id' => 0,
+                'worker_pid' => getmypid(),
+                'started_at' => now()->toIso8601String(),
+            ], JSON_PRETTY_PRINT));
         }
 
         try {
@@ -376,7 +385,19 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             @mkdir($statusDir, 0775, true);
         }
 
-        @file_put_contents($statusFile, json_encode($payload, JSON_PRETTY_PRINT));
+        $encoded = json_encode(array_merge(['run_id' => $this->runId], $payload), JSON_PRETTY_PRINT);
+        if ($encoded === false) {
+            return;
+        }
+
+        $temporaryFile = tempnam($statusDir, basename($statusFile) . '.tmp.');
+        if ($temporaryFile === false) {
+            return;
+        }
+
+        if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $statusFile)) {
+            @unlink($temporaryFile);
+        }
     }
 
     private function openWriter(string $absolutePath, string $format): callable

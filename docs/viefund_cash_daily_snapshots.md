@@ -72,11 +72,14 @@ When a historical daily net changes, closing balances are recalculated from the 
 
 The Daily Net + Running Balance report uses snapshots only when the requested criteria and date coverage are complete.
 
+Snapshot coverage must also be fresh. A recent range must be covered by a completed rolling run from the last 36 hours. An older range may combine that rolling coverage with a full-history verification completed within the last 8 days. These defaults can be adjusted with `VIEFUND_CASH_SNAPSHOT_RECENT_RUN_HOURS` and `VIEFUND_CASH_SNAPSHOT_FULL_VERIFICATION_DAYS`.
+
 It falls back to the live direct cash ledger when:
 
 - A simulated report generation time is supplied.
 - No matching snapshot series exists.
 - The series has incomplete date coverage.
+- The completed synchronization runs covering the range are stale.
 - The requested end date is newer than the snapshot horizon.
 - A historical trade-date report is requested.
 

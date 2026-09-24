@@ -96,7 +96,10 @@
 </style>
 <script>
 (() => {
+    const ACTIVE_RUN_KEY = 'viefundCustomerBalanceActiveRunId';
     let pollTimer = null;
+    let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
+    let lastProgress = 0;
 
     const showStatus = (status, message, isError = false) => {
         status.textContent = message;
@@ -121,32 +124,39 @@
     };
 
     const poll = async (button, status) => {
+        if (!activeRunId) return;
+
         try {
-            const response = await fetch('{{ route('reports.viefund-customer-balances.status') }}', {
+            const statusUrl = new URL('{{ route('reports.viefund-customer-balances.status') }}', window.location.origin);
+            statusUrl.searchParams.set('run_id', activeRunId);
+            const response = await fetch(statusUrl.toString(), {
                 headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 cache: 'no-store',
             });
             const data = await response.json();
+            if (data.run_id !== activeRunId) return;
+
             if (data.inProgress) {
-                const progress = Number(data.progress_pct || 0);
+                const progress = Math.max(lastProgress, Number(data.progress_pct || 0));
+                lastProgress = progress;
                 showStatus(status, `${data.message || 'Generating Excel report...'} (${progress}% complete)`);
+                pollTimer = window.setTimeout(() => poll(button, status), 3000);
                 return;
             }
 
-            window.clearInterval(pollTimer);
+            window.clearTimeout(pollTimer);
             pollTimer = null;
             setBusy(button, false);
             if (data.success === true && data.download_url) {
                 showStatus(status, data.message || 'Excel report completed. Downloading...');
                 download(data.download_url);
+                localStorage.removeItem(ACTIVE_RUN_KEY);
             } else {
                 showStatus(status, data.message || 'Excel report could not be generated.', true);
+                localStorage.removeItem(ACTIVE_RUN_KEY);
             }
         } catch (_) {
-            if (pollTimer) window.clearInterval(pollTimer);
-            pollTimer = null;
-            setBusy(button, false);
-            showStatus(status, 'Unable to read the Excel report status.', true);
+            pollTimer = window.setTimeout(() => poll(button, status), 5000);
         }
     };
 
@@ -172,13 +182,30 @@
                 throw new Error(validationMessage || data.message || 'Excel report could not start.');
             }
             showStatus(status, data.message || 'Excel report started.');
-            if (pollTimer) window.clearInterval(pollTimer);
-            pollTimer = window.setInterval(() => poll(button, status), 3000);
+            activeRunId = data.run_id || null;
+            lastProgress = 0;
+            if (!activeRunId) throw new Error('The report started without a tracking ID.');
+            localStorage.setItem(ACTIVE_RUN_KEY, activeRunId);
+            if (pollTimer) window.clearTimeout(pollTimer);
             poll(button, status);
         } catch (error) {
             setBusy(button, false);
             showStatus(status, error.message, true);
         }
+    });
+
+    document.addEventListener('reconciliation:results-loaded', () => {
+        if (!activeRunId) return;
+        if (pollTimer) {
+            window.clearTimeout(pollTimer);
+            pollTimer = null;
+        }
+        const button = document.getElementById('customer-balance-excel-export');
+        const status = document.getElementById('customer-balance-export-status');
+        if (!button || !status) return;
+        setBusy(button, true);
+        showStatus(status, 'Resuming report progress...');
+        poll(button, status);
     });
 })();
 </script>
