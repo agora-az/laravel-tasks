@@ -20,7 +20,8 @@ use Throwable;
 class GenerateVieFundAllTransactionsExportCommand extends Command
 {
     private const TRANSACTION_HEADERS = [
-        'Txn ID', 'Source ID', 'Customer Name', 'Plan Account ID', 'Txn Type', 'Status',
+        'Cash Txn ID', 'Fund Txn ID', 'Trust Txn ID', 'Relationship', 'Source ID',
+        'Customer Name', 'Plan Account ID', 'Txn Type', 'Cash Status', 'Trust Status',
         'Notes', 'Created Date', 'Trade Date', 'Processing Date', 'Settlement Date', 'Currency', 'Amount',
     ];
 
@@ -91,13 +92,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'output_order' => $outputOrder,
                 'currency_code' => $currencyCode,
                 'status_ids' => $statusIds,
-                'trust_status_names' => $this->trustStatusesForCashStatuses($statusIds),
                 'trx_type' => array_values(array_filter((array) $this->option('transaction-type'))),
             ]);
-            $filters['trust_status_names'] = $this->trustStatusesForCashStatuses($statusIds);
             $maximumRowsPerSheet = (int) config('viefund.all_transactions_export_rows_per_sheet', 1000000);
             $splitTargetRows = (int) config('viefund.all_transactions_export_split_target_rows', 65000);
-            $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 5000);
+            $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 20000);
             $distributeSheets = (bool) $this->option('split-sheets');
 
             $this->writeStatus($statusFile, [
@@ -188,6 +187,26 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 if ($lockFile !== '') {
                     @touch($lockFile);
                 }
+                $this->writeStatus($statusFile, [
+                    'inProgress' => true,
+                    'success' => null,
+                    'message' => $processedTransactions === 0
+                        ? 'Preparing the first transaction batch...'
+                        : sprintf(
+                            'Loading the next batch after %s of %s transactions...',
+                            number_format($processedTransactions),
+                            number_format($totalTransactions)
+                        ),
+                    'progress_pct' => $totalTransactions > 0
+                        ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
+                        : 3,
+                    'processed_transactions' => $processedTransactions,
+                    'total_transactions' => $totalTransactions,
+                    'processed_sheets' => $sheetNumber - 1,
+                    'total_sheets' => $estimatedTransactionSheets,
+                    'started_at' => $startedAtIso,
+                    'updated_at' => now()->toIso8601String(),
+                ]);
                 $rows = $remoteService->fetchAllTransactionExportRowsAfter(
                     $search ?: null,
                     $filters,
@@ -221,12 +240,16 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     $createdDate = $this->dateTime($row->created_date ?? null);
                     $writer->addRow(new Row([
                         new StringCell((string) ($row->transaction_id ?? ''), null),
+                        new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', null),
+                        new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', null),
+                        new StringCell((string) ($row->ledger_relationship ?? ''), null),
                         // Source IDs can exceed Excel's 15-digit numeric precision.
                         new StringCell((string) ($row->source_id ?? ''), null),
                         new StringCell(trim((string) ($row->customer_name ?? '')), null),
                         new StringCell((string) ($row->plan_account_id ?? ''), null),
                         new StringCell((string) ($row->transaction_type ?? ''), null),
                         new StringCell((string) ($row->status ?? ''), null),
+                        new StringCell((string) ($row->trust_status ?? ''), null),
                         new StringCell((string) ($row->notes ?? ''), null),
                         new StringCell($createdDate, null),
                         new StringCell($this->dateTime($row->trade_date ?? null), null),
@@ -258,11 +281,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'inProgress' => true,
                     'success' => null,
                     'message' => sprintf(
-                        'Writing sheet %d of %d (%s of %s transactions)...',
-                        $sheetNumber,
-                        $estimatedTransactionSheets,
+                        'Wrote %s of %s transactions to sheet %d of %d...',
                         number_format($processedTransactions),
-                        number_format($totalTransactions)
+                        number_format($totalTransactions),
+                        $sheetNumber,
+                        $estimatedTransactionSheets
                     ),
                     'progress_pct' => $progress,
                     'processed_transactions' => $processedTransactions,
@@ -272,7 +295,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'started_at' => $startedAtIso,
                     'updated_at' => now()->toIso8601String(),
                 ]);
-            } while ($rows->isNotEmpty());
+            } while ($rows->count() === $databaseBatchSize);
 
             $this->finalizeTransactionSheet($sheet, $sheetRowCount);
             $sheetSummaries[] = $this->sheetSummary(
@@ -374,16 +397,17 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     {
         $sheet->setName($sheetName);
         $sheet->setSheetView((new SheetView())->setFreezeRow(2));
-        $sheet->setColumnWidth(15, 1);
-        $sheet->setColumnWidth(24, 2);
-        $sheet->setColumnWidth(28, 3);
-        $sheet->setColumnWidth(18, 4);
-        $sheet->setColumnWidth(36, 5);
-        $sheet->setColumnWidth(18, 6);
-        $sheet->setColumnWidth(40, 7);
-        $sheet->setColumnWidth(20, 8, 9, 10, 11);
-        $sheet->setColumnWidth(12, 12);
-        $sheet->setColumnWidth(16, 13);
+        $sheet->setColumnWidth(20, 1, 2, 3);
+        $sheet->setColumnWidth(20, 4);
+        $sheet->setColumnWidth(24, 5);
+        $sheet->setColumnWidth(28, 6);
+        $sheet->setColumnWidth(18, 7);
+        $sheet->setColumnWidth(36, 8);
+        $sheet->setColumnWidth(18, 9, 10);
+        $sheet->setColumnWidth(40, 11);
+        $sheet->setColumnWidth(20, 12, 13, 14, 15);
+        $sheet->setColumnWidth(12, 16);
+        $sheet->setColumnWidth(16, 17);
         $writer->addRow(Row::fromValues(self::TRANSACTION_HEADERS, $headerStyle));
     }
 
@@ -464,7 +488,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         ]));
         $writer->addRow(Row::fromValues([
             'Daily Movement Source',
-            'Filtered All Transactions result set',
+            'Distinct VieFund cash-ledger transactions',
             'Date Basis',
             $this->dateBasisLabel($dateBasis) . ' / ' . $this->currencyLabel($currencyCode),
         ]));
@@ -537,7 +561,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ['Summary Item', 'Value'],
             ['Report', 'VieFund All Transactions'],
             [$this->dateBasisLabel((string) ($filters['date_basis'] ?? 'settlement_date')) . ' Range', $this->rangeLabel($firstDate, $lastDate)],
-            ['Transactions in Complete Result Set', $totalTransactions],
+            ['Cash Ledger Transactions in Complete Result Set', $totalTransactions],
             ['Transaction Sheets', count($sheetSummaries)],
             ['Balance Basis', sprintf(
                 'VieFund Daily Net + Running Balance — %s, %s, %s',
@@ -548,7 +572,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ['Balance Source', $balanceSource],
             ['Generated At (Eastern)', now(config('app.display_timezone', 'America/Toronto'))->format('Y-m-d H:i:s T')],
             ['Opening Balance', $overallOpeningBalance],
-            ['Exported Row Amount Total', $overallSelectedNet],
+            ['Exported Cash Ledger Amount Total', $overallSelectedNet],
             ['Cash Ledger Period Net', $cashLedgerPeriodNet],
             ['Closing Balance', $cashLedgerClosingBalance],
             ['Customer Filter', $filters['customer_name'] ?? 'All customers'],
@@ -580,7 +604,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $writer->addRow(Row::fromValues([]));
         $writer->addRow(Row::fromValues([
             'Sheet', 'Date Range', 'Transactions', 'Opening Balance',
-            'Exported Amount Total', 'Cash Ledger Net', 'Closing Balance',
+            'Exported Cash Ledger Total', 'Cash Ledger Net', 'Closing Balance',
         ], $headerStyle));
 
         foreach ($sheetSummaries as $summary) {
@@ -857,22 +881,6 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             fn($status) => $labels[(int) $status] ?? (string) $status,
             $statusIds
         ));
-    }
-
-    private function trustStatusesForCashStatuses(array $statusIds): array
-    {
-        $trustStatuses = [];
-        if (in_array(0, $statusIds, true)) {
-            $trustStatuses[] = 'Deleted';
-        }
-        if (array_intersect([3, 4], $statusIds)) {
-            $trustStatuses[] = 'Unsettled';
-        }
-        if (array_intersect([5, 6], $statusIds)) {
-            $trustStatuses[] = 'Settled';
-        }
-
-        return array_values(array_unique($trustStatuses));
     }
 
     private function rangeLabel(?string $fromDate, ?string $toDate): string

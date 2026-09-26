@@ -17,4 +17,8 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-php artisan serve "$@"
+while kill -0 "$queue_listener_pid" 2>/dev/null && kill -0 "$scheduler_pid" 2>/dev/null; do
+    sleep 2
+done
+
+exit 1

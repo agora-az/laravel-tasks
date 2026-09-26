@@ -6,7 +6,8 @@
 <div style="margin:20px 0;">
     <div style="font-size:12px;font-weight:800;color:#2c5282;text-transform:uppercase;letter-spacing:.07em;">VieFund Transactions</div>
     <h2 style="margin:4px 0 0;">All Transactions</h2>
-    <div style="color:#718096;font-size:13px;margin-top:4px;">All fund and standalone trust transactions using the selected date basis, currency, and cash transaction statuses.</div>
+    <div style="color:#718096;font-size:13px;margin-top:4px;">One row per VieFund cash-ledger transaction, with related fund and trust identifiers for tracing.</div>
+    <div style="color:#718096;font-size:12px;margin-top:3px;">Trust activity without a related cash-ledger entry is excluded from this reconciliation view and its totals.</div>
 </div>
 
 @php
@@ -87,8 +88,8 @@
                 </select>
             </div>
             <div>
-                <label for="all-trx-id" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Txn ID</label>
-                <input id="all-trx-id" name="filter_trx_id" value="{{ $filters['trx_id'] ?? '' }}" placeholder="e.g. C-939"
+                <label for="all-trx-id" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Transaction ID</label>
+                <input id="all-trx-id" name="filter_trx_id" value="{{ $filters['trx_id'] ?? '' }}" placeholder="Cash C-, fund F-, or trust T- ID"
                        style="width:100%;height:40px;padding:8px 12px;border:1px solid #cbd5e0;border-radius:4px;box-sizing:border-box;font-size:13px;font-family:monospace;">
             </div>
             <div>
@@ -119,7 +120,7 @@
                         {{ $label }}
                     </label>
                 @endforeach
-                <span style="margin-left:auto;color:#718096;font-size:12px;">If none are selected, Confirmed is used. Standalone trust rows use the equivalent Deleted, Unsettled, or Settled status.</span>
+                <span style="margin-left:auto;color:#718096;font-size:12px;">If none are selected, Confirmed is used. This filter always applies to the cash-ledger status.</span>
             </div>
         </fieldset>
 
@@ -183,10 +184,10 @@
         <div style="padding:8px 20px 0;color:#718096;font-size:11px;text-align:right;">By default, transactions remain on one date-named sheet. The optional split keeps days together and targets approximately 65,000 rows per sheet.</div>
 
         <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;min-width:1540px;">
+            <table style="width:100%;border-collapse:collapse;min-width:2200px;">
                 <thead>
                     <tr style="background:#f7fafc;border-bottom:2px solid #cbd5e0;">
-                        @foreach(['Txn ID','Source ID','Customer Name','Plan Account ID','Txn Type','Status','Notes','Created Date','Trade Date','Processing Date','Settlement Date','Currency','Amount'] as $heading)
+                        @foreach(['Cash Txn ID','Fund Txn ID','Trust Txn ID','Relationship','Source ID','Customer Name','Plan Account ID','Txn Type','Cash Status','Trust Status','Notes','Created Date','Trade Date','Processing Date','Settlement Date','Currency','Amount'] as $heading)
                             <th style="padding:12px;text-align:{{ $heading === 'Amount' ? 'right' : 'left' }};font-weight:700;color:#2d3748;white-space:nowrap;">{{ $heading }}</th>
                         @endforeach
                     </tr>
@@ -196,11 +197,15 @@
                         @php $amount = $transaction->amount !== null ? (float) $transaction->amount : null; @endphp
                         <tr style="border-bottom:1px solid #e2e8f0;">
                             <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->transaction_id }}</td>
+                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->fund_transaction_id ? 'F-'.$transaction->fund_transaction_id : '–' }}</td>
+                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->trust_transaction_id ? 'T-'.$transaction->trust_transaction_id : '–' }}</td>
+                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->ledger_relationship }}</td>
                             <td style="padding:12px;font-family:monospace;">{{ $transaction->source_id ?: '–' }}</td>
                             <td style="padding:12px;font-family:monospace;">{{ $transaction->customer_name ?: '–' }}</td>
                             <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->plan_account_id ?: '–' }}</td>
                             <td style="padding:12px;font-family:monospace;">{{ $transaction->transaction_type ?: '–' }}</td>
                             <td style="padding:12px;font-family:monospace;">{{ $transaction->status ?: '–' }}</td>
+                            <td style="padding:12px;font-family:monospace;">{{ $transaction->trust_status ?: '–' }}</td>
                             <td style="padding:12px;font-family:monospace;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ $transaction->notes }}">{{ $transaction->notes ?: '–' }}</td>
                             @foreach(['created_date','trade_date','processing_date','settlement_date'] as $dateField)
                                 <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->{$dateField} ? date('m/d/Y H:i', strtotime($transaction->{$dateField})) : '–' }}</td>
@@ -209,7 +214,7 @@
                             <td style="padding:12px;text-align:right;color:{{ $amount === null || $amount == 0 ? '#718096' : ($amount < 0 ? '#c53030' : '#276749') }};font-family:monospace;font-weight:600;">{{ $amount === null ? '–' : ($amount < 0 ? '($'.number_format(abs($amount), 2).')' : '$'.number_format($amount, 2)) }}</td>
                         </tr>
                     @empty
-                        <tr><td colspan="13" style="padding:48px;text-align:center;color:#718096;">No VieFund transactions were found.</td></tr>
+                        <tr><td colspan="17" style="padding:48px;text-align:center;color:#718096;">No VieFund cash-ledger transactions were found.</td></tr>
                     @endforelse
                 </tbody>
             </table>

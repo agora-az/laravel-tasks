@@ -85,10 +85,8 @@ class RemoteVieFundController extends Controller
             'output_order' => $outputOrder,
             'currency_code' => $currencyCode,
             'status_ids' => $statusIds,
-            'trust_status_names' => $this->trustStatusesForCashStatuses($statusIds),
             'trx_type' => $trxTypesSelected ?: null,
         ]);
-        $filters['trust_status_names'] = $this->trustStatusesForCashStatuses($statusIds);
         $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
             ? (int) $request->query('per_page', 100)
             : 100;
@@ -878,28 +876,7 @@ class RemoteVieFundController extends Controller
         }
     }
 
-    /**
-     * Map the cash-status controls to their standalone-trust equivalents so a
-     * unified transaction listing remains intuitive.
-     *
-     * @return string[]
-     */
-    private function trustStatusesForCashStatuses(array $statusIds): array
-    {
-        $trustStatuses = [];
-        if (in_array(0, $statusIds, true)) {
-            $trustStatuses[] = 'Deleted';
-        }
-        if (array_intersect([3, 4], $statusIds)) {
-            $trustStatuses[] = 'Unsettled';
-        }
-        if (array_intersect([5, 6], $statusIds)) {
-            $trustStatuses[] = 'Settled';
-        }
-
-        return array_values(array_unique($trustStatuses));
-    }
-
+    /** Resolve the configured or cached inception date for a cash date basis. */
     private function resolveAllTransactionInceptionDate(string $dateBasis): ?string
     {
         $specificEnvKey = self::ALL_TRANSACTION_INCEPTION_ENV_KEYS[$dateBasis] ?? null;

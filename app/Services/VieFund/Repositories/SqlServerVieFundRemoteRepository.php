@@ -228,160 +228,28 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         ]);
     }
 
-    /** Database-paginated ledger for the unfiltered All Transactions page. */
+    /** Database-paginated cash ledger for the All Transactions page. */
     public function fetchAllTransactions(int $perPage = 100, int $page = 1, ?string $search = null, array $filters = []): PaginatorContract
     {
-        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $perPage = in_array($perPage, [50, 100, 250], true) ? $perPage : 100;
-        $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
-        $fundSortColumn = $this->fundDateColumn($dateBasis);
-        $trustSortColumn = $this->trustDateColumn($dateBasis);
         $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
-        $rawTransactionIds = trim((string) ($filters['trx_id'] ?? ''));
-        $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
-        $queryFilters = $filters;
-        unset($queryFilters['trx_id']);
-
-        $fund = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_FundTrxLookup as l")
-            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
-            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
-            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
-            ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
-            ->leftJoin("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
-            ->leftJoin("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
-            ->leftJoin("{$schema}.UB_Def_TrxStatus as ts", 'ts.ID', '=', 'ct.iStatus')
-            ->whereNotNull('ct.ID')
-            ->select([
-                DB::raw("CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id"),
-                DB::raw('CAST(t.SourceID AS NVARCHAR(100)) AS source_id'),
-                DB::raw("LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name"),
-                DB::raw('CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id'),
-                DB::raw('ISNULL(tt.NameEN, CAST(l.iType AS NVARCHAR(100))) AS transaction_type'),
-                DB::raw('ts.NameEN AS status'),
-                DB::raw('CAST(NULL AS NVARCHAR(1000)) AS notes'),
-                DB::raw('t.dtCreated AS created_date'),
-                DB::raw('ct.dtTrade AS trade_date'),
-                DB::raw('ct.dtProcessing AS processing_date'),
-                DB::raw('ct.dtSettlement AS settlement_date'),
-                DB::raw('ca.CurrencyCode AS currency_code'),
-                DB::raw('ct.mAmount AS amount'),
-                DB::raw('ct.ID AS sort_id'),
-                DB::raw("{$fundSortColumn} AS selected_date"),
-                DB::raw('l.iTrxID AS fund_transaction_id'),
-                DB::raw('ct.iTrustTrxID AS related_trust_id'),
-            ]);
-
-        $this->applyFiltersAndSearch($fund, $search, $queryFilters, $schema);
-        if (!empty($filters['has_reconciliation_match'])) {
-            $fund->whereExists(function ($query) use ($schema) {
-                $query->selectRaw('1')
-                    ->from("{$schema}.UB_EFTItem as reconciliation_eft")
-                    ->whereColumn('reconciliation_eft.iLinkedID', 'ct.iTrustTrxID');
-            });
-        }
-
-        $fundQueries = [];
-        if ($rawTransactionIds === '') {
-            $fundQueries[] = $fund;
-        } elseif (!empty($transactionIds)) {
-            $cashIds = collect($transactionIds)
-                ->filter(fn($item) => in_array($item['prefix'], ['', 'C'], true))
-                ->pluck('id')->unique()->values()->all();
-
-            if (!empty($cashIds)) {
-                $fundQueries[] = (clone $fund)->whereIn('ct.ID', $cashIds);
-            }
-        }
-
-        $trust = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_TrustTrx as tr")
-            ->leftJoin("{$schema}.UB_Plan as p", 'p.ID', '=', 'tr.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", function ($join) {
-                $join->whereRaw('c.ID = ISNULL(NULLIF(tr.iClientID, 0), p.iClientID)');
-            })
-            ->leftJoin("{$schema}.UB_Def_TrustType as ttype", 'ttype.ID', '=', 'tr.iType')
-            ->leftJoin("{$schema}.UB_Def_TrustStatus as ts", 'ts.ID', '=', 'tr.iStatus')
-            ->leftJoin("{$schema}.UB_Def_TrustDepositType as tdtype", function ($join) {
-                $join->on('tdtype.ID', '=', 'tr.iDepositType')
-                    ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
-            })
-            ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
-            ->select([
-                DB::raw("CONCAT('T-', CAST(tr.ID AS NVARCHAR(30))) AS transaction_id"),
-                DB::raw('CAST(NULL AS NVARCHAR(100)) AS source_id'),
-                DB::raw("LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name"),
-                DB::raw('CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id'),
-                DB::raw("ISNULL(CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN tdtype.NameEN ELSE ttype.NameEN END, CAST(tr.iType AS NVARCHAR(100))) AS transaction_type"),
-                DB::raw('ts.NameEN AS status'),
-                DB::raw('CAST(tr.Notes AS NVARCHAR(1000)) AS notes'),
-                DB::raw('tr.dtCreated AS created_date'),
-                DB::raw('tr.dtEffective AS trade_date'),
-                DB::raw('CAST(NULL AS DATETIME) AS processing_date'),
-                DB::raw('tr.dtSettlement AS settlement_date'),
-                DB::raw('tr.CurrencyCode AS currency_code'),
-                DB::raw('tr.mAmount AS amount'),
-                DB::raw('tr.ID AS sort_id'),
-                DB::raw("{$trustSortColumn} AS selected_date"),
-                DB::raw('CAST(NULL AS INT) AS fund_transaction_id'),
-                DB::raw('tr.ID AS related_trust_id'),
-            ]);
-
-        $this->applyTrustFiltersAndSearch($trust, $search, $queryFilters, $schema);
-        if (!empty($filters['has_reconciliation_match'])) {
-            $trust->whereExists(function ($query) use ($schema) {
-                $query->selectRaw('1')
-                    ->from("{$schema}.UB_EFTItem as reconciliation_eft")
-                    ->whereColumn('reconciliation_eft.iLinkedID', 'tr.ID');
-            });
-        }
-        if ($rawTransactionIds !== '') {
-            $trustIds = collect($transactionIds)
-                ->filter(fn($item) => in_array($item['prefix'], ['', 'T'], true))
-                ->pluck('id')->unique()->values()->all();
-            empty($trustIds)
-                ? $trust->whereRaw('1 = 0')
-                : $trust->whereIn('tr.ID', $trustIds);
-        }
+        $query = $this->buildAllTransactionCashLedgerQuery($search, $filters);
 
         $countCacheKey = 'viefund_all_transactions_count:' . sha1(serialize([
             'search' => $search,
             'filters' => $filters,
+            'grain' => 'cash-ledger-v1',
         ]));
-        $total = Cache::remember($countCacheKey, 300, function () use ($fundQueries, $trust): int {
-            $fundCount = collect($fundQueries)->sum(
-                fn($query) => (int) (clone $query)->distinct()->count('ct.ID')
-            );
-            $trustCount = (int) (clone $trust)->distinct()->count('tr.ID');
-
-            return $fundCount + $trustCount;
-        });
+        $total = Cache::remember($countCacheKey, 300, fn(): int => (int) (clone $query)->count());
 
         $page = max(1, $page);
-        $offset = ($page - 1) * $perPage;
-        $fetchLimit = ($offset + $perPage + 1) * 2;
-
-        // Taking the leading rows from each source separately avoids forcing SQL
-        // Server to sort the complete multi-million-row UNION on every page load.
-        $fundRows = collect();
-        foreach ($fundQueries as $fundQuery) {
-            $orderedFundQuery = $fundQuery->orderBy($fundSortColumn, $outputOrder)
-                ->orderBy('ct.ID', $outputOrder);
-            $fundRows = $fundRows->concat($orderedFundQuery->limit($fetchLimit)->get());
-        }
-        $fundRows = $fundRows->unique(fn($row) => $row->transaction_id . '|' . $row->plan_account_id);
-        $trustRows = $trust
-            ->orderBy($trustSortColumn, $outputOrder)
-            ->orderBy('tr.ID', $outputOrder)
-            ->limit($fetchLimit)
+        $rows = (clone $query)
+            ->orderBy('basis_date', $outputOrder)
+            ->orderBy('sort_id', $outputOrder)
+            ->forPage($page, $perPage)
             ->get();
 
-        $rows = $fundRows->concat($trustRows);
-        $sortCallback = fn($row) => sprintf('%s|%020d|%s', $row->selected_date ?? '', $row->sort_id ?? 0, $row->transaction_id ?? '');
-        $rows = ($outputOrder === 'asc' ? $rows->sortBy($sortCallback) : $rows->sortByDesc($sortCallback))->values();
-        $pageRows = $rows->slice($offset, $perPage + 1)->values();
-        return new LengthAwarePaginator($pageRows->take($perPage), $total, $perPage, $page, [
+        return new LengthAwarePaginator($rows, $total, $perPage, $page, [
             'path' => Paginator::resolveCurrentPath(),
             'query' => Paginator::resolveQueryString(),
         ]);
@@ -394,7 +262,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     {
         $dateColumn = 'basis_date';
 
-        return $this->buildAllTransactionExportQuery($search, $filters)
+        return $this->buildAllTransactionCashLedgerQuery($search, $filters)
             ->whereNotNull($dateColumn)
             ->selectRaw("CONVERT(date, {$dateColumn}) AS transaction_date, COUNT(*) AS transaction_count, SUM(COALESCE(amount, 0)) AS net_amount")
             ->groupByRaw("CONVERT(date, {$dateColumn})")
@@ -416,7 +284,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $dateColumn = 'basis_date';
         $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $comparison = $outputOrder === 'asc' ? '>' : '<';
-        $query = $this->buildAllTransactionExportQuery($search, $filters)
+        $query = $this->buildAllTransactionCashLedgerQuery($search, $filters)
             ->select('*')
             ->whereNotNull($dateColumn)
             ->orderBy($dateColumn, $outputOrder)
@@ -456,104 +324,177 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     }
 
     /**
-     * Build the same fund + standalone-trust ledger represented on the All
-     * Transactions page. Fund allocation duplicates are collapsed to one cash
-     * transaction per plan account before the two sources are combined.
+     * Build one row per UB_CashTrx entry using the same accounting scope as the
+     * Daily Net + Running Balance report. Fund and trust rows enrich the cash
+     * entry but never create an additional accounting row.
      */
-    private function buildAllTransactionExportQuery(?string $search, array $filters): \Illuminate\Database\Query\Builder
+    private function buildAllTransactionCashLedgerQuery(?string $search, array $filters): \Illuminate\Database\Query\Builder
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
-        $fundDateColumn = $this->fundDateColumn($dateBasis);
-        $trustDateColumn = $this->trustDateColumn($dateBasis);
+        $cashDateColumn = match ($dateBasis) {
+            'create_date' => 'ct.dtCreated',
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+            default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
+        };
         $rawTransactionIds = trim((string) ($filters['trx_id'] ?? ''));
         $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
-        $queryFilters = $filters;
-        unset($queryFilters['trx_id']);
-
-        $fund = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_FundTrxLookup as l")
-            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
-            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
-            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
-            ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
-            ->leftJoin("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
-            ->leftJoin("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
-            ->leftJoin("{$schema}.UB_Def_TrxStatus as ts", 'ts.ID', '=', 'ct.iStatus')
-            ->whereNotNull('ct.ID');
-
-        $this->applyFiltersAndSearch($fund, $search, $queryFilters, $schema);
-
-        if ($rawTransactionIds !== '') {
-            $cashIds = collect($transactionIds)
-                ->filter(fn($item) => in_array($item['prefix'], ['', 'C'], true))
-                ->pluck('id')->unique()->values()->all();
-            empty($cashIds) ? $fund->whereRaw('1 = 0') : $fund->whereIn('ct.ID', $cashIds);
+        $statusIds = array_values(array_unique(array_map('intval', (array) ($filters['status_ids'] ?? [6]))));
+        $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
+        $availabilityTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
+            ->addDay()
+            ->startOfDay()
+            ->toDateTimeString();
+        if (!empty($filters['currency_code'])) {
+            $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
         }
 
-        $fund->selectRaw(implode(', ', [
-            "CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id",
-            'MIN(CAST(t.SourceID AS NVARCHAR(100))) AS source_id',
-            "MAX(LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, ''))))) AS customer_name",
-            'CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id',
-            'MIN(ISNULL(tt.NameEN, CAST(l.iType AS NVARCHAR(100)))) AS transaction_type',
-            'MIN(ts.NameEN) AS status',
-            'CAST(NULL AS NVARCHAR(1000)) AS notes',
-            'MAX(t.dtCreated) AS created_date',
-            'MAX(ct.dtTrade) AS trade_date',
-            'MAX(ct.dtProcessing) AS processing_date',
-            'MAX(ct.dtSettlement) AS settlement_date',
-            'MAX(ca.CurrencyCode) AS currency_code',
-            'MAX(ct.mAmount) AS amount',
-            'ct.ID AS sort_id',
-            "MAX({$fundDateColumn}) AS basis_date",
-        ]))->groupBy('ct.ID', 'p.DealerAccountID');
+        $fundMetadata = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_FundTrxCash as fm_fc")
+            ->join("{$schema}.UB_FundTrx as fm_t", 'fm_t.ID', '=', 'fm_fc.iTrxID')
+            ->leftJoin("{$schema}.UB_FundTrxLookup as fm_l", 'fm_l.iTrxID', '=', 'fm_t.ID')
+            ->leftJoin("{$schema}.UB_Def_TrxType as fm_tt", 'fm_tt.ID', '=', 'fm_l.iType')
+            ->selectRaw('fm_fc.iCashTrxID AS cash_id')
+            ->selectRaw('MIN(fm_t.ID) AS fund_transaction_id')
+            ->selectRaw('MIN(CAST(fm_t.SourceID AS NVARCHAR(100))) AS fund_source_id')
+            ->selectRaw("MIN(ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))) AS fund_transaction_type")
+            ->groupBy('fm_fc.iCashTrxID');
 
-        $trust = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_TrustTrx as tr")
-            ->leftJoin("{$schema}.UB_Plan as p", 'p.ID', '=', 'tr.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", function ($join) {
-                $join->whereRaw('c.ID = ISNULL(NULLIF(tr.iClientID, 0), p.iClientID)');
-            })
-            ->leftJoin("{$schema}.UB_Def_TrustType as ttype", 'ttype.ID', '=', 'tr.iType')
-            ->leftJoin("{$schema}.UB_Def_TrustStatus as ts", 'ts.ID', '=', 'tr.iStatus')
-            ->leftJoin("{$schema}.UB_Def_TrustDepositType as tdtype", function ($join) {
-                $join->on('tdtype.ID', '=', 'tr.iDepositType')
+        $cashLedger = DB::connection(self::CONNECTION)
+            ->table("{$schema}.UB_CashTrx as ct")
+            ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')
+            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->leftJoin("{$schema}.UB_Def_TrxStatus as cash_status", 'cash_status.ID', '=', 'ct.iStatus')
+            ->leftJoin("{$schema}.UB_Def_TrxType as cash_type", 'cash_type.ID', '=', 'ct.iType')
+            ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
+            ->leftJoin("{$schema}.UB_Def_TrustStatus as trust_status", 'trust_status.ID', '=', 'tr.iStatus')
+            ->leftJoin("{$schema}.UB_Def_TrustType as trust_type", 'trust_type.ID', '=', 'tr.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustDepositType as trust_deposit_type", function ($join) {
+                $join->on('trust_deposit_type.ID', '=', 'tr.iDepositType')
                     ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
             })
-            ->whereRaw('ISNULL(tr.iTrxID, 0) = 0');
+            ->leftJoinSub($fundMetadata, 'fund_meta', 'fund_meta.cash_id', '=', 'ct.ID')
+            ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
+            ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<=', $filters['date_to'] . ' 23:59:59'))
+            ->whereNotNull($cashDateColumn)
+            ->whereNotNull('ct.mAmount')
+            ->when($dateBasis === 'trade_date', function ($query) use ($availabilityTo) {
+                $query->where(function ($availableByTradeDate) use ($availabilityTo) {
+                    $availableByTradeDate
+                        ->whereNull('ct.dtSettlement')
+                        ->orWhere('ct.dtSettlement', '<', $availabilityTo)
+                        ->orWhere('ct.mAmount', '<=', 0)
+                        ->orWhereNull('tr.ID')
+                        ->orWhereNull('trust_status.NameEN')
+                        ->orWhere('trust_status.NameEN', '<>', 'Unsettled')
+                        ->orWhereRaw('ISNULL(tr.mAmountUsed, 0) > 0')
+                        ->orWhereRaw('ISNULL(tr.mAmountLeft, 0) <= 0');
+                });
+            })
+            ->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID)
+            ->whereExists(function ($query) use ($schema, $cashAccountScope) {
+                $query->selectRaw('1')
+                    ->from("{$schema}.UB_CashAccount as eligible_ca")
+                    ->whereColumn('eligible_ca.iPlanID', 'p.ID')
+                    ->whereNotNull('eligible_ca.AccountID')
+                    ->where('eligible_ca.AccountID', '<>', '');
+                $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'eligible_ca');
+            })
+            ->when(!empty($cashAccountScope['excluded_plan_accounts']), fn($query) => $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']))
+            ->tap(fn($query) => $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca'))
+            ->when(!empty($cashAccountScope['opened_before']), fn($query) => $query->whereNotNull('ct.dtCreated')->where('ct.dtCreated', '<=', $cashAccountScope['opened_before']))
+            ->when(!empty($statusIds), fn($query) => $query->whereIn('ct.iStatus', $statusIds))
+            ->when(!empty($filters['has_reconciliation_match']), function ($query) use ($schema) {
+                $query->whereExists(function ($eft) use ($schema) {
+                    $eft->selectRaw('1')
+                        ->from("{$schema}.UB_EFTItem as reconciliation_eft")
+                        ->whereColumn('reconciliation_eft.iLinkedID', 'ct.iTrustTrxID');
+                });
+            })
+            ->selectRaw(implode(', ', [
+                "CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id",
+                'ct.ID AS cash_transaction_id',
+                'fund_meta.fund_transaction_id AS fund_transaction_id',
+                'tr.ID AS trust_transaction_id',
+                'tr.ID AS related_trust_id',
+                "CASE WHEN fund_meta.cash_id IS NOT NULL AND tr.ID IS NOT NULL THEN 'Fund/Trust-linked cash' WHEN fund_meta.cash_id IS NOT NULL THEN 'Fund-linked cash' WHEN tr.ID IS NOT NULL THEN 'Trust-linked cash' ELSE 'Cash ledger only' END AS ledger_relationship",
+                'COALESCE(fund_meta.fund_source_id, CAST(ct.SourceID AS NVARCHAR(100))) AS source_id',
+                "LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name",
+                'CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id',
+                "COALESCE(fund_meta.fund_transaction_type, CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN trust_deposit_type.NameEN ELSE trust_type.NameEN END, cash_type.NameEN, CAST(ct.iType AS NVARCHAR(100))) AS transaction_type",
+                'cash_status.NameEN AS status',
+                'trust_status.NameEN AS trust_status',
+                'CAST(tr.Notes AS NVARCHAR(1000)) AS notes',
+                'ct.dtCreated AS created_date',
+                'ct.dtTrade AS trade_date',
+                'ct.dtProcessing AS processing_date',
+                'ct.dtSettlement AS settlement_date',
+                'ca.CurrencyCode AS currency_code',
+                'ct.mAmount AS amount',
+                'ct.ID AS sort_id',
+                "{$cashDateColumn} AS selected_date",
+                "{$cashDateColumn} AS basis_date",
+            ]));
 
-        $this->applyTrustFiltersAndSearch($trust, $search, $queryFilters, $schema);
+        $query = DB::connection(self::CONNECTION)
+            ->query()
+            ->fromSub($cashLedger, 'cash_ledger_transactions');
 
         if ($rawTransactionIds !== '') {
-            $trustIds = collect($transactionIds)
-                ->filter(fn($item) => in_array($item['prefix'], ['', 'T'], true))
-                ->pluck('id')->unique()->values()->all();
-            empty($trustIds) ? $trust->whereRaw('1 = 0') : $trust->whereIn('tr.ID', $trustIds);
+            $cashIds = collect($transactionIds)->filter(fn($item) => in_array($item['prefix'], ['', 'C'], true))->pluck('id')->all();
+            $trustIds = collect($transactionIds)->filter(fn($item) => in_array($item['prefix'], ['', 'T'], true))->pluck('id')->all();
+            $fundIds = collect($transactionIds)->filter(fn($item) => in_array($item['prefix'], ['', 'F'], true))->pluck('id')->all();
+            $query->where(function ($ids) use ($cashIds, $trustIds, $fundIds) {
+                if (!empty($cashIds)) {
+                    $ids->orWhereIn('cash_transaction_id', $cashIds);
+                }
+                if (!empty($trustIds)) {
+                    $ids->orWhereIn('trust_transaction_id', $trustIds);
+                }
+                if (!empty($fundIds)) {
+                    $ids->orWhereIn('fund_transaction_id', $fundIds);
+                }
+                if (empty($cashIds) && empty($trustIds) && empty($fundIds)) {
+                    $ids->whereRaw('1 = 0');
+                }
+            });
         }
 
-        $trust->selectRaw(implode(', ', [
-            "CONCAT('T-', CAST(tr.ID AS NVARCHAR(30))) AS transaction_id",
-            'CAST(NULL AS NVARCHAR(100)) AS source_id',
-            "LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name",
-            'CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id',
-            "ISNULL(CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN tdtype.NameEN ELSE ttype.NameEN END, CAST(tr.iType AS NVARCHAR(100))) AS transaction_type",
-            'ts.NameEN AS status',
-            'CAST(tr.Notes AS NVARCHAR(1000)) AS notes',
-            'tr.dtCreated AS created_date',
-            'tr.dtEffective AS trade_date',
-            'CAST(NULL AS DATETIME) AS processing_date',
-            'tr.dtSettlement AS settlement_date',
-            'tr.CurrencyCode AS currency_code',
-            'tr.mAmount AS amount',
-            'tr.ID AS sort_id',
-            "{$trustDateColumn} AS basis_date",
-        ]));
+        if ($search) {
+            $like = '%' . $search . '%';
+            $query->where(function ($searchQuery) use ($like) {
+                $searchQuery->where('customer_name', 'like', $like)
+                    ->orWhere('plan_account_id', 'like', $like)
+                    ->orWhere('source_id', 'like', $like)
+                    ->orWhere('transaction_type', 'like', $like)
+                    ->orWhere('notes', 'like', $like)
+                    ->orWhereRaw('CAST(cash_transaction_id AS NVARCHAR) LIKE ?', [$like])
+                    ->orWhereRaw('CAST(trust_transaction_id AS NVARCHAR) LIKE ?', [$like])
+                    ->orWhereRaw('CAST(fund_transaction_id AS NVARCHAR) LIKE ?', [$like]);
+            });
+        }
+        if (!empty($filters['customer_name'])) {
+            $query->where('customer_name', 'like', '%' . $filters['customer_name'] . '%');
+        }
+        if (!empty($filters['plan_account_id'])) {
+            $query->where('plan_account_id', 'like', '%' . $filters['plan_account_id'] . '%');
+        }
+        if (!empty($filters['source_id'])) {
+            $sourceIds = array_values(array_filter(array_map('trim', explode(',', (string) $filters['source_id']))));
+            $query->where(function ($sources) use ($sourceIds) {
+                foreach ($sourceIds as $sourceId) {
+                    $sources->orWhere('source_id', 'like', '%' . $sourceId . '%');
+                }
+            });
+        }
+        if (!empty($filters['trx_type'])) {
+            $query->whereIn('transaction_type', (array) $filters['trx_type']);
+        }
 
-        return DB::connection(self::CONNECTION)
-            ->query()
-            ->fromSub($fund->unionAll($trust), 'all_transactions');
+        return $query;
     }
 
     /**
