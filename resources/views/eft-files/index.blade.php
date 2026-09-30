@@ -38,7 +38,7 @@
         2 => ['bg' => '#bee3f8', 'text' => '#2a4365'],
     ];
     $difference = (float) $totals->total_amount - (float) $totals->item_amount;
-    $filterKeys = ['file_id', 'sequences', 'date_basis', 'date_from', 'date_to', 'type', 'file_status', 'item_status', 'file_search', 'item_search'];
+    $filterKeys = ['file_id', 'linked_id', 'sequences', 'date_basis', 'date_from', 'date_to', 'type', 'file_status', 'item_status', 'file_search', 'item_search'];
     $dateBasisLabel = $filters['date_basis'] === 'effective' ? 'Effective' : 'Created';
     $tabUrl = static fn(string $tab): string => route('eft-files.index', array_merge(request()->except(['file_page', 'item_page']), ['tab' => $tab]));
     $fileSortUrl = static function (string $column) use ($fileSort, $fileSortDir): string {
@@ -225,8 +225,14 @@
     <form action="{{ route('eft-files.index') }}" method="GET">
         @if($selectedFile)
             <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;background:#ebf8ff;border:1px solid #bee3f8;color:#2c5282;border-radius:4px;padding:9px 12px;margin-bottom:12px;font:600 12px monospace;">
-                <span>Viewing file #{{ $selectedFile->id }}: {{ $selectedFile->file_name }}</span>
+                <span>Viewing file #{{ $selectedFile->id }}: {{ $selectedFile->file_name }} · Sequence {{ $selectedFile->sequence_number ?? '—' }}</span>
                 <a href="{{ route('eft-files.index', ['tab' => 'items']) }}" style="color:#2b6cb0;white-space:nowrap;">Clear file</a>
+            </div>
+        @endif
+        @if($filters['linked_id'] !== '')
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;background:#f0fff4;border:1px solid #9ae6b4;color:#276749;border-radius:4px;padding:9px 12px;margin-bottom:12px;font:600 12px monospace;">
+                <span>Viewing EFT items linked to trust transaction T-{{ $filters['linked_id'] }}</span>
+                <a href="{{ route('eft-files.index', array_filter(['tab' => 'items', 'file_id' => $filters['file_id']])) }}" style="color:#2f855a;white-space:nowrap;">Clear transaction</a>
             </div>
         @endif
         @if($filters['sequences'] !== '')
@@ -298,6 +304,9 @@
         </div>
         @if($filters['file_id'] !== '')
             <input type="hidden" name="file_id" value="{{ $filters['file_id'] }}">
+        @endif
+        @if($filters['linked_id'] !== '')
+            <input type="hidden" name="linked_id" value="{{ $filters['linked_id'] }}">
         @endif
         <input type="hidden" name="tab" value="{{ $activeTab }}">
         <input type="hidden" name="file_sort" value="{{ $fileSort }}">

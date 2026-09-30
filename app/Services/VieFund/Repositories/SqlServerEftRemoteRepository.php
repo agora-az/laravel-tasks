@@ -24,29 +24,71 @@ class SqlServerEftRemoteRepository
             // Unprocessed EFT items use iProcessingID = 0 and therefore have no
             // UB_EFTFile row yet. Keep them visible in reconciliation.
             ->leftJoin($this->table('UB_EFTFile') . ' as f', 'f.ID', '=', 'i.iProcessingID')
-            ->leftJoin($this->table('UB_Def_EFTType') . ' as t', 't.ID', '=', 'i.iLinkedType')
-            ->leftJoin($this->table('UB_Def_EFTSource') . ' as s', 's.FSCode', '=', 'i.SourceCode')
             ->whereIn('i.iLinkedID', $linkedIds->all())
             ->select([
                 'i.ID as id',
                 'i.iLinkedID as linked_id',
                 'i.dtCreated as created_at',
-                'i.dtEffective as effective_date',
-                'i.iStatus as status_id',
-                'i.HolderName as holder_name',
-                'i.HolderID as holder_id',
-                'i.SourceCode as source_code',
-                's.NameEN as source_name',
-                'i.Notes as notes',
-                'i.mAmount as amount',
                 'f.ID as file_id',
                 'f.iSequenceNumber as sequence_number',
                 'f.FileName as file_name',
-                't.NameEN as type_name',
             ])
             ->orderByDesc('i.dtCreated')
             ->orderByDesc('i.ID')
             ->get();
+    }
+
+    /**
+     * Return export-ready EFT rows for a cash-ledger batch. Passing the IDs as
+     * one JSON value avoids SQL Server's bound-parameter limit and replaces the
+     * previous series of 1,800-ID queries with one bounded bulk query.
+     */
+    public function exportItemsByLinkedIds(array $linkedIds): Collection
+    {
+        $linkedIds = collect($linkedIds)->filter()->map(fn($id) => (int) $id)->unique()->values();
+        if ($linkedIds->isEmpty()) {
+            return collect();
+        }
+
+        return $linkedIds
+            ->chunk((int) config('viefund.all_transactions_link_cache.remote_batch_size', 20000))
+            ->flatMap(function (Collection $chunk): Collection {
+                return $this->connection()
+                    ->query()
+                    ->fromRaw(
+                        "OPENJSON(?) WITH ([linked_id] BIGINT '$') AS requested_eft",
+                        [json_encode($chunk->all(), JSON_THROW_ON_ERROR)]
+                    )
+                    ->join($this->table('UB_EFTItem') . ' as i', 'i.iLinkedID', '=', 'requested_eft.linked_id')
+                    ->leftJoin($this->table('UB_EFTFile') . ' as f', 'f.ID', '=', 'i.iProcessingID')
+                    ->leftJoin($this->table('UB_Def_EFTType') . ' as t', 't.ID', '=', 'i.iLinkedType')
+                    ->leftJoin($this->table('UB_Def_EFTSource') . ' as s', 's.FSCode', '=', 'i.SourceCode')
+                    ->leftJoin($this->table('UB_TrustTrx') . ' as tr', 'tr.ID', '=', 'i.iLinkedID')
+                    ->select([
+                        'i.ID as id',
+                        'i.iLinkedID as linked_id',
+                        'i.dtCreated as created_at',
+                        'i.dtEffective as effective_date',
+                        'i.iLinkedType as type_id',
+                        't.NameEN as type_name',
+                        'i.iStatus as status_id',
+                        'i.HolderName as holder_name',
+                        'i.HolderID as holder_id',
+                        'i.SourceCode as source_code',
+                        's.NameEN as source_name',
+                        'i.Notes as notes',
+                        'i.mAmount as amount',
+                        'f.ID as file_id',
+                        'f.iSequenceNumber as sequence_number',
+                        'f.FileName as file_name',
+                        'tr.dtEffective as trade_date',
+                        'tr.dtSettlement as settlement_date',
+                    ])
+                    ->orderBy('i.ID')
+                    ->get();
+            })
+            ->sortBy('id')
+            ->values();
     }
 
     public function linkedIdsForSequences(array $sequences): Collection
@@ -505,6 +547,10 @@ class SqlServerEftRemoteRepository
             ->leftJoin($this->table('UB_TrustTrx') . ' as tr', 'tr.ID', '=', 'i.iLinkedID');
 
         $this->applyFileFilters($query, $filters, true);
+
+        if (($filters['linked_id'] ?? '') !== '') {
+            $query->where('i.iLinkedID', (int) $filters['linked_id']);
+        }
 
         if (($filters['item_status'] ?? '') !== '') {
             $query->where('i.iStatus', (int) $filters['item_status']);

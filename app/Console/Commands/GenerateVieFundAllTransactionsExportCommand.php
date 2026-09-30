@@ -2,13 +2,21 @@
 
 namespace App\Console\Commands;
 
+use App\Models\SettlementInstruction;
+use App\Services\Reconciliation\AgraFspBankMatcher;
+use App\Services\VieFund\VieFundExportLinkCache;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundDailyBalanceService;
+use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use OpenSpout\Common\Entity\Cell\FormulaCell;
 use OpenSpout\Common\Entity\Cell\NumericCell;
 use OpenSpout\Common\Entity\Cell\StringCell;
 use OpenSpout\Common\Entity\Row;
+use OpenSpout\Common\Entity\Style\CellAlignment;
 use OpenSpout\Common\Entity\Style\Style;
 use OpenSpout\Writer\AutoFilter;
 use OpenSpout\Writer\Common\Entity\Sheet;
@@ -26,6 +34,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     ];
 
     private const ACCOUNTING_CURRENCY_FORMAT = '$#,##0.00;[Red]($#,##0.00);$0.00';
+    private const BANK_PARSER_VERSION = 'v2';
 
     protected $signature = 'report:viefund-all-transactions
         {--run-id=}
@@ -41,6 +50,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         {--currency-code=00}
         {--status=*}
         {--transaction-type=*}
+        {--has-eft-match : Include only transactions linked to an EFT item}
+        {--has-agra-fsp-match : Include only transactions whose fund SourceID is present in an AGRA FSP item}
+        {--include-eft-records : Add unique linked EFT records and transaction-sheet links}
+        {--include-bank-records : Add unique linked bank records and transaction-sheet links}
+        {--include-fsp-records : Include matched AGRA FSP details in transaction columns or a separate sheet}
+        {--linked-record-layout=split : Write linked records into the transaction sheet or separate EFT, Bank, and FSP sheets}
         {--split-sheets : Distribute transactions into date-based sheets near the configured target size}
         {--output-base= : Storage-relative output path without an extension}
         {--status-file= : Absolute progress status path}
@@ -52,7 +67,10 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
     public function handle(
         VieFundRemoteService $remoteService,
-        VieFundDailyBalanceService $dailyBalanceService
+        VieFundDailyBalanceService $dailyBalanceService,
+        SqlServerEftRemoteRepository $eftRepository,
+        AgraFspBankMatcher $agraFspBankMatcher,
+        VieFundExportLinkCache $linkCache
     ): int
     {
         $startedAt = microtime(true);
@@ -64,6 +82,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $writer = null;
         $writerIsOpen = false;
         $outputAbsolutePath = '';
+        $stageTimings = [
+            'planning' => 0.0,
+            'transaction_queries' => 0.0,
+            'eft_bank_matching' => 0.0,
+            'fsp_bank_matching' => 0.0,
+            'worksheet_rows' => 0.0,
+            'finalizing' => 0.0,
+        ];
 
         try {
             if ($outputBase === '') {
@@ -93,11 +119,24 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'currency_code' => $currencyCode,
                 'status_ids' => $statusIds,
                 'trx_type' => array_values(array_filter((array) $this->option('transaction-type'))),
+                'has_reconciliation_match' => (bool) $this->option('has-eft-match'),
             ]);
+            if ((bool) $this->option('has-agra-fsp-match')) {
+                $filters['agra_fsp_source_ids_json'] = $this->agraFspSourceIdsJson(
+                    $dateBasis,
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null
+                );
+            }
             $maximumRowsPerSheet = (int) config('viefund.all_transactions_export_rows_per_sheet', 1000000);
             $splitTargetRows = (int) config('viefund.all_transactions_export_split_target_rows', 65000);
             $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 20000);
             $distributeSheets = (bool) $this->option('split-sheets');
+            $includeEftRecords = (bool) $this->option('include-eft-records');
+            $includeBankRecords = (bool) $this->option('include-bank-records');
+            $linkedRecordLayout = $this->stringOption('linked-record-layout') === 'single' ? 'single' : 'split';
+            $separateLinkedRecordSheets = $linkedRecordLayout === 'split';
+            $includeFspRecords = (bool) $this->option('include-fsp-records');
 
             $this->writeStatus($statusFile, [
                 'inProgress' => true,
@@ -108,6 +147,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'updated_at' => now()->toIso8601String(),
             ]);
 
+            $stageStartedAt = microtime(true);
             $dailyStats = $remoteService->fetchAllTransactionExportDailyStats($search ?: null, $filters);
             $totalTransactions = (int) $dailyStats->sum(fn($row) => (int) $row->transaction_count);
             $overallSelectedNet = (float) $dailyStats->sum(fn($row) => (float) $row->net_amount);
@@ -150,6 +190,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             if ($outputOrder === 'desc') {
                 $sheetPlans = array_reverse($sheetPlans);
             }
+            if ($separateLinkedRecordSheets && count($sheetPlans) === 1) {
+                $sheetPlans[0]['name'] = 'Transactions';
+            }
             $estimatedTransactionSheets = count($sheetPlans);
 
             $outputRelativePath = $outputBase . '.xlsx';
@@ -170,18 +213,137 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 ->setFontName('Calibri')
                 ->setFontSize(11)
                 ->setFormat(self::ACCOUNTING_CURRENCY_FORMAT);
+            $linkStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontColor('0563C1')
+                ->setFontUnderline();
+            $eftHeaderStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontBold()
+                ->setBackgroundColor('D9F0FB');
+            $bankHeaderStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontBold()
+                ->setBackgroundColor('DFF3E8');
+            $fspHeaderStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontBold()
+                ->setBackgroundColor('EADCF4');
+            $eftDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setBackgroundColor('F0F9FD')
+                ->setShouldWrapText();
+            $bankDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setBackgroundColor('F1FAF5')
+                ->setShouldWrapText();
+            $bankAmountDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setBackgroundColor('F1FAF5')
+                ->setShouldWrapText()
+                ->setCellAlignment(CellAlignment::RIGHT);
+            $fspDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setBackgroundColor('FAF6FD')
+                ->setShouldWrapText();
+            $fspAmountDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setBackgroundColor('FAF6FD')
+                ->setShouldWrapText()
+                ->setCellAlignment(CellAlignment::RIGHT);
+            $wireFeeBankDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontColor('975A16')
+                ->setBackgroundColor('FFFAF0')
+                ->setShouldWrapText();
+            $wireFeeBankAmountDetailStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontColor('975A16')
+                ->setBackgroundColor('FFFAF0')
+                ->setShouldWrapText()
+                ->setCellAlignment(CellAlignment::RIGHT);
+            $wireFeeCurrencyStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFontColor('975A16')
+                ->setBackgroundColor('FFFAF0')
+                ->setFormat(self::ACCOUNTING_CURRENCY_FORMAT);
+            $transactionHeaders = $this->transactionHeaders(
+                $includeEftRecords,
+                $includeBankRecords,
+                $includeFspRecords,
+                $separateLinkedRecordSheets
+            );
+            $bankDescriptionColumn = array_search('Bank Description', $transactionHeaders, true);
+            $bankDescriptionColumn = $bankDescriptionColumn === false ? null : $bankDescriptionColumn + 1;
+
+            $transactionSheets = [];
+            foreach ($sheetPlans as $index => $plan) {
+                $transactionSheet = $index === 0
+                    ? $writer->getCurrentSheet()
+                    : $writer->addNewSheetAndMakeItCurrent();
+                $this->prepareTransactionSheet(
+                    $writer,
+                    $transactionSheet,
+                    $plan['name'],
+                    $headerStyle,
+                    $eftHeaderStyle,
+                    $bankHeaderStyle,
+                    $fspHeaderStyle,
+                    $transactionHeaders
+                );
+                $transactionSheets[] = $transactionSheet;
+            }
+
+            $eftRecordsSheet = null;
+            if ($includeEftRecords && $separateLinkedRecordSheets) {
+                $eftRecordsSheet = $writer->addNewSheetAndMakeItCurrent();
+                $this->prepareEftRecordsSheet($writer, $eftRecordsSheet, $headerStyle);
+            }
+            $bankRecordsSheet = null;
+            if ($includeBankRecords && $separateLinkedRecordSheets) {
+                $bankRecordsSheet = $writer->addNewSheetAndMakeItCurrent();
+                $this->prepareBankRecordsSheet($writer, $bankRecordsSheet, $headerStyle);
+            }
+            $fspRecordsSheet = null;
+            if ($includeFspRecords && $separateLinkedRecordSheets) {
+                $fspRecordsSheet = $writer->addNewSheetAndMakeItCurrent();
+                $this->prepareFspRecordsSheet($writer, $fspRecordsSheet, $fspHeaderStyle);
+            }
 
             $sheetNumber = 1;
             $sheetPlanIndex = 0;
             $currentSheetPlan = $sheetPlans[$sheetPlanIndex];
-            $sheet = $writer->getCurrentSheet();
-            $this->prepareTransactionSheet($writer, $sheet, $currentSheetPlan['name'], $headerStyle);
+            $sheet = $transactionSheets[$sheetPlanIndex];
+            $writer->setCurrentSheet($sheet);
             $sheetRowCount = 0;
             $sheetOpeningBalance = $currentSheetPlan['opening_balance'];
             $sheetNet = 0.0;
             $sheetSummaries = [];
             $processedTransactions = 0;
             $cursor = null;
+            $eftSheetRowByItemId = [];
+            $bankSheetRowByEntryId = [];
+            $fspSheetRowByItemId = [];
+            $eftRecordCount = 0;
+            $bankRecordCount = 0;
+            $fspRecordCount = 0;
+            $bankSheetDescriptionWidth = 42.0;
+            $transactionBankDescriptionWidths = [];
+            $bankEntriesBySequenceCache = collect();
+            $fspBankMatchCache = collect();
+            $stageTimings['planning'] += microtime(true) - $stageStartedAt;
 
             do {
                 if ($lockFile !== '') {
@@ -207,19 +369,184 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'started_at' => $startedAtIso,
                     'updated_at' => now()->toIso8601String(),
                 ]);
+                $stageStartedAt = microtime(true);
                 $rows = $remoteService->fetchAllTransactionExportRowsAfter(
                     $search ?: null,
                     $filters,
                     $cursor,
                     $databaseBatchSize
                 );
+                $stageTimings['transaction_queries'] += microtime(true) - $stageStartedAt;
 
+                $linkedEftItems = collect();
+                $eftItemsByTrust = collect();
+                $bankEntriesBySequence = collect();
+                $fspItemsByCashTransaction = collect();
+                $fspBankEntriesByCashTransaction = collect();
+                if (($includeEftRecords || $includeBankRecords) && $rows->isNotEmpty()) {
+                    $stageStartedAt = microtime(true);
+                    $this->writeStatus($statusFile, [
+                        'inProgress' => true,
+                        'success' => null,
+                        'message' => sprintf(
+                            'Matching EFT%s records for the next %s transactions...',
+                            $includeBankRecords ? ' and bank' : '',
+                            number_format($rows->count())
+                        ),
+                        'progress_pct' => $totalTransactions > 0
+                            ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
+                            : 3,
+                        'processed_transactions' => $processedTransactions,
+                        'total_transactions' => $totalTransactions,
+                        'started_at' => $startedAtIso,
+                        'updated_at' => now()->toIso8601String(),
+                    ]);
+
+                    $trustIds = $rows
+                        ->pluck('trust_transaction_id')
+                        ->filter()
+                        ->map(fn($id) => (int) $id)
+                        ->unique()
+                        ->values()
+                        ->all();
+                    $linkedEftItems = $linkCache->eftItemsByLinkedIds($trustIds, $eftRepository);
+                    $eftItemsByTrust = $linkedEftItems->groupBy(fn($item) => (string) (int) $item->linked_id);
+
+                    if ($includeBankRecords) {
+                        $bankEntriesBySequence = $this->cachedBankEntriesForSequences(
+                            $linkedEftItems->pluck('sequence_number')->filter()->all(),
+                            $bankEntriesBySequenceCache
+                        );
+                    }
+                    if ($includeEftRecords && $eftRecordsSheet instanceof Sheet) {
+                        $this->appendEftRecords(
+                            $writer,
+                            $eftRecordsSheet,
+                            $linkedEftItems,
+                            $currencyStyle,
+                            $eftSheetRowByItemId,
+                            $eftRecordCount
+                        );
+                    }
+                    if ($includeBankRecords && $bankRecordsSheet instanceof Sheet) {
+                        $this->appendBankRecords(
+                            $writer,
+                            $bankRecordsSheet,
+                            $bankEntriesBySequence->flatten(1),
+                            $currencyStyle,
+                            $wireFeeBankDetailStyle,
+                            $wireFeeCurrencyStyle,
+                            $bankSheetRowByEntryId,
+                            $bankRecordCount,
+                            $bankSheetDescriptionWidth
+                        );
+                    }
+                    if (!$separateLinkedRecordSheets && $includeEftRecords) {
+                        foreach ($linkedEftItems->unique('id') as $item) {
+                            $itemId = (int) $item->id;
+                            if (!isset($eftSheetRowByItemId[$itemId])) {
+                                $eftSheetRowByItemId[$itemId] = true;
+                                ++$eftRecordCount;
+                            }
+                        }
+                    }
+                    if (!$separateLinkedRecordSheets && $includeBankRecords) {
+                        foreach ($bankEntriesBySequence->flatten(1)->unique('id') as $entry) {
+                            $entryId = (int) $entry->id;
+                            if (!isset($bankSheetRowByEntryId[$entryId])) {
+                                $bankSheetRowByEntryId[$entryId] = true;
+                                ++$bankRecordCount;
+                            }
+                        }
+                    }
+                    $writer->setCurrentSheet($sheet);
+                    $stageTimings['eft_bank_matching'] += microtime(true) - $stageStartedAt;
+                }
+
+                if (($includeFspRecords || $includeBankRecords) && $rows->isNotEmpty()) {
+                    $stageStartedAt = microtime(true);
+                    $this->writeStatus($statusFile, [
+                        'inProgress' => true,
+                        'success' => null,
+                        'message' => sprintf(
+                            'Matching AGRA FSP records for the next %s transactions...',
+                            number_format($rows->count())
+                        ),
+                        'progress_pct' => $totalTransactions > 0
+                            ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
+                            : 3,
+                        'processed_transactions' => $processedTransactions,
+                        'total_transactions' => $totalTransactions,
+                        'started_at' => $startedAtIso,
+                        'updated_at' => now()->toIso8601String(),
+                    ]);
+                    $fspItemsByCashTransaction = $this->agraFspItemsByCashTransaction(
+                        $rows,
+                        $remoteService,
+                        $linkCache
+                    );
+                    if ($includeFspRecords) {
+                        $linkedFspItems = $fspItemsByCashTransaction->flatten(1)->unique('id')->values();
+                        if ($fspRecordsSheet instanceof Sheet) {
+                            $this->appendFspRecords(
+                                $writer,
+                                $fspRecordsSheet,
+                                $linkedFspItems,
+                                $fspDetailStyle,
+                                $fspAmountDetailStyle,
+                                $fspSheetRowByItemId,
+                                $fspRecordCount
+                            );
+                        } else {
+                            foreach ($linkedFspItems as $fspItem) {
+                                $fspItemId = (int) $fspItem->id;
+                                if (!isset($fspSheetRowByItemId[$fspItemId])) {
+                                    $fspSheetRowByItemId[$fspItemId] = true;
+                                    ++$fspRecordCount;
+                                }
+                            }
+                        }
+                    }
+                    if ($includeBankRecords) {
+                        $fspBankEntriesByCashTransaction = $this->fspBankEntriesByCashTransaction(
+                            $fspItemsByCashTransaction,
+                            $agraFspBankMatcher,
+                            $fspBankMatchCache
+                        );
+                        $fspBankEntries = $fspBankEntriesByCashTransaction->flatten(1)->unique('id')->values();
+                        if ($bankRecordsSheet instanceof Sheet) {
+                            $this->appendBankRecords(
+                                $writer,
+                                $bankRecordsSheet,
+                                $fspBankEntries,
+                                $currencyStyle,
+                                $wireFeeBankDetailStyle,
+                                $wireFeeCurrencyStyle,
+                                $bankSheetRowByEntryId,
+                                $bankRecordCount,
+                                $bankSheetDescriptionWidth
+                            );
+                        } elseif (!$separateLinkedRecordSheets) {
+                            foreach ($fspBankEntries as $entry) {
+                                $entryId = (int) $entry->id;
+                                if (!isset($bankSheetRowByEntryId[$entryId])) {
+                                    $bankSheetRowByEntryId[$entryId] = true;
+                                    ++$bankRecordCount;
+                                }
+                            }
+                        }
+                    }
+                    $writer->setCurrentSheet($sheet);
+                    $stageTimings['fsp_bank_matching'] += microtime(true) - $stageStartedAt;
+                }
+
+                $stageStartedAt = microtime(true);
                 foreach ($rows as $row) {
                     if (
                         $sheetRowCount >= $currentSheetPlan['expected_rows']
                         && $sheetPlanIndex < count($sheetPlans) - 1
                     ) {
-                        $this->finalizeTransactionSheet($sheet, $sheetRowCount);
+                        $this->finalizeTransactionSheet($sheet, $sheetRowCount, $transactionHeaders);
                         $sheetSummary = $this->sheetSummary(
                             $sheetNumber, $currentSheetPlan['name'], $sheetRowCount,
                             $currentSheetPlan['from_date'], $currentSheetPlan['to_date'],
@@ -229,8 +556,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         ++$sheetNumber;
                         ++$sheetPlanIndex;
                         $currentSheetPlan = $sheetPlans[$sheetPlanIndex];
-                        $sheet = $writer->addNewSheetAndMakeItCurrent();
-                        $this->prepareTransactionSheet($writer, $sheet, $currentSheetPlan['name'], $headerStyle);
+                        $sheet = $transactionSheets[$sheetPlanIndex];
+                        $writer->setCurrentSheet($sheet);
                         $sheetRowCount = 0;
                         $sheetOpeningBalance = $currentSheetPlan['opening_balance'];
                         $sheetNet = 0.0;
@@ -238,31 +565,132 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
                     $amount = (float) ($row->amount ?? 0);
                     $createdDate = $this->dateTime($row->created_date ?? null);
-                    $writer->addRow(new Row([
-                        new StringCell((string) ($row->transaction_id ?? ''), null),
-                        new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', null),
-                        new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', null),
-                        new StringCell((string) ($row->ledger_relationship ?? ''), null),
+                    $trustId = !empty($row->trust_transaction_id) ? (string) (int) $row->trust_transaction_id : '';
+                    $transactionEftItems = collect($eftItemsByTrust->get($trustId, collect()))->values();
+                    $transactionBankEntries = $transactionEftItems
+                        ->pluck('sequence_number')
+                        ->filter()
+                        ->map(fn($sequence) => (string) (int) $sequence)
+                        ->unique()
+                        ->flatMap(fn($sequence) => collect($bankEntriesBySequence->get($sequence, collect())))
+                        ->unique('id')
+                        ->values();
+                    $transactionFspItems = collect($fspItemsByCashTransaction->get((string) (int) $row->cash_transaction_id, collect()))
+                        ->values();
+                    $transactionBankEntries = collect($fspBankEntriesByCashTransaction->get((string) (int) $row->cash_transaction_id, collect()))
+                        ->concat($transactionBankEntries)
+                        ->unique('id')
+                        ->values();
+                    $isPossibleWireFeeMatch = $transactionBankEntries
+                        ->contains(fn($entry) => (bool) ($entry->is_possible_wire_fee_match ?? false));
+                    $transactionDetailStyle = $isPossibleWireFeeMatch ? $wireFeeBankDetailStyle : null;
+                    $transactionCurrencyStyle = $isPossibleWireFeeMatch ? $wireFeeCurrencyStyle : $currencyStyle;
+
+                    $transactionCells = [
+                        new StringCell((string) ($row->transaction_id ?? ''), $transactionDetailStyle),
+                        new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', $transactionDetailStyle),
+                        new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', $transactionDetailStyle),
+                    ];
+                    if ($includeEftRecords && $separateLinkedRecordSheets) {
+                        $firstEftItem = $transactionEftItems->first();
+                        $targetRow = $firstEftItem ? ($eftSheetRowByItemId[(int) $firstEftItem->id] ?? null) : null;
+                        $label = $transactionEftItems->count() === 1
+                            ? 'EFT item #' . (int) $firstEftItem->id
+                            : ($transactionEftItems->isNotEmpty() ? number_format($transactionEftItems->count()) . ' EFT records' : '');
+                        $transactionCells[] = $this->internalHyperlinkCell('EFT', $targetRow, $label, $linkStyle);
+                    }
+                    if ($includeBankRecords && $separateLinkedRecordSheets) {
+                        $firstBankEntry = $transactionBankEntries->first();
+                        $targetRow = $firstBankEntry ? ($bankSheetRowByEntryId[(int) $firstBankEntry->id] ?? null) : null;
+                        $label = $transactionBankEntries->count() === 1
+                            ? 'Bank txn #' . (int) $firstBankEntry->id
+                            : ($transactionBankEntries->isNotEmpty() ? number_format($transactionBankEntries->count()) . ' bank transactions' : '');
+                        $transactionCells[] = $this->internalHyperlinkCell('Bank', $targetRow, $label, $linkStyle);
+                    }
+                    if ($includeFspRecords && $separateLinkedRecordSheets) {
+                        $firstFspItem = $transactionFspItems->first();
+                        $targetRow = $firstFspItem ? ($fspSheetRowByItemId[(int) $firstFspItem->id] ?? null) : null;
+                        $label = $transactionFspItems->count() === 1
+                            ? 'FSP record #' . (int) $firstFspItem->id
+                            : ($transactionFspItems->isNotEmpty() ? number_format($transactionFspItems->count()) . ' FSP records' : '');
+                        $transactionCells[] = $this->internalHyperlinkCell('FSP (AGRA)', $targetRow, $label, $linkStyle);
+                    }
+                    array_push($transactionCells,
+                        new StringCell((string) ($row->ledger_relationship ?? ''), $transactionDetailStyle),
                         // Source IDs can exceed Excel's 15-digit numeric precision.
-                        new StringCell((string) ($row->source_id ?? ''), null),
-                        new StringCell(trim((string) ($row->customer_name ?? '')), null),
-                        new StringCell((string) ($row->plan_account_id ?? ''), null),
-                        new StringCell((string) ($row->transaction_type ?? ''), null),
-                        new StringCell((string) ($row->status ?? ''), null),
-                        new StringCell((string) ($row->trust_status ?? ''), null),
-                        new StringCell((string) ($row->notes ?? ''), null),
-                        new StringCell($createdDate, null),
-                        new StringCell($this->dateTime($row->trade_date ?? null), null),
-                        new StringCell($this->dateTime($row->processing_date ?? null), null),
-                        new StringCell($this->dateTime($row->settlement_date ?? null), null),
-                        new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), null),
-                        new NumericCell($amount, $currencyStyle),
-                    ]));
+                        new StringCell((string) ($row->source_id ?? ''), $transactionDetailStyle),
+                        new StringCell(trim((string) ($row->customer_name ?? '')), $transactionDetailStyle),
+                        new StringCell((string) ($row->plan_account_id ?? ''), $transactionDetailStyle),
+                        new StringCell((string) ($row->transaction_type ?? ''), $transactionDetailStyle),
+                        new StringCell((string) ($row->status ?? ''), $transactionDetailStyle),
+                        new StringCell((string) ($row->trust_status ?? ''), $transactionDetailStyle),
+                        new StringCell((string) ($row->notes ?? ''), $transactionDetailStyle),
+                        new StringCell($createdDate, $transactionDetailStyle),
+                        new StringCell($this->dateTime($row->trade_date ?? null), $transactionDetailStyle),
+                        new StringCell($this->dateTime($row->processing_date ?? null), $transactionDetailStyle),
+                        new StringCell($this->dateTime($row->settlement_date ?? null), $transactionDetailStyle),
+                        new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), $transactionDetailStyle),
+                        new NumericCell($amount, $transactionCurrencyStyle)
+                    );
+                    if (!$separateLinkedRecordSheets && $includeEftRecords) {
+                        $hasLaterDetails = ($includeBankRecords && $transactionBankEntries->isNotEmpty())
+                            || ($includeFspRecords && $transactionFspItems->isNotEmpty());
+                        if ($transactionEftItems->isNotEmpty()) {
+                            array_push(
+                                $transactionCells,
+                                ...$this->eftTransactionDetailCells($transactionEftItems, $eftDetailStyle)
+                            );
+                        } elseif ($hasLaterDetails) {
+                            array_push(
+                                $transactionCells,
+                                ...$this->emptyDetailCells(count($this->eftTransactionDetailHeaders()), $eftDetailStyle)
+                            );
+                        }
+                    }
+                    if (!$separateLinkedRecordSheets && $includeBankRecords && (
+                        $transactionBankEntries->isNotEmpty()
+                        || ($includeFspRecords && $transactionFspItems->isNotEmpty())
+                    )) {
+                        if ($bankDescriptionColumn !== null && $transactionBankEntries->isNotEmpty()) {
+                            $measuredWidth = $this->bankDescriptionWidth($transactionBankEntries);
+                            $currentWidth = $transactionBankDescriptionWidths[$sheetPlanIndex] ?? 36.0;
+                            if ($measuredWidth > $currentWidth) {
+                                $transactionBankDescriptionWidths[$sheetPlanIndex] = $measuredWidth;
+                            }
+                        }
+                        if ($transactionBankEntries->isNotEmpty()) {
+                            array_push(
+                                $transactionCells,
+                                ...$this->bankTransactionDetailCells(
+                                    $transactionBankEntries,
+                                    $isPossibleWireFeeMatch ? $wireFeeBankDetailStyle : $bankDetailStyle,
+                                    $isPossibleWireFeeMatch ? $wireFeeBankAmountDetailStyle : $bankAmountDetailStyle
+                                )
+                            );
+                        } else {
+                            array_push(
+                                $transactionCells,
+                                ...$this->emptyDetailCells(count($this->bankTransactionDetailHeaders()), $bankDetailStyle)
+                            );
+                        }
+                    }
+                    if (!$separateLinkedRecordSheets && $includeFspRecords && $transactionFspItems->isNotEmpty()) {
+                        array_push(
+                            $transactionCells,
+                            ...$this->fspTransactionDetailCells(
+                                $transactionFspItems,
+                                $fspDetailStyle,
+                                $fspAmountDetailStyle
+                            )
+                        );
+                    }
+                    $writer->addRow(new Row($transactionCells));
 
                     ++$sheetRowCount;
                     ++$processedTransactions;
                     $sheetNet += $amount;
                 }
+                $stageTimings['worksheet_rows'] += microtime(true) - $stageStartedAt;
 
                 if ($rows->isNotEmpty()) {
                     $lastRow = $rows->last();
@@ -294,15 +722,38 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'total_sheets' => $estimatedTransactionSheets,
                     'started_at' => $startedAtIso,
                     'updated_at' => now()->toIso8601String(),
+                    'timings_seconds' => $this->roundedTimings($stageTimings),
                 ]);
             } while ($rows->count() === $databaseBatchSize);
 
-            $this->finalizeTransactionSheet($sheet, $sheetRowCount);
+            $stageStartedAt = microtime(true);
+            if (!$separateLinkedRecordSheets && $bankDescriptionColumn !== null) {
+                foreach ($transactionSheets as $index => $transactionSheet) {
+                    $transactionSheet->setColumnWidth(
+                        $transactionBankDescriptionWidths[$index] ?? 36.0,
+                        $bankDescriptionColumn
+                    );
+                }
+            }
+            if ($bankRecordsSheet instanceof Sheet) {
+                $bankRecordsSheet->setColumnWidth($bankSheetDescriptionWidth, 11);
+            }
+
+            $this->finalizeTransactionSheet($sheet, $sheetRowCount, $transactionHeaders);
             $sheetSummaries[] = $this->sheetSummary(
                 $sheetNumber, $currentSheetPlan['name'], $sheetRowCount,
                 $currentSheetPlan['from_date'], $currentSheetPlan['to_date'],
                 $sheetOpeningBalance, $sheetNet, $currentSheetPlan['cash_ledger_net']
             );
+            if ($eftRecordsSheet instanceof Sheet) {
+                $this->finalizeLinkedRecordsSheet($eftRecordsSheet, count($this->eftRecordHeaders()), $eftRecordCount);
+            }
+            if ($bankRecordsSheet instanceof Sheet) {
+                $this->finalizeLinkedRecordsSheet($bankRecordsSheet, count($this->bankRecordHeaders()), $bankRecordCount);
+            }
+            if ($fspRecordsSheet instanceof Sheet) {
+                $this->finalizeLinkedRecordsSheet($fspRecordsSheet, count($this->fspRecordHeaders()), $fspRecordCount);
+            }
 
             $runningBalanceRows = $this->buildResultRunningBalanceRows(
                 $dailyStats,
@@ -328,11 +779,16 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $writer, $summarySheet, $headerStyle, $currencyStyle, $sheetSummaries,
                 $filters, $search, $totalTransactions, $firstDate, $lastDate,
                 $overallOpeningBalance, $overallSelectedNet, $cashLedgerPeriodNet,
-                (float) $balanceReport['final_balance'], (string) $balanceReport['balance_source']
+                (float) $balanceReport['final_balance'], (string) $balanceReport['balance_source'],
+                $includeEftRecords ? $eftRecordCount : null,
+                $includeBankRecords ? $bankRecordCount : null,
+                $includeFspRecords ? $fspRecordCount : null,
+                $linkedRecordLayout
             );
 
             $writer->close();
             $writerIsOpen = false;
+            $stageTimings['finalizing'] += microtime(true) - $stageStartedAt;
             if ($lockFile !== '') {
                 @touch($lockFile);
             }
@@ -357,6 +813,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'started_at' => $startedAtIso,
                 'updated_at' => now()->toIso8601String(),
                 'completed_at' => now()->toIso8601String(),
+                'timings_seconds' => $this->roundedTimings($stageTimings),
+                'linked_data_cache' => $linkCache->statistics(),
             ]);
 
             $this->info('Export generated: ' . $outputRelativePath);
@@ -382,6 +840,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'started_at' => $startedAtIso,
                 'updated_at' => now()->toIso8601String(),
                 'completed_at' => now()->toIso8601String(),
+                'timings_seconds' => $this->roundedTimings($stageTimings),
             ]);
             $this->error($exception->getMessage());
 
@@ -393,27 +852,654 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         }
     }
 
-    private function prepareTransactionSheet(Writer $writer, Sheet $sheet, string $sheetName, Style $headerStyle): void
+    private function transactionHeaders(
+        bool $includeEftRecords,
+        bool $includeBankRecords,
+        bool $includeFspRecords,
+        bool $separateLinkedRecordSheets
+    ): array
+    {
+        $headers = self::TRANSACTION_HEADERS;
+        if ($separateLinkedRecordSheets) {
+            $linkedHeaders = [];
+            if ($includeEftRecords) {
+                $linkedHeaders[] = 'Linked EFT Record';
+            }
+            if ($includeBankRecords) {
+                $linkedHeaders[] = 'Linked Bank Record';
+            }
+            if ($includeFspRecords) {
+                $linkedHeaders[] = 'Linked FSP Record';
+            }
+            array_splice($headers, 3, 0, $linkedHeaders);
+
+            return $headers;
+        }
+
+        if ($includeEftRecords) {
+            $headers = array_merge($headers, $this->eftTransactionDetailHeaders());
+        }
+        if ($includeBankRecords) {
+            $headers = array_merge($headers, $this->bankTransactionDetailHeaders());
+        }
+        if ($includeFspRecords) {
+            $headers = array_merge($headers, $this->fspTransactionDetailHeaders());
+        }
+
+        return $headers;
+    }
+
+    private function prepareTransactionSheet(
+        Writer $writer,
+        Sheet $sheet,
+        string $sheetName,
+        Style $headerStyle,
+        Style $eftHeaderStyle,
+        Style $bankHeaderStyle,
+        Style $fspHeaderStyle,
+        array $headers
+    ): void
     {
         $sheet->setName($sheetName);
         $sheet->setSheetView((new SheetView())->setFreezeRow(2));
-        $sheet->setColumnWidth(20, 1, 2, 3);
-        $sheet->setColumnWidth(20, 4);
-        $sheet->setColumnWidth(24, 5);
-        $sheet->setColumnWidth(28, 6);
-        $sheet->setColumnWidth(18, 7);
-        $sheet->setColumnWidth(36, 8);
-        $sheet->setColumnWidth(18, 9, 10);
-        $sheet->setColumnWidth(40, 11);
-        $sheet->setColumnWidth(20, 12, 13, 14, 15);
-        $sheet->setColumnWidth(12, 16);
-        $sheet->setColumnWidth(16, 17);
-        $writer->addRow(Row::fromValues(self::TRANSACTION_HEADERS, $headerStyle));
+        foreach ($headers as $index => $header) {
+            if ($header === 'Bank Description') {
+                continue;
+            }
+            $width = match ($header) {
+                'Customer Name' => 28,
+                'Txn Type' => 36,
+                'Notes' => 40,
+                'Source ID' => 24,
+                'Linked EFT Record' => 24,
+                'Linked Bank Record' => 22,
+                'Linked FSP Record' => 22,
+                'EFT File' => 36,
+                'EFT Type', 'EFT Holder', 'EFT Source' => 24,
+                'EFT Holder ID' => 24,
+                'EFT Notes' => 36,
+                'Bank Account', 'Bank Wire Ref' => 22,
+                'Bank Counterparty' => 24,
+                'Bank Source File' => 36,
+                'AGRA Bank Match', 'AGRA Bank Variance' => 24,
+                'AGRA Bank Note' => 48,
+                'AGRA FSP File' => 36,
+                'FSP Source ID', 'FSP Dealer Account', 'FSP Fund Account' => 24,
+                'FSP Settlement Amount' => 22,
+                'Currency' => 12,
+                'Amount' => 16,
+                default => 20,
+            };
+            $sheet->setColumnWidth($width, $index + 1);
+        }
+        $writer->addRow(new Row(array_map(
+            fn(string $header) => new StringCell(
+                $header,
+                str_starts_with($header, 'EFT ') || $header === 'Linked EFT Record'
+                    ? $eftHeaderStyle
+                        : (str_starts_with($header, 'Bank ') || $header === 'Linked Bank Record'
+                        ? $bankHeaderStyle
+                        : (str_starts_with($header, 'FSP ') || $header === 'AGRA FSP File' || $header === 'Linked FSP Record'
+                            ? $fspHeaderStyle
+                            : $headerStyle))
+            ),
+            $headers
+        )));
     }
 
-    private function finalizeTransactionSheet(Sheet $sheet, int $dataRowCount): void
+    private function finalizeTransactionSheet(Sheet $sheet, int $dataRowCount, array $headers): void
     {
-        $sheet->setAutoFilter(new AutoFilter(0, 1, count(self::TRANSACTION_HEADERS) - 1, max(2, $dataRowCount + 1)));
+        $sheet->setAutoFilter(new AutoFilter(0, 1, count($headers) - 1, max(2, $dataRowCount + 1)));
+    }
+
+    private function eftRecordHeaders(): array
+    {
+        return [
+            'EFT Item ID', 'Trust Txn ID', 'File ID', 'File Name', 'Sequence',
+            'Created Date', 'Effective Date', 'Trade Date', 'Settlement Date',
+            'Type', 'Status ID', 'Holder', 'Holder ID', 'Source', 'Amount', 'Notes',
+        ];
+    }
+
+    private function eftTransactionDetailHeaders(): array
+    {
+        return [
+            'EFT File', 'EFT Item ID', 'EFT Sequence', 'EFT Created', 'EFT Effective',
+            'EFT Trade', 'EFT Settlement', 'EFT Type', 'EFT Status', 'EFT Holder',
+            'EFT Holder ID', 'EFT Source', 'EFT Amount', 'EFT Notes',
+        ];
+    }
+
+    private function bankRecordHeaders(): array
+    {
+        return [
+            'Bank Txn ID', 'Value Date', 'Direction', 'Amount', 'Currency', 'Account',
+            'Settlement #', 'Memo Type', 'Counterparty', 'Wire Ref', 'Description', 'Source File',
+            'AGRA Bank Match', 'AGRA Bank Variance', 'AGRA Bank Note',
+        ];
+    }
+
+    private function bankTransactionDetailHeaders(): array
+    {
+        return [
+            'Bank Txn ID', 'Bank Value Date', 'Bank Direction', 'Bank Amount',
+            'Bank Currency', 'Bank Account', 'Bank Settlement #', 'Bank Memo Type',
+            'Bank Counterparty', 'Bank Wire Ref', 'Bank Description', 'Bank Source File',
+            'AGRA Bank Match', 'AGRA Bank Variance', 'AGRA Bank Note',
+        ];
+    }
+
+    private function fspTransactionDetailHeaders(): array
+    {
+        return [
+            'AGRA FSP File', 'FSP Record ID', 'FSP Record #', 'FSP Created',
+            'FSP Trade', 'FSP Settlement', 'FSP Side', 'FSP Txn Type',
+            'FSP Order ID', 'FSP Source ID', 'FSP Dealer Account', 'FSP Fund Account',
+            'FSP Fund ID', 'FSP Currency', 'FSP Gross', 'FSP Net', 'FSP Settlement Amount',
+        ];
+    }
+
+    private function fspRecordHeaders(): array
+    {
+        return $this->fspTransactionDetailHeaders();
+    }
+
+    private function prepareEftRecordsSheet(Writer $writer, Sheet $sheet, Style $headerStyle): void
+    {
+        $sheet->setName('EFT');
+        $sheet->setSheetView((new SheetView())->setFreezeRow(2));
+        $sheet->setColumnWidth(14, 1, 3, 5, 11);
+        $sheet->setColumnWidth(18, 2, 6, 7, 8, 9, 13, 14, 15);
+        $sheet->setColumnWidth(36, 4);
+        $sheet->setColumnWidth(24, 10, 12);
+        $sheet->setColumnWidth(42, 16);
+        $writer->addRow(Row::fromValues($this->eftRecordHeaders(), $headerStyle));
+    }
+
+    private function prepareBankRecordsSheet(Writer $writer, Sheet $sheet, Style $headerStyle): void
+    {
+        $sheet->setName('Bank');
+        $sheet->setSheetView((new SheetView())->setFreezeRow(2));
+        $sheet->setColumnWidth(14, 1, 3, 5, 7);
+        $sheet->setColumnWidth(18, 2, 4, 6, 8, 10);
+        $sheet->setColumnWidth(24, 9);
+        $sheet->setColumnWidth(42, 12);
+        $sheet->setColumnWidth(24, 13, 14);
+        $sheet->setColumnWidth(48, 15);
+        $writer->addRow(Row::fromValues($this->bankRecordHeaders(), $headerStyle));
+    }
+
+    private function prepareFspRecordsSheet(Writer $writer, Sheet $sheet, Style $headerStyle): void
+    {
+        $sheet->setName('FSP (AGRA)');
+        $sheet->setSheetView((new SheetView())->setFreezeRow(2));
+        $sheet->setColumnWidth(36, 1);
+        $sheet->setColumnWidth(14, 2, 3, 7, 13, 14);
+        $sheet->setColumnWidth(18, 4, 5, 6, 8);
+        $sheet->setColumnWidth(22, 9, 15, 16, 17);
+        $sheet->setColumnWidth(24, 10, 11, 12);
+        $writer->addRow(Row::fromValues($this->fspRecordHeaders(), $headerStyle));
+    }
+
+    private function finalizeLinkedRecordsSheet(Sheet $sheet, int $columnCount, int $dataRowCount): void
+    {
+        $sheet->setAutoFilter(new AutoFilter(0, 1, $columnCount - 1, max(2, $dataRowCount + 1)));
+    }
+
+    private function appendEftRecords(
+        Writer $writer,
+        Sheet $sheet,
+        Collection $items,
+        Style $currencyStyle,
+        array &$sheetRowByItemId,
+        int &$recordCount
+    ): void {
+        $writer->setCurrentSheet($sheet);
+        foreach ($items->unique('id') as $item) {
+            $itemId = (int) $item->id;
+            if (isset($sheetRowByItemId[$itemId])) {
+                continue;
+            }
+
+            ++$recordCount;
+            $sheetRowByItemId[$itemId] = $recordCount + 1;
+            $writer->addRow(new Row([
+                new StringCell((string) $itemId, null),
+                new StringCell(!empty($item->linked_id) ? 'T-' . (int) $item->linked_id : '', null),
+                new StringCell($item->file_id !== null ? (string) (int) $item->file_id : '', null),
+                new StringCell((string) ($item->file_name ?? ''), null),
+                new StringCell($item->sequence_number !== null ? (string) (int) $item->sequence_number : '', null),
+                new StringCell($this->dateTime($item->created_at ?? null), null),
+                new StringCell($this->dateTime($item->effective_date ?? null), null),
+                new StringCell($this->dateTime($item->trade_date ?? null), null),
+                new StringCell($this->dateTime($item->settlement_date ?? null), null),
+                new StringCell((string) ($item->type_name ?? $item->type_id ?? ''), null),
+                new StringCell($item->status_id !== null ? (string) $item->status_id : '', null),
+                new StringCell((string) ($item->holder_name ?? ''), null),
+                new StringCell((string) ($item->holder_id ?? ''), null),
+                new StringCell((string) ($item->source_name ?? $item->source_code ?? ''), null),
+                new NumericCell((float) ($item->amount ?? 0), $currencyStyle),
+                new StringCell((string) ($item->notes ?? ''), null),
+            ]));
+        }
+    }
+
+    private function appendBankRecords(
+        Writer $writer,
+        Sheet $sheet,
+        Collection $entries,
+        Style $currencyStyle,
+        Style $wireFeeDetailStyle,
+        Style $wireFeeCurrencyStyle,
+        array &$sheetRowByEntryId,
+        int &$recordCount,
+        float &$descriptionWidth
+    ): void {
+        $writer->setCurrentSheet($sheet);
+        foreach ($entries->unique('id')->sortBy([['value_date', 'asc'], ['id', 'asc']]) as $entry) {
+            $entryId = (int) $entry->id;
+            if (isset($sheetRowByEntryId[$entryId])) {
+                continue;
+            }
+
+            ++$recordCount;
+            $sheetRowByEntryId[$entryId] = $recordCount + 1;
+            $cleanDescription = $this->cleanBankDescription($entry->additional_info ?? null);
+            $measuredWidth = $this->excelTextWidth($cleanDescription, 42.0);
+            if ($measuredWidth > $descriptionWidth) {
+                $descriptionWidth = $measuredWidth;
+            }
+            $isPossibleWireFeeMatch = (bool) ($entry->is_possible_wire_fee_match ?? false);
+            $detailStyle = $isPossibleWireFeeMatch ? $wireFeeDetailStyle : null;
+            $amountStyle = $isPossibleWireFeeMatch ? $wireFeeCurrencyStyle : $currencyStyle;
+            $varianceCell = isset($entry->variance)
+                ? new NumericCell((float) $entry->variance, $amountStyle)
+                : new StringCell('', $detailStyle);
+            $writer->addRow(new Row([
+                new StringCell((string) $entryId, $detailStyle),
+                new StringCell($this->dateTime($entry->value_date ?? null), $detailStyle),
+                new StringCell((string) ($entry->credit_debit_indicator ?? ''), $detailStyle),
+                new NumericCell((float) ($entry->amount ?? 0), $amountStyle),
+                new StringCell((string) ($entry->currency ?? ''), $detailStyle),
+                new StringCell((string) ($entry->account_number ?? ''), $detailStyle),
+                new StringCell((string) ($entry->settlement_number ?? ''), $detailStyle),
+                new StringCell((string) ($entry->memo_type ?? ''), $detailStyle),
+                new StringCell((string) ($entry->counterparty ?? ''), $detailStyle),
+                new StringCell((string) ($entry->wire_payment_reference ?? ''), $detailStyle),
+                new StringCell($cleanDescription, $detailStyle),
+                new StringCell((string) ($entry->source_file ?? ''), $detailStyle),
+                new StringCell((string) ($entry->reconciliation_status ?? ''), $detailStyle),
+                $varianceCell,
+                new StringCell((string) ($entry->reconciliation_note ?? ''), $detailStyle),
+            ]));
+        }
+    }
+
+    private function appendFspRecords(
+        Writer $writer,
+        Sheet $sheet,
+        Collection $items,
+        Style $detailStyle,
+        Style $amountStyle,
+        array &$sheetRowByItemId,
+        int &$recordCount
+    ): void {
+        $writer->setCurrentSheet($sheet);
+        foreach ($items->unique('id')->sortBy([['settlement_date', 'asc'], ['id', 'asc']]) as $item) {
+            $itemId = (int) $item->id;
+            if (isset($sheetRowByItemId[$itemId])) {
+                continue;
+            }
+
+            ++$recordCount;
+            $sheetRowByItemId[$itemId] = $recordCount + 1;
+            $writer->addRow(new Row([
+                new StringCell((string) ($item->source_file ?? ''), $detailStyle),
+                new StringCell((string) $itemId, $detailStyle),
+                new StringCell($item->record_index !== null ? (string) (int) $item->record_index : '', $detailStyle),
+                new StringCell($this->dateOnly($item->create_date ?? null), $detailStyle),
+                new StringCell($this->dateOnly($item->trade_date ?? null), $detailStyle),
+                new StringCell($this->dateOnly($item->settlement_date ?? null), $detailStyle),
+                new StringCell((string) ($item->side ?? ''), $detailStyle),
+                new StringCell((string) ($item->transaction_type ?? ''), $detailStyle),
+                new StringCell((string) ($item->order_id ?? ''), $detailStyle),
+                new StringCell((string) ($item->source_id ?? ''), $detailStyle),
+                new StringCell((string) ($item->dealer_account_id ?? ''), $detailStyle),
+                new StringCell((string) ($item->fund_account_id ?? ''), $detailStyle),
+                new StringCell((string) ($item->fund_id ?? ''), $detailStyle),
+                new StringCell((string) ($item->currency ?? ''), $detailStyle),
+                $item->gross_amount !== null
+                    ? new NumericCell((float) $item->gross_amount, $amountStyle)
+                    : new StringCell('', $detailStyle),
+                $item->net_amount !== null
+                    ? new NumericCell((float) $item->net_amount, $amountStyle)
+                    : new StringCell('', $detailStyle),
+                $item->settlement_amount !== null
+                    ? new NumericCell((float) $item->settlement_amount, $amountStyle)
+                    : new StringCell('', $detailStyle),
+            ]));
+        }
+    }
+
+    /** @return array<int, StringCell> */
+    private function eftTransactionDetailCells(Collection $items, Style $style): array
+    {
+        $formatters = [
+            fn($item) => trim((string) ($item->file_name ?? ''))
+                ?: ($item->file_id !== null ? 'EFT file #' . (int) $item->file_id : 'Unprocessed EFT item #' . (int) $item->id),
+            fn($item) => (string) (int) $item->id,
+            fn($item) => $item->sequence_number !== null ? (string) (int) $item->sequence_number : '',
+            fn($item) => $this->dateTime($item->created_at ?? null),
+            fn($item) => $this->dateTime($item->effective_date ?? null),
+            fn($item) => $this->dateTime($item->trade_date ?? null),
+            fn($item) => $this->dateTime($item->settlement_date ?? null),
+            fn($item) => (string) ($item->type_name ?? $item->type_id ?? ''),
+            fn($item) => $item->status_id !== null ? (string) $item->status_id : '',
+            fn($item) => (string) ($item->holder_name ?? ''),
+            fn($item) => (string) ($item->holder_id ?? ''),
+            fn($item) => (string) ($item->source_name ?? $item->source_code ?? ''),
+            fn($item) => $item->amount !== null ? $this->currencyText((float) $item->amount) : '',
+            fn($item) => (string) ($item->notes ?? ''),
+        ];
+
+        return array_map(
+            fn(callable $formatter) => new StringCell($this->joinedDetailValues($items, $formatter), $style),
+            $formatters
+        );
+    }
+
+    /** @return array<int, StringCell> */
+    private function bankTransactionDetailCells(Collection $entries, Style $style, Style $amountStyle): array
+    {
+        $formatters = [
+            fn($entry) => (string) (int) $entry->id,
+            fn($entry) => $this->dateTime($entry->value_date ?? null),
+            fn($entry) => (string) ($entry->credit_debit_indicator ?? ''),
+            fn($entry) => $entry->amount !== null ? $this->currencyText((float) $entry->amount) : '',
+            fn($entry) => (string) ($entry->currency ?? ''),
+            fn($entry) => (string) ($entry->account_number ?? ''),
+            fn($entry) => (string) ($entry->settlement_number ?? ''),
+            fn($entry) => (string) ($entry->memo_type ?? ''),
+            fn($entry) => (string) ($entry->counterparty ?? ''),
+            fn($entry) => (string) ($entry->wire_payment_reference ?? ''),
+            fn($entry) => $this->cleanBankDescription($entry->additional_info ?? null),
+            fn($entry) => (string) ($entry->source_file ?? ''),
+            fn($entry) => (string) ($entry->reconciliation_status ?? ''),
+            fn($entry) => isset($entry->variance) ? $this->currencyText((float) $entry->variance) : '',
+            fn($entry) => (string) ($entry->reconciliation_note ?? ''),
+        ];
+
+        return array_map(
+            fn(callable $formatter, int $index) => new StringCell(
+                $this->joinedDetailValues($entries, $formatter),
+                in_array($index, [3, 13], true) ? $amountStyle : $style
+            ),
+            $formatters,
+            array_keys($formatters)
+        );
+    }
+
+    /** @return array<int, StringCell> */
+    private function fspTransactionDetailCells(Collection $items, Style $style, Style $amountStyle): array
+    {
+        $formatters = [
+            fn($item) => (string) ($item->source_file ?? ''),
+            fn($item) => (string) (int) $item->id,
+            fn($item) => $item->record_index !== null ? (string) (int) $item->record_index : '',
+            fn($item) => $this->dateOnly($item->create_date ?? null),
+            fn($item) => $this->dateOnly($item->trade_date ?? null),
+            fn($item) => $this->dateOnly($item->settlement_date ?? null),
+            fn($item) => (string) ($item->side ?? ''),
+            fn($item) => (string) ($item->transaction_type ?? ''),
+            fn($item) => (string) ($item->order_id ?? ''),
+            fn($item) => (string) ($item->source_id ?? ''),
+            fn($item) => (string) ($item->dealer_account_id ?? ''),
+            fn($item) => (string) ($item->fund_account_id ?? ''),
+            fn($item) => (string) ($item->fund_id ?? ''),
+            fn($item) => (string) ($item->currency ?? ''),
+            fn($item) => $item->gross_amount !== null ? $this->currencyText((float) $item->gross_amount) : '',
+            fn($item) => $item->net_amount !== null ? $this->currencyText((float) $item->net_amount) : '',
+            fn($item) => $item->settlement_amount !== null ? $this->currencyText((float) $item->settlement_amount) : '',
+        ];
+
+        return array_map(
+            fn(callable $formatter, int $index) => new StringCell(
+                $this->joinedDetailValues($items, $formatter),
+                $index >= 14 ? $amountStyle : $style
+            ),
+            $formatters,
+            array_keys($formatters)
+        );
+    }
+
+    private function agraFspItemsByCashTransaction(
+        Collection $rows,
+        VieFundRemoteService $remoteService,
+        VieFundExportLinkCache $linkCache
+    ): Collection
+    {
+        $sourceIdsByCashTransaction = $linkCache
+            ->fundSourceIdsForCashTransactions(
+                $rows->pluck('cash_transaction_id')->filter()->map(fn($id) => (int) $id)->unique()->values()->all(),
+                $remoteService
+            )
+            ->groupBy(fn($mapping) => (string) (int) $mapping->cash_transaction_id)
+            ->map(fn($mappings) => $mappings
+                ->pluck('source_id')
+                ->map(fn($sourceId) => trim((string) $sourceId))
+                ->filter()
+                ->unique()
+                ->values());
+        $sourceIds = $sourceIdsByCashTransaction->flatten()->unique()->values();
+        if ($sourceIds->isEmpty()) {
+            return collect();
+        }
+
+        $items = $sourceIds
+            ->chunk((int) config('viefund.all_transactions_link_cache.local_query_batch_size', 5000))
+            ->flatMap(fn(Collection $chunk) => SettlementInstruction::query()
+                ->where('source_type', 'fundserv_agra')
+                ->whereIn('source_id', $chunk->all())
+                ->orderBy('settlement_date')
+                ->orderBy('id')
+                ->get([
+                    'id', 'source_file', 'record_index', 'create_date', 'trade_date', 'settlement_date',
+                    'fund_account_id', 'dealer_account_id', 'order_id', 'source_id', 'side',
+                    'transaction_type', 'fund_id', 'currency', 'gross_amount', 'net_amount',
+                    'settlement_amount', 'settlement_source',
+                ]));
+        $itemsBySourceId = $items->groupBy(fn($item) => (string) $item->source_id);
+
+        return $sourceIdsByCashTransaction->map(fn(Collection $cashSourceIds) => $cashSourceIds
+            ->flatMap(fn($sourceId) => $itemsBySourceId->get((string) $sourceId, collect()))
+            ->unique('id')
+            ->values());
+    }
+
+    private function fspBankEntriesByCashTransaction(
+        Collection $fspItemsByCashTransaction,
+        AgraFspBankMatcher $matcher,
+        Collection $matchCache
+    ): Collection {
+        $items = $fspItemsByCashTransaction->flatten(1);
+        $itemsByKey = $items
+            ->filter(fn($item) => !empty($item->settlement_date)
+                && !empty($item->currency)
+                && strtoupper(trim((string) ($item->settlement_source ?? ''))) === 'I')
+            ->groupBy(fn($item) => $matcher->key($item->settlement_date, $item->currency));
+        $missingItems = $itemsByKey
+            ->reject(fn(Collection $group, string $key) => $matchCache->has($key))
+            ->flatten(1);
+        if ($missingItems->isNotEmpty()) {
+            $newMatches = $matcher->matchesForItems($missingItems);
+            $itemsByKey->keys()->each(function (string $key) use ($matchCache, $newMatches) {
+                if (!$matchCache->has($key)) {
+                    $matchCache->put($key, $newMatches->get($key));
+                }
+            });
+        }
+
+        return $fspItemsByCashTransaction->map(function (Collection $items) use ($matchCache, $matcher): Collection {
+            return $items
+                ->map(function ($item) use ($matchCache, $matcher) {
+                    if (
+                        empty($item->settlement_date)
+                        || empty($item->currency)
+                        || strtoupper(trim((string) ($item->settlement_source ?? ''))) !== 'I'
+                    ) {
+                        return null;
+                    }
+
+                    return $matchCache->get($matcher->key($item->settlement_date, $item->currency));
+                })
+                ->filter()
+                ->unique('id')
+                ->values();
+        });
+    }
+
+    private function cachedBankEntriesForSequences(array $sequences, Collection $cache): Collection
+    {
+        $requested = collect($sequences)
+            ->filter(fn($sequence) => $sequence !== null && ctype_digit((string) $sequence))
+            ->map(fn($sequence) => (string) (int) $sequence)
+            ->unique()
+            ->values();
+        $missing = $requested->reject(fn(string $sequence) => $cache->has($sequence))->values();
+        if ($missing->isNotEmpty()) {
+            $loaded = $this->bankEntriesForSequences($missing->all());
+            $missing->each(fn(string $sequence) => $cache->put(
+                $sequence,
+                collect($loaded->get($sequence, collect()))
+            ));
+        }
+
+        return $requested->mapWithKeys(fn(string $sequence) => [
+            $sequence => collect($cache->get($sequence, collect())),
+        ]);
+    }
+
+    /** @return array<int, StringCell> */
+    private function emptyDetailCells(int $count, Style $style): array
+    {
+        if ($count <= 0) {
+            return [];
+        }
+
+        return array_map(fn() => new StringCell('', $style), range(1, $count));
+    }
+
+    private function roundedTimings(array $timings): array
+    {
+        return array_map(fn($seconds) => round((float) $seconds, 2), $timings);
+    }
+
+    private function joinedDetailValues(Collection $records, callable $formatter): string
+    {
+        return $records->map(fn($record) => $formatter($record))->implode("\n");
+    }
+
+    private function currencyText(float $amount): string
+    {
+        $formatted = '$' . number_format(abs($amount), 2);
+
+        return $amount < 0 ? '(' . $formatted . ')' : $formatted;
+    }
+
+    private function dateOnly(mixed $value): string
+    {
+        return $value ? Carbon::parse($value)->toDateString() : '';
+    }
+
+    private function cleanBankDescription(mixed $description): string
+    {
+        $cleaned = preg_replace('/\s+/u', ' ', trim((string) $description)) ?? '';
+        $cleaned = preg_replace('/\s*,\s*/u', ', ', $cleaned) ?? $cleaned;
+
+        return trim($cleaned, " ,\t\n\r\0\x0B");
+    }
+
+    private function bankDescriptionWidth(Collection $entries): float
+    {
+        return $entries->reduce(
+            fn(float $width, $entry) => max(
+                $width,
+                $this->excelTextWidth($this->cleanBankDescription($entry->additional_info ?? null), 36.0)
+            ),
+            36.0
+        );
+    }
+
+    private function excelTextWidth(string $value, float $minimum): float
+    {
+        if ($value === '') {
+            return $minimum;
+        }
+
+        return min(180.0, max($minimum, (float) mb_strlen($value, 'UTF-8') + 2));
+    }
+
+    private function bankEntriesForSequences(array $sequences): Collection
+    {
+        $sequences = collect($sequences)
+            ->filter(fn($sequence) => $sequence !== null && ctype_digit((string) $sequence))
+            ->map(fn($sequence) => (string) (int) $sequence)
+            ->unique()
+            ->values();
+        if ($sequences->isEmpty()) {
+            return collect();
+        }
+
+        return $sequences
+            ->chunk(500)
+            ->flatMap(function (Collection $chunk): Collection {
+                return DB::table('bank_statement_entries as b')
+                    ->join('bank_statement_entry_analyses as a', function ($join) {
+                        $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                            ->where('a.parser_version', self::BANK_PARSER_VERSION);
+                    })
+                    ->whereIn('a.settlement_number', $chunk->all())
+                    ->select([
+                        'b.id',
+                        'b.value_date',
+                        'b.credit_debit_indicator',
+                        'b.amount',
+                        'b.currency',
+                        'b.account_number',
+                        'b.additional_info',
+                        'b.source_file',
+                        'a.settlement_number',
+                        'a.memo_type',
+                        'a.counterparty',
+                        'a.wire_payment_reference',
+                    ])
+                    ->orderBy('b.value_date')
+                    ->orderBy('b.id')
+                    ->get();
+            })
+            ->unique('id')
+            ->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
+                ? (string) (int) trim((string) $entry->settlement_number)
+                : trim((string) $entry->settlement_number));
+    }
+
+    private function internalHyperlinkCell(
+        string $sheetName,
+        ?int $targetRow,
+        string $label,
+        Style $linkStyle
+    ): FormulaCell|StringCell {
+        if (!$targetRow || $label === '') {
+            return new StringCell('', null);
+        }
+
+        $escapedSheetName = str_replace("'", "''", $sheetName);
+        $escapedLabel = str_replace('"', '""', $label);
+
+        return new FormulaCell(
+            sprintf('=HYPERLINK("#\'%s\'!A%d","%s")', $escapedSheetName, $targetRow, $escapedLabel),
+            $linkStyle
+        );
     }
 
     /**
@@ -550,7 +1636,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         float $overallSelectedNet,
         float $cashLedgerPeriodNet,
         float $cashLedgerClosingBalance,
-        string $balanceSource
+        string $balanceSource,
+        ?int $linkedEftRecordCount,
+        ?int $linkedBankRecordCount,
+        ?int $linkedFspRecordCount,
+        string $linkedRecordLayout
     ): void {
         $sheet->setName('Summary');
         $sheet->setColumnWidth(34, 1);
@@ -586,6 +1676,17 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ['Currency', $this->currencyLabel((string) ($filters['currency_code'] ?? '00'))],
             ['Cash Transaction Statuses', $this->statusLabels((array) ($filters['status_ids'] ?? [6]))],
             ['Transaction Types', !empty($filters['trx_type']) ? implode(', ', $filters['trx_type']) : 'All types'],
+            ['EFT Match Filter', !empty($filters['has_reconciliation_match']) ? 'Only transactions with EFT matches' : 'All transactions'],
+            ['AGRA FSP Match Filter', array_key_exists('agra_fsp_source_ids_json', $filters) ? 'Only transactions with AGRA FSP matches' : 'All transactions'],
+            ['EFT Record Output', $linkedEftRecordCount !== null
+                ? number_format($linkedEftRecordCount) . ' unique records ' . ($linkedRecordLayout === 'single' ? 'in transaction columns' : 'on the EFT sheet')
+                : 'Not included'],
+            ['Bank Record Output', $linkedBankRecordCount !== null
+                ? number_format($linkedBankRecordCount) . ' unique records ' . ($linkedRecordLayout === 'single' ? 'in transaction columns' : 'on the Bank sheet')
+                : 'Not included'],
+            ['AGRA FSP Record Output', $linkedFspRecordCount !== null
+                ? number_format($linkedFspRecordCount) . ' unique records ' . ($linkedRecordLayout === 'single' ? 'in transaction columns' : 'on the FSP (AGRA) sheet')
+                : 'Not included'],
             ['Search', $search !== '' ? $search : 'None'],
         ];
 
@@ -844,6 +1945,31 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         return in_array($basis, ['create_date', 'trade_date', 'processing_date', 'settlement_date'], true)
             ? $basis
             : 'settlement_date';
+    }
+
+    private function agraFspSourceIdsJson(string $dateBasis, ?string $dateFrom, ?string $dateTo): string
+    {
+        $query = SettlementInstruction::query()
+            ->where('source_type', 'fundserv_agra')
+            ->whereNotNull('source_id')
+            ->where('source_id', '<>', '');
+
+        if ($dateBasis === 'settlement_date') {
+            if ($dateFrom) {
+                $query->where('settlement_date', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $query->where('settlement_date', '<=', $dateTo);
+            }
+        }
+
+        return $query->distinct()
+            ->orderBy('source_id')
+            ->pluck('source_id')
+            ->map(fn($sourceId) => trim((string) $sourceId))
+            ->filter()
+            ->values()
+            ->toJson(JSON_THROW_ON_ERROR);
     }
 
     private function dateBasisLabel(string $basis): string

@@ -10,6 +10,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
@@ -18,6 +19,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 class EftFileController extends Controller
 {
     private const LOCK_TTL_SECONDS = 14400;
+    private const BANK_PARSER_VERSION = 'v2';
 
     public function __construct(
         private readonly SqlServerEftRemoteRepository $repository
@@ -85,6 +87,232 @@ class EftFileController extends Controller
             'drilldownDate',
             'drilldownDateLabel'
         ));
+    }
+
+    /**
+     * Resolve detailed EFT and sequence-linked bank records for the trust
+     * transactions displayed on one All Transactions page. This remains
+     * opt-in so the remote lookup does not delay the normal table request.
+     */
+    public function transactionMatches(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'trust_ids' => ['required', 'array', 'max:250'],
+            'trust_ids.*' => ['required', 'integer', 'min:1', 'distinct'],
+        ]);
+        $trustIds = collect($validated['trust_ids'])
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        try {
+            $items = $this->repository->exportItemsByLinkedIds($trustIds->all());
+            $sequences = $items
+                ->pluck('sequence_number')
+                ->filter(fn($sequence) => $sequence !== null && ctype_digit((string) $sequence))
+                ->map(fn($sequence) => (string) (int) $sequence)
+                ->unique()
+                ->values();
+            $bankEntriesBySequence = $sequences->isEmpty()
+                ? collect()
+                : DB::table('bank_statement_entries as b')
+                    ->join('bank_statement_entry_analyses as a', function ($join) {
+                        $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                            ->where('a.parser_version', self::BANK_PARSER_VERSION);
+                    })
+                    ->whereIn('a.settlement_number', $sequences->all())
+                    ->select([
+                        'b.id',
+                        'b.source_file',
+                        'b.account_number',
+                        'b.booking_date',
+                        'b.value_date',
+                        'b.credit_debit_indicator',
+                        'b.currency',
+                        'b.amount',
+                        'b.additional_info',
+                        'a.memo_type',
+                        'a.settlement_number',
+                        'a.wire_payment_reference',
+                        'a.counterparty',
+                    ])
+                    ->orderBy('b.value_date')
+                    ->orderBy('b.id')
+                    ->get()
+                    ->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
+                        ? (string) (int) trim((string) $entry->settlement_number)
+                        : trim((string) $entry->settlement_number));
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to load EFT and bank matches for the All Transactions table.', [
+                'trust_id_count' => $trustIds->count(),
+                'exception' => $exception,
+            ]);
+
+            return response()->json([
+                'message' => 'EFT and bank matches are temporarily unavailable. Please try again.',
+            ], 503);
+        }
+
+        $matches = $items
+            ->groupBy(fn($item) => (string) (int) $item->linked_id)
+            ->map(function ($linkedItems) {
+                return $linkedItems
+                    ->groupBy(fn($item) => $item->file_id !== null ? 'file:' . $item->file_id : 'item:' . $item->id)
+                    ->map(function ($fileItems) {
+                        $item = $fileItems->first();
+                        $fileId = $item->file_id !== null ? (int) $item->file_id : null;
+                        $fileName = trim((string) ($item->file_name ?? ''));
+                        $sequence = $item->sequence_number !== null ? (int) $item->sequence_number : null;
+
+                        if ($fileName !== '') {
+                            $label = $fileName;
+                        } elseif ($fileId !== null) {
+                            $label = 'EFT file #' . $fileId;
+                            if ($sequence !== null) {
+                                $label .= ' · Seq ' . $sequence;
+                            }
+                        } else {
+                            $label = 'Unprocessed EFT item #' . (int) $item->id;
+                        }
+
+                        return [
+                            'file_id' => $fileId,
+                            'file_name' => $fileName !== '' ? $fileName : null,
+                            'sequence_number' => $sequence,
+                            'label' => $label,
+                            'item_count' => $fileItems->count(),
+                            'url' => $fileId !== null
+                                ? route('eft-files.index', [
+                                    'tab' => 'items',
+                                    'file_id' => $fileId,
+                                    'linked_id' => (int) $item->linked_id,
+                                ])
+                                : null,
+                        ];
+                    })
+                    ->values();
+            });
+
+        $eftRecords = $items
+            ->groupBy(fn($item) => (string) (int) $item->linked_id)
+            ->map(function ($linkedItems) {
+                return $linkedItems->map(function ($item) {
+                    $fileId = $item->file_id !== null ? (int) $item->file_id : null;
+                    $fileName = trim((string) ($item->file_name ?? ''));
+
+                    return [
+                        'id' => (int) $item->id,
+                        'file_id' => $fileId,
+                        'file_name' => $fileName !== '' ? $fileName : null,
+                        'sequence_number' => $item->sequence_number !== null ? (int) $item->sequence_number : null,
+                        'created_at' => $item->created_at,
+                        'effective_date' => $item->effective_date,
+                        'trade_date' => $item->trade_date,
+                        'settlement_date' => $item->settlement_date,
+                        'type' => trim((string) ($item->type_name ?? '')) ?: null,
+                        'status_id' => $item->status_id !== null ? (int) $item->status_id : null,
+                        'holder_name' => trim((string) ($item->holder_name ?? '')) ?: null,
+                        'holder_id' => trim((string) ($item->holder_id ?? '')) ?: null,
+                        'source' => trim((string) ($item->source_name ?? '')) ?: (trim((string) ($item->source_code ?? '')) ?: null),
+                        'amount' => $item->amount !== null ? (float) $item->amount : null,
+                        'notes' => trim((string) ($item->notes ?? '')) ?: null,
+                        'url' => $fileId !== null
+                            ? route('eft-files.index', [
+                                'tab' => 'items',
+                                'file_id' => $fileId,
+                                'linked_id' => (int) $item->linked_id,
+                            ])
+                            : null,
+                    ];
+                })->values();
+            });
+
+        $bankMatches = $items
+            ->groupBy(fn($item) => (string) (int) $item->linked_id)
+            ->map(function ($linkedItems) use ($bankEntriesBySequence) {
+                return $linkedItems
+                    ->pluck('sequence_number')
+                    ->filter(fn($sequence) => $sequence !== null && ctype_digit((string) $sequence))
+                    ->map(fn($sequence) => (string) (int) $sequence)
+                    ->unique()
+                    ->flatMap(function (string $sequence) use ($bankEntriesBySequence) {
+                        $bankEntries = collect($bankEntriesBySequence->get($sequence, collect()))->values();
+                        if ($bankEntries->isEmpty()) {
+                            return [];
+                        }
+
+                        $firstEntry = $bankEntries->first();
+                        $transactionCount = $bankEntries->count();
+                        $entryDate = $firstEntry->value_date ?? $firstEntry->booking_date;
+                        if (!$entryDate) {
+                            return [];
+                        }
+                        $date = Carbon::parse($entryDate)->toDateString();
+
+                        return [[
+                            'sequence_number' => (int) $sequence,
+                            'transaction_count' => $transactionCount,
+                            'transaction_ids' => $bankEntries->pluck('id')->map(fn($id) => (int) $id)->all(),
+                            'label' => $transactionCount === 1
+                                ? 'Bank txn #' . (int) $firstEntry->id
+                                : number_format($transactionCount) . ' bank transactions',
+                            'url' => route('reconciliations.daily-totals.bank-day', [
+                                'date' => $date,
+                                'settlement_numbers' => $sequence,
+                                'all_dates' => 1,
+                            ]),
+                        ]];
+                    })
+                    ->values();
+            });
+
+        $bankRecords = $items
+            ->groupBy(fn($item) => (string) (int) $item->linked_id)
+            ->map(function ($linkedItems) use ($bankEntriesBySequence) {
+                return $linkedItems
+                    ->pluck('sequence_number')
+                    ->filter(fn($sequence) => $sequence !== null && ctype_digit((string) $sequence))
+                    ->map(fn($sequence) => (string) (int) $sequence)
+                    ->unique()
+                    ->flatMap(fn(string $sequence) => collect($bankEntriesBySequence->get($sequence, collect())))
+                    ->unique(fn($entry) => (int) $entry->id)
+                    ->map(function ($entry) {
+                        $entryDate = $entry->value_date ?? $entry->booking_date;
+
+                        return [
+                            'id' => (int) $entry->id,
+                            'source_file' => trim((string) ($entry->source_file ?? '')) ?: null,
+                            'account_number' => trim((string) ($entry->account_number ?? '')) ?: null,
+                            'booking_date' => $entry->booking_date,
+                            'value_date' => $entry->value_date,
+                            'direction' => trim((string) ($entry->credit_debit_indicator ?? '')) ?: null,
+                            'currency' => trim((string) ($entry->currency ?? '')) ?: null,
+                            'amount' => $entry->amount !== null ? (float) $entry->amount : null,
+                            'settlement_number' => trim((string) ($entry->settlement_number ?? '')) ?: null,
+                            'memo_type' => trim((string) ($entry->memo_type ?? '')) ?: null,
+                            'counterparty' => trim((string) ($entry->counterparty ?? '')) ?: null,
+                            'wire_reference' => trim((string) ($entry->wire_payment_reference ?? '')) ?: null,
+                            'description' => trim((string) ($entry->additional_info ?? '')) ?: null,
+                            'url' => $entryDate
+                                ? route('reconciliations.daily-totals.bank-day', [
+                                    'date' => Carbon::parse($entryDate)->toDateString(),
+                                    'entry_id' => (int) $entry->id,
+                                ])
+                                : null,
+                        ];
+                    })
+                    ->values();
+            });
+
+        return response()->json([
+            'matches' => $matches,
+            'eft_matches' => $matches,
+            'eft_records' => $eftRecords,
+            'bank_matches' => $bankMatches,
+            'bank_records' => $bankRecords,
+            'matched_transactions' => $matches->count(),
+            'bank_matched_transactions' => $bankMatches->filter(fn($items) => $items->isNotEmpty())->count(),
+        ]);
     }
 
     public function export(Request $request): BinaryFileResponse
@@ -361,6 +589,9 @@ class EftFileController extends Controller
     {
         return [
             'file_id' => (string) $request->query('file_id', ''),
+            'linked_id' => ctype_digit((string) $request->query('linked_id', ''))
+                ? (string) (int) $request->query('linked_id')
+                : '',
             'date_basis' => $request->query('date_basis') === 'effective' ? 'effective' : 'created',
             'date_from' => (string) $request->query('date_from', ''),
             'date_to' => (string) $request->query('date_to', ''),

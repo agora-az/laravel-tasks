@@ -415,6 +415,7 @@ class DailyTotalsDrilldownController extends Controller
 
         $fspBase = DB::table('settlement_instructions')
             ->where('source_type', $sourceType)
+            ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
             ->whereDate('settlement_date', $day->toDateString())
             ->where('currency', $currency);
         $fspSummary = (clone $fspBase)

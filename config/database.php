@@ -76,6 +76,7 @@ return [
             'prefix_indexes' => true,
             'encrypt' => env('VIEFUND_DB_ENCRYPT', 'yes'),
             'trust_server_certificate' => env('VIEFUND_DB_TRUST_SERVER_CERTIFICATE', 'false'),
+            'login_timeout' => (int) env('VIEFUND_DB_LOGIN_TIMEOUT', 5),
         ],
 
     ],

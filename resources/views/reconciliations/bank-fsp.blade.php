@@ -5,7 +5,7 @@
 
 <div style="margin:20px 0;">
     <h2 style="margin:0;">Bank / FSP {{ $sourceLabel }} Reconciliation</h2>
-    <div style="color:#718096;font-size:13px;margin-top:4px;">FundServ bank activity compared with {{ $sourceLabel }} FSP settlement files by settlement date and currency</div>
+    <div style="color:#718096;font-size:13px;margin-top:4px;">FundServ bank activity compared with {{ $sourceLabel }} FSP settlement files by settlement date and currency{{ $source === 'agra' ? ' (intermediary-settled items)' : '' }}</div>
 </div>
 
 <div class="card" style="margin-bottom:20px;">

@@ -39,6 +39,16 @@ class VieFundRemoteService
         return $this->repository->fetchAllTransactions($perPage, $page, $search, $filters);
     }
 
+    public function fetchFundSourceIdsForCashTransactions(array $cashTransactionIds): Collection
+    {
+        return $this->repository->fetchFundSourceIdsForCashTransactions($cashTransactionIds);
+    }
+
+    public function countAllTransactions(?string $search = null, array $filters = []): int
+    {
+        return $this->repository->countAllTransactions($search, $filters);
+    }
+
     public function latestEftMatchedTransactionPage(int $perPage = 100): ?array
     {
         return $this->repository->latestEftMatchedTransactionPage($perPage);

@@ -9,7 +9,10 @@
         $formatted = '$'.number_format(abs($value), 2);
         return $value < 0 ? '('.$formatted.')' : $formatted;
     };
-    $isMismatch = abs($variance) >= .01;
+    $isPossibleWireFeeMatch = $source === 'agra'
+        && (bool) $bankTransaction
+        && abs(abs($variance) - 15.0) < .01;
+    $isMismatch = abs($variance) >= .01 && !$isPossibleWireFeeMatch;
     $sortUrl = static function (string $column) use ($sort, $direction): string {
         $query = request()->except(['page', 'sort', 'direction']);
         $query['sort'] = $column;
@@ -40,7 +43,7 @@
     </div>
     <div class="card" style="background:{{ $isMismatch ? 'linear-gradient(135deg,#e53e3e 0%,#c53030 100%)' : 'linear-gradient(135deg,#38a169 0%,#2f855a 100%)' }};color:#fff;text-align:center;">
         <div style="font-size:24px;font-weight:bold;">{{ $formatMoney($variance) }}</div>
-        <div style="font-size:13px;opacity:.9;margin-top:4px;">Variance</div>
+        <div style="font-size:13px;opacity:.9;margin-top:4px;">{{ $isPossibleWireFeeMatch ? 'Matched · Possible Missing Wire Transfer Fee' : 'Variance' }}</div>
     </div>
 </div>
 

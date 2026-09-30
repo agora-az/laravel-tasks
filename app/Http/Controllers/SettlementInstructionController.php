@@ -417,6 +417,12 @@ class SettlementInstructionController extends Controller
                 $query->where('currency', $currency);
             }
         }
+        if ($request->filled('settlement_source')) {
+            $settlementSource = strtoupper(trim((string) $request->settlement_source));
+            if (in_array($settlementSource, ['D', 'I', 'F'], true)) {
+                $query->where('settlement_source', $settlementSource);
+            }
+        }
         if ($request->filled('date_from')) {
             $query->where('settlement_date', '>=', $request->date_from);
         }

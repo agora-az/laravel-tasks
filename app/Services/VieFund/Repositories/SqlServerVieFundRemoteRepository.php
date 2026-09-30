@@ -232,27 +232,89 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
     public function fetchAllTransactions(int $perPage = 100, int $page = 1, ?string $search = null, array $filters = []): PaginatorContract
     {
         $perPage = in_array($perPage, [50, 100, 250], true) ? $perPage : 100;
-        $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        $defaultSort = ($filters['date_basis'] ?? 'settlement_date') === 'create_date'
+            ? 'created_date'
+            : (string) ($filters['date_basis'] ?? 'settlement_date');
+        $sortColumns = ['created_date', 'trade_date', 'processing_date', 'settlement_date', 'amount'];
+        $sort = in_array($filters['sort'] ?? null, $sortColumns, true) ? (string) $filters['sort'] : $defaultSort;
+        $sortDirection = ($filters['sort_dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        $page = max(1, $page);
+
+        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
+            $candidateSortColumn = match ($sort) {
+                'created_date' => 'ct.dtCreated',
+                'trade_date' => 'ct.dtTrade',
+                'processing_date' => 'ct.dtProcessing',
+                'amount' => 'ct.mAmount',
+                default => 'ct.dtSettlement',
+            };
+            $candidateIds = $this->buildAllTransactionPageCandidateQuery($filters)
+                ->orderBy($candidateSortColumn, $sortDirection)
+                ->orderBy('ct.ID', $sortDirection)
+                ->offset(($page - 1) * $perPage)
+                ->limit($perPage + 1)
+                ->pluck('ct.ID')
+                ->map(fn($id) => (int) $id)
+                ->values()
+                ->all();
+
+            if ($candidateIds === []) {
+                return new Paginator([], $perPage, $page, ['path' => Paginator::resolveCurrentPath()]);
+            }
+
+            $pageFilters = $filters;
+            $pageFilters['cash_transaction_ids'] = $candidateIds;
+            $rows = $this->buildAllTransactionCashLedgerQuery($search, $pageFilters)
+                ->orderBy($sort, $sortDirection)
+                ->orderBy('sort_id', $sortDirection)
+                ->get();
+
+            return new Paginator($rows, $perPage, $page, ['path' => Paginator::resolveCurrentPath()]);
+        }
+
         $query = $this->buildAllTransactionCashLedgerQuery($search, $filters);
 
-        $countCacheKey = 'viefund_all_transactions_count:' . sha1(serialize([
-            'search' => $search,
-            'filters' => $filters,
-            'grain' => 'cash-ledger-v1',
-        ]));
-        $total = Cache::remember($countCacheKey, 300, fn(): int => (int) (clone $query)->count());
+        // Interactive pages only need previous/next navigation. Avoiding the
+        // full-result COUNT keeps a cold request from running the same large
+        // cash-ledger query twice before any optional linked data is requested.
+        return $query
+            ->orderBy($sort, $sortDirection)
+            ->orderBy('sort_id', $sortDirection)
+            ->simplePaginate($perPage, ['*'], 'page', $page);
+    }
 
-        $page = max(1, $page);
-        $rows = (clone $query)
-            ->orderBy('basis_date', $outputOrder)
-            ->orderBy('sort_id', $outputOrder)
-            ->forPage($page, $perPage)
+    /** Return every fund SourceID linked to the displayed cash-ledger rows. */
+    public function fetchFundSourceIdsForCashTransactions(array $cashTransactionIds): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $cashTransactionIds = array_values(array_unique(array_filter(
+            array_map('intval', $cashTransactionIds),
+            fn($id) => $id > 0
+        )));
+
+        if ($cashTransactionIds === []) {
+            return collect();
+        }
+
+        return DB::connection(self::CONNECTION)
+            ->query()
+            ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS requested_cash", [json_encode($cashTransactionIds, JSON_THROW_ON_ERROR)])
+            ->join("{$schema}.UB_FundTrxCash as fsp_fc", 'fsp_fc.iCashTrxID', '=', 'requested_cash.cash_transaction_id')
+            ->join("{$schema}.UB_FundTrx as fsp_t", 'fsp_t.ID', '=', 'fsp_fc.iTrxID')
+            ->whereNotNull('fsp_t.SourceID')
+            ->where('fsp_t.SourceID', '<>', '')
+            ->selectRaw('requested_cash.cash_transaction_id AS cash_transaction_id, CAST(fsp_t.SourceID AS NVARCHAR(100)) AS source_id')
+            ->distinct()
             ->get();
+    }
 
-        return new LengthAwarePaginator($rows, $total, $perPage, $page, [
-            'path' => Paginator::resolveCurrentPath(),
-            'query' => Paginator::resolveQueryString(),
-        ]);
+    public function countAllTransactions(?string $search = null, array $filters = []): int
+    {
+        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
+            return (int) $this->buildAllTransactionPageCandidateQuery($filters)->count();
+        }
+
+        return (int) $this->buildAllTransactionCashLedgerQuery($search, $filters)->count();
     }
 
     /**
@@ -260,6 +322,24 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
      */
     public function fetchAllTransactionExportDailyStats(?string $search = null, array $filters = []): Collection
     {
+        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
+            $dateColumn = match ($this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null)) {
+                'create_date' => 'ct.dtCreated',
+                'trade_date' => 'ct.dtTrade',
+                'processing_date' => 'ct.dtProcessing',
+                'settlement_date' => 'ct.dtSettlement',
+                default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
+            };
+
+            return $this->buildAllTransactionPageCandidateQuery($filters, false)
+                ->selectRaw("CONVERT(date, {$dateColumn}) AS transaction_date")
+                ->selectRaw('COUNT(*) AS transaction_count')
+                ->selectRaw('SUM(COALESCE(ct.mAmount, 0)) AS net_amount')
+                ->groupByRaw("CONVERT(date, {$dateColumn})")
+                ->orderBy('transaction_date')
+                ->get();
+        }
+
         $dateColumn = 'basis_date';
 
         return $this->buildAllTransactionCashLedgerQuery($search, $filters)
@@ -281,6 +361,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         ?array $cursor,
         int $limit
     ): Collection {
+        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
+            return $this->fetchFastAllTransactionExportRowsAfter($search, $filters, $cursor, $limit);
+        }
+
         $dateColumn = 'basis_date';
         $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $comparison = $outputOrder === 'asc' ? '>' : '<';
@@ -323,12 +407,81 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return $query->get();
     }
 
+    private function fetchFastAllTransactionExportRowsAfter(
+        ?string $search,
+        array $filters,
+        ?array $cursor,
+        int $limit
+    ): Collection {
+        $dateColumn = match ($this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null)) {
+            'create_date' => 'ct.dtCreated',
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+            default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
+        };
+        $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        $comparison = $outputOrder === 'asc' ? '>' : '<';
+        $candidateQuery = $this->buildAllTransactionPageCandidateQuery($filters, false)
+            ->selectRaw("ct.ID AS cash_transaction_id, {$dateColumn} AS basis_date")
+            ->orderBy($dateColumn, $outputOrder)
+            ->orderBy('ct.ID', $outputOrder)
+            ->limit(max(1, $limit));
+
+        if ($cursor !== null) {
+            $basisDate = (string) ($cursor['basis_date'] ?? '');
+            $cashTransactionId = (int) ($cursor['sort_id'] ?? 0);
+            $candidateQuery->where(function ($after) use ($dateColumn, $comparison, $basisDate, $cashTransactionId) {
+                $after->where($dateColumn, $comparison, $basisDate)
+                    ->orWhere(function ($sameDate) use ($dateColumn, $comparison, $basisDate, $cashTransactionId) {
+                        $sameDate->where($dateColumn, '=', $basisDate)
+                            ->where('ct.ID', $comparison, $cashTransactionId);
+                    });
+            });
+        }
+
+        $candidates = $candidateQuery->get();
+        if ($candidates->isEmpty()) {
+            return collect();
+        }
+
+        $cashTransactionIds = $candidates
+            ->pluck('cash_transaction_id')
+            ->map(fn($id) => (int) $id)
+            ->values();
+        $batchFilters = $filters;
+        $batchFilters['cash_transaction_ids_json'] = json_encode($cashTransactionIds->all(), JSON_THROW_ON_ERROR);
+        $batchFilters['cash_transaction_ids_prevalidated'] = true;
+        $rowsByCashTransaction = $this->buildAllTransactionCashLedgerQuery($search, $batchFilters)
+            ->get()
+            ->keyBy(fn($row) => (string) (int) $row->cash_transaction_id);
+
+        return $cashTransactionIds
+            ->map(fn($id) => $rowsByCashTransaction->get((string) $id))
+            ->filter()
+            ->values();
+    }
+
     /**
      * Build one row per UB_CashTrx entry using the same accounting scope as the
      * Daily Net + Running Balance report. Fund and trust rows enrich the cash
      * entry but never create an additional accounting row.
      */
-    private function buildAllTransactionCashLedgerQuery(?string $search, array $filters): \Illuminate\Database\Query\Builder
+    private function canUseFastAllTransactionPageQuery(?string $search, array $filters): bool
+    {
+        return empty($search)
+            && empty($filters['trx_id'])
+            && empty($filters['source_id'])
+            && empty($filters['trx_type'])
+            && !array_key_exists('agra_fsp_source_ids_json', $filters);
+    }
+
+    /**
+     * Select the small page of cash IDs first, before enriching those rows with
+     * fund metadata. This prevents the interactive table from aggregating the
+     * complete UB_FundTrxCash history merely to display 50–250 rows.
+     */
+    private function buildAllTransactionPageCandidateQuery(array $filters, bool $selectId = true): \Illuminate\Database\Query\Builder
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
@@ -339,8 +492,6 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             'settlement_date' => 'ct.dtSettlement',
             default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
         };
-        $rawTransactionIds = trim((string) ($filters['trx_id'] ?? ''));
-        $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
         $statusIds = array_values(array_unique(array_map('intval', (array) ($filters['status_ids'] ?? [6]))));
         $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
         $availabilityTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
@@ -351,32 +502,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
         }
 
-        $fundMetadata = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_FundTrxCash as fm_fc")
-            ->join("{$schema}.UB_FundTrx as fm_t", 'fm_t.ID', '=', 'fm_fc.iTrxID')
-            ->leftJoin("{$schema}.UB_FundTrxLookup as fm_l", 'fm_l.iTrxID', '=', 'fm_t.ID')
-            ->leftJoin("{$schema}.UB_Def_TrxType as fm_tt", 'fm_tt.ID', '=', 'fm_l.iType')
-            ->selectRaw('fm_fc.iCashTrxID AS cash_id')
-            ->selectRaw('MIN(fm_t.ID) AS fund_transaction_id')
-            ->selectRaw('MIN(CAST(fm_t.SourceID AS NVARCHAR(100))) AS fund_source_id')
-            ->selectRaw("MIN(ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))) AS fund_transaction_type")
-            ->groupBy('fm_fc.iCashTrxID');
-
-        $cashLedger = DB::connection(self::CONNECTION)
+        return DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_CashTrx as ct")
             ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
             ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
-            ->leftJoin("{$schema}.UB_Def_TrxStatus as cash_status", 'cash_status.ID', '=', 'ct.iStatus')
-            ->leftJoin("{$schema}.UB_Def_TrxType as cash_type", 'cash_type.ID', '=', 'ct.iType')
             ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
             ->leftJoin("{$schema}.UB_Def_TrustStatus as trust_status", 'trust_status.ID', '=', 'tr.iStatus')
-            ->leftJoin("{$schema}.UB_Def_TrustType as trust_type", 'trust_type.ID', '=', 'tr.iType')
-            ->leftJoin("{$schema}.UB_Def_TrustDepositType as trust_deposit_type", function ($join) {
-                $join->on('trust_deposit_type.ID', '=', 'tr.iDepositType')
-                    ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
-            })
-            ->leftJoinSub($fundMetadata, 'fund_meta', 'fund_meta.cash_id', '=', 'ct.ID')
             ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
             ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<=', $filters['date_to'] . ' 23:59:59'))
             ->whereNotNull($cashDateColumn)
@@ -407,13 +538,135 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->tap(fn($query) => $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca'))
             ->when(!empty($cashAccountScope['opened_before']), fn($query) => $query->whereNotNull('ct.dtCreated')->where('ct.dtCreated', '<=', $cashAccountScope['opened_before']))
             ->when(!empty($statusIds), fn($query) => $query->whereIn('ct.iStatus', $statusIds))
+            ->when(!empty($filters['customer_name']), function ($query) use ($schema, $filters) {
+                $query->whereExists(function ($customer) use ($schema, $filters) {
+                    $customer->selectRaw('1')
+                        ->from("{$schema}.UB_Customer as page_customer")
+                        ->whereColumn('page_customer.ID', 'p.iClientID')
+                        ->whereRaw("LTRIM(RTRIM(CONCAT(ISNULL(page_customer.FirstName, ''), ' ', ISNULL(page_customer.LastName, '')))) LIKE ?", ['%' . $filters['customer_name'] . '%']);
+                });
+            })
+            ->when(!empty($filters['plan_account_id']), fn($query) => $query->where('p.DealerAccountID', 'like', '%' . $filters['plan_account_id'] . '%'))
             ->when(!empty($filters['has_reconciliation_match']), function ($query) use ($schema) {
+                $query->whereExists(function ($eft) use ($schema) {
+                    $eft->selectRaw('1')
+                        ->from("{$schema}.UB_EFTItem as page_eft")
+                        ->whereColumn('page_eft.iLinkedID', 'ct.iTrustTrxID');
+                });
+            })
+            ->when($selectId, fn($query) => $query->select('ct.ID'));
+    }
+
+    private function buildAllTransactionCashLedgerQuery(?string $search, array $filters): \Illuminate\Database\Query\Builder
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+        $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
+        $cashDateColumn = match ($dateBasis) {
+            'create_date' => 'ct.dtCreated',
+            'trade_date' => 'ct.dtTrade',
+            'processing_date' => 'ct.dtProcessing',
+            'settlement_date' => 'ct.dtSettlement',
+            default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
+        };
+        $rawTransactionIds = trim((string) ($filters['trx_id'] ?? ''));
+        $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
+        $statusIds = array_values(array_unique(array_map('intval', (array) ($filters['status_ids'] ?? [6]))));
+        $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
+        $availabilityTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
+            ->addDay()
+            ->startOfDay()
+            ->toDateTimeString();
+        if (!empty($filters['currency_code'])) {
+            $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
+        }
+
+        $cashTransactionIdsJson = $filters['cash_transaction_ids_json'] ?? null;
+        $cashTransactionIdsPrevalidated = !empty($filters['cash_transaction_ids_prevalidated']);
+        $fundMetadata = $cashTransactionIdsJson !== null
+            ? DB::connection(self::CONNECTION)
+                ->query()
+                ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
+                ->join("{$schema}.UB_FundTrxCash as fm_fc", 'fm_fc.iCashTrxID', '=', 'export_cash.cash_transaction_id')
+            : DB::connection(self::CONNECTION)->table("{$schema}.UB_FundTrxCash as fm_fc");
+        $fundMetadata
+            ->join("{$schema}.UB_FundTrx as fm_t", 'fm_t.ID', '=', 'fm_fc.iTrxID')
+            ->leftJoin("{$schema}.UB_FundTrxLookup as fm_l", 'fm_l.iTrxID', '=', 'fm_t.ID')
+            ->leftJoin("{$schema}.UB_Def_TrxType as fm_tt", 'fm_tt.ID', '=', 'fm_l.iType')
+            ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('fm_fc.iCashTrxID', $filters['cash_transaction_ids']))
+            ->selectRaw('fm_fc.iCashTrxID AS cash_id')
+            ->selectRaw('MIN(fm_t.ID) AS fund_transaction_id')
+            ->selectRaw('MIN(CAST(fm_t.SourceID AS NVARCHAR(100))) AS fund_source_id')
+            ->selectRaw("MIN(ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))) AS fund_transaction_type")
+            ->when(array_key_exists('agra_fsp_source_ids_json', $filters), function ($query) use ($filters) {
+                $query->whereRaw(
+                    "EXISTS (SELECT 1 FROM OPENJSON(?) WITH ([source_id] VARCHAR(64) '$') AS agra_fsp WHERE agra_fsp.[source_id] = fm_t.SourceID)",
+                    [(string) $filters['agra_fsp_source_ids_json']]
+                );
+            })
+            ->groupBy('fm_fc.iCashTrxID');
+
+        $cashLedger = $cashTransactionIdsJson !== null
+            ? DB::connection(self::CONNECTION)
+                ->query()
+                ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
+                ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'export_cash.cash_transaction_id')
+            : DB::connection(self::CONNECTION)->table("{$schema}.UB_CashTrx as ct");
+        $cashLedger
+            ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
+            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')
+            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
+            ->leftJoin("{$schema}.UB_Def_TrxStatus as cash_status", 'cash_status.ID', '=', 'ct.iStatus')
+            ->leftJoin("{$schema}.UB_Def_TrxType as cash_type", 'cash_type.ID', '=', 'ct.iType')
+            ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
+            ->leftJoin("{$schema}.UB_Def_TrustStatus as trust_status", 'trust_status.ID', '=', 'tr.iStatus')
+            ->leftJoin("{$schema}.UB_Def_TrustType as trust_type", 'trust_type.ID', '=', 'tr.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustDepositType as trust_deposit_type", function ($join) {
+                $join->on('trust_deposit_type.ID', '=', 'tr.iDepositType')
+                    ->whereRaw('ISNULL(tr.iDepositType, 0) > 0');
+            })
+            ->leftJoinSub($fundMetadata, 'fund_meta', 'fund_meta.cash_id', '=', 'ct.ID')
+            ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('ct.ID', $filters['cash_transaction_ids']))
+            ->when(!$cashTransactionIdsPrevalidated, fn($query) => $query
+                ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
+                ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<=', $filters['date_to'] . ' 23:59:59'))
+                ->whereNotNull($cashDateColumn)
+                ->whereNotNull('ct.mAmount'))
+            ->when(!$cashTransactionIdsPrevalidated && $dateBasis === 'trade_date', function ($query) use ($availabilityTo) {
+                $query->where(function ($availableByTradeDate) use ($availabilityTo) {
+                    $availableByTradeDate
+                        ->whereNull('ct.dtSettlement')
+                        ->orWhere('ct.dtSettlement', '<', $availabilityTo)
+                        ->orWhere('ct.mAmount', '<=', 0)
+                        ->orWhereNull('tr.ID')
+                        ->orWhereNull('trust_status.NameEN')
+                        ->orWhere('trust_status.NameEN', '<>', 'Unsettled')
+                        ->orWhereRaw('ISNULL(tr.mAmountUsed, 0) > 0')
+                        ->orWhereRaw('ISNULL(tr.mAmountLeft, 0) <= 0');
+                });
+            })
+            ->when(!$cashTransactionIdsPrevalidated, fn($query) => $query->where('p.iClientID', '<>', self::INTERNAL_AGORA_CUSTOMER_ID))
+            ->when(!$cashTransactionIdsPrevalidated, function ($query) use ($schema, $cashAccountScope) {
+                $query->whereExists(function ($query) use ($schema, $cashAccountScope) {
+                    $query->selectRaw('1')
+                        ->from("{$schema}.UB_CashAccount as eligible_ca")
+                        ->whereColumn('eligible_ca.iPlanID', 'p.ID')
+                        ->whereNotNull('eligible_ca.AccountID')
+                        ->where('eligible_ca.AccountID', '<>', '');
+                    $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'eligible_ca');
+                });
+            })
+            ->when(!$cashTransactionIdsPrevalidated && !empty($cashAccountScope['excluded_plan_accounts']), fn($query) => $query->whereNotIn('p.DealerAccountID', $cashAccountScope['excluded_plan_accounts']))
+            ->when(!$cashTransactionIdsPrevalidated, fn($query) => $this->applyBalanceReportCashAccountScope($query, $cashAccountScope, 'ca'))
+            ->when(!$cashTransactionIdsPrevalidated && !empty($cashAccountScope['opened_before']), fn($query) => $query->whereNotNull('ct.dtCreated')->where('ct.dtCreated', '<=', $cashAccountScope['opened_before']))
+            ->when(!$cashTransactionIdsPrevalidated && !empty($statusIds), fn($query) => $query->whereIn('ct.iStatus', $statusIds))
+            ->when(!$cashTransactionIdsPrevalidated && !empty($filters['has_reconciliation_match']), function ($query) use ($schema) {
                 $query->whereExists(function ($eft) use ($schema) {
                     $eft->selectRaw('1')
                         ->from("{$schema}.UB_EFTItem as reconciliation_eft")
                         ->whereColumn('reconciliation_eft.iLinkedID', 'ct.iTrustTrxID');
                 });
             })
+            ->when(array_key_exists('agra_fsp_source_ids_json', $filters), fn($query) => $query->whereNotNull('fund_meta.cash_id'))
             ->selectRaw(implode(', ', [
                 "CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id",
                 'ct.ID AS cash_transaction_id',
@@ -697,45 +950,31 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     public function fetchDistinctTrxTypes(array $filters = []): array
     {
-        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
-        $excludedStandaloneTrustTypes = $this->cashBalanceExcludedStandaloneTrustTypes();
+        $cacheKey = 'viefund_distinct_transaction_types:v2:' . sha1(serialize($filters));
 
-        $fundTypes = DB::connection(self::CONNECTION)
-            ->table("{$schema}.UB_FundTrxLookup as l")
-            ->join("{$schema}.UB_FundTrx as t", 't.ID', '=', 'l.iTrxID')
-            ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'l.iPlanID')
-            ->leftJoin("{$schema}.UB_Customer as c", 'c.ID', '=', 'p.iClientID')
-            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'l.iType')
-            ->tap(fn($q) => $this->applyContextFilters($q, $filters))
-            ->whereNotNull('tt.NameEN')
-            ->select('tt.NameEN')
-            ->distinct()
-            ->pluck('tt.NameEN');
+        return Cache::remember($cacheKey, 3600, function (): array {
+            $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+            $fundTypes = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_Def_TrxType")
+                ->whereNotNull('NameEN')
+                ->pluck('NameEN');
+            $trustTypeNames = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_Def_TrustType")
+                ->whereNotNull('NameEN')
+                ->pluck('NameEN');
+            $trustDepositTypeNames = DB::connection(self::CONNECTION)
+                ->table("{$schema}.UB_Def_TrustDepositType")
+                ->whereNotNull('NameEN')
+                ->pluck('NameEN');
 
-        $trustQuery = $this->buildTrustBaseQuery($schema, null, $excludedStandaloneTrustTypes);
-        $this->applyTrustFiltersAndSearch($trustQuery, null, $filters, $schema);
-
-        $trustTypeNames = (clone $trustQuery)
-            ->whereNotNull('ttype.NameEN')
-            ->selectRaw('ttype.NameEN AS type_name')
-            ->distinct()
-            ->pluck('type_name');
-
-        $trustDepositTypeNames = (clone $trustQuery)
-            ->whereRaw('ISNULL(tr.iDepositType, 0) > 0')
-            ->whereNotNull('tdtype.NameEN')
-            ->selectRaw('tdtype.NameEN AS type_name')
-            ->distinct()
-            ->pluck('type_name');
-
-        $trustTypes = $trustTypeNames->concat($trustDepositTypeNames)->filter();
-
-        return $fundTypes->concat($trustTypes)
-            ->filter()
-            ->unique()
-            ->sort()
-            ->values()
-            ->toArray();
+            return $fundTypes->concat($trustTypeNames)->concat($trustDepositTypeNames)
+                ->map(fn($type): string => trim((string) $type))
+                ->filter(fn(string $type): bool => $type !== '')
+                ->unique()
+                ->sort()
+                ->values()
+                ->toArray();
+        });
     }
 
     private function applyContextFilters($q, array $filters): void

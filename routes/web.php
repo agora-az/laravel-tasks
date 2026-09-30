@@ -42,6 +42,9 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
     Route::get('/dashboard/stats-status', [ReconciliationController::class, 'dashboardStatsStatus'])->name('dashboard.stats-status');
     Route::get('/viefund-transactions', [RemoteVieFundController::class, 'allTransactions'])->name('viefund-transactions.index');
+    Route::post('/viefund-transactions/eft-matches', [EftFileController::class, 'transactionMatches'])->name('viefund-transactions.eft-matches');
+    Route::post('/viefund-transactions/agra-fsp-matches', [RemoteVieFundController::class, 'agraFspMatches'])->name('viefund-transactions.agra-fsp-matches');
+    Route::get('/viefund-transactions/count', [RemoteVieFundController::class, 'allTransactionsCountStatus'])->name('viefund-transactions.count');
     Route::post('/viefund-transactions/export', [RemoteVieFundController::class, 'startAllTransactionsExport'])->name('viefund-transactions.export.start');
     Route::get('/viefund-transactions/export/status', [RemoteVieFundController::class, 'allTransactionsExportStatus'])->name('viefund-transactions.export.status');
     Route::get('/viefund-transactions/export/download', [RemoteVieFundController::class, 'downloadAllTransactionsExport'])->name('viefund-transactions.export.download');

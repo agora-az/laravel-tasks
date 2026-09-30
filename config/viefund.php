@@ -227,4 +227,28 @@ return [
         min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_BATCH_SIZE', 20000))
     ),
 
+    /*
+    | Cache export-only VieFund relationship lookups in the local database.
+    | This cache is not used by the interactive table. A short freshness window
+    | avoids repeating remote EFT and fund-link queries during report retries,
+    | while bounded bulk requests keep the export worker's memory predictable.
+    */
+
+    'all_transactions_link_cache' => [
+        'ttl_minutes' => max(5, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_TTL_MINUTES', 60)),
+        'retention_days' => max(1, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_RETENTION_DAYS', 7)),
+        'remote_batch_size' => max(
+            1000,
+            min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_REMOTE_BATCH_SIZE', 20000))
+        ),
+        'local_write_batch_size' => max(
+            100,
+            min(5000, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_WRITE_BATCH_SIZE', 1000))
+        ),
+        'local_query_batch_size' => max(
+            1000,
+            min(10000, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_QUERY_BATCH_SIZE', 5000))
+        ),
+    ],
+
 ];

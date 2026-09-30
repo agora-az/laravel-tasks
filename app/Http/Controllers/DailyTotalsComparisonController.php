@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\BankStatementEntry;
 use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundDailyTotal;
+use App\Services\Reconciliation\AgraFspBankMatcher;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -37,7 +38,8 @@ class DailyTotalsComparisonController extends Controller
     ];
 
     public function __construct(
-        private readonly SqlServerEftRemoteRepository $eftRepository
+        private readonly SqlServerEftRemoteRepository $eftRepository,
+        private readonly AgraFspBankMatcher $agraFspBankMatcher
     ) {}
 
     public function index(Request $request): View
@@ -286,58 +288,44 @@ class DailyTotalsComparisonController extends Controller
             ));
         }
 
-        $bankByDate = DB::table('bank_statement_entries as b')
-            ->join('bank_statement_entry_analyses as a', function ($join) {
-                $join->on('a.bank_statement_entry_id', '=', 'b.id')
-                    ->where('a.parser_version', self::PARSER_VERSION);
-            })
-            ->whereBetween('b.value_date', [$dateFrom, $dateTo])
-            ->where('a.counterparty', 'like', 'fundserv%')
-            ->selectRaw('b.value_date as total_date')
-            ->selectRaw('b.id as bank_entry_id')
-            ->selectRaw('b.account_number')
-            ->selectRaw("CASE WHEN b.credit_debit_indicator = 'DBIT' THEN -b.amount ELSE b.amount END as net_total")
-            ->get()
-            ->groupBy(fn($row) => Carbon::parse($row->total_date)->toDateString());
-
-        $fspByDate = DB::table('settlement_instructions')
+        $fspGroups = DB::table('settlement_instructions')
             ->whereBetween('settlement_date', [$dateFrom, $dateTo])
             ->where('source_type', $sourceType)
+            ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
             ->selectRaw('settlement_date as total_date')
             ->selectRaw('currency')
             ->selectRaw('COUNT(*) as item_count')
             ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
             ->groupBy('settlement_date', 'currency')
-            ->get()
-            ->groupBy(fn($row) => Carbon::parse($row->total_date)->toDateString());
+            ->get();
+        $bankMatches = $this->agraFspBankMatcher->matchGroups($fspGroups);
 
-        $rows = $fspByDate->flatMap(function (Collection $fspGroups, string $date) use ($bankByDate) {
-            $availableBank = $bankByDate->get($date, collect())->keyBy('bank_entry_id');
+        $rows = $fspGroups->map(function ($fsp) use ($bankMatches, $source) {
+            $date = Carbon::parse($fsp->total_date)->toDateString();
+            $currency = strtoupper(trim((string) ($fsp->currency ?? '')));
+            $fspNet = (float) $fsp->net_total;
+            $bank = $bankMatches->get($this->agraFspBankMatcher->key($date, $currency));
+            $bankNet = (float) ($bank?->bank_net_total ?? 0);
+            $variance = $bankNet - $fspNet;
+            $isExactMatch = $bank && abs($variance) < .01;
+            $isPossibleWireFeeMatch = $source === 'agra'
+                && $bank
+                && abs(abs($variance) - 15.0) < .01;
 
-            return $fspGroups
-                ->sortByDesc(fn($fsp) => abs((float) $fsp->net_total))
-                ->map(function ($fsp) use (&$availableBank, $date) {
-                    $fspNet = (float) $fsp->net_total;
-                    $bank = $availableBank
-                        ->sortBy(fn($candidate) => abs((float) $candidate->net_total - $fspNet))
-                        ->first();
-                    if ($bank) {
-                        $availableBank->forget($bank->bank_entry_id);
-                    }
-                    $bankNet = (float) ($bank?->net_total ?? 0);
-
-                    return [
-                        'total_date' => $date,
-                        'bank_entry_id' => $bank?->bank_entry_id ? (int) $bank->bank_entry_id : null,
-                        'account_number' => (string) ($bank?->account_number ?? ''),
-                        'currency' => (string) ($fsp->currency ?? ''),
-                        'bank_transaction_count' => $bank ? 1 : 0,
-                        'bank_net_total' => $bankNet,
-                        'fsp_item_count' => (int) $fsp->item_count,
-                        'fsp_net_total' => $fspNet,
-                        'variance' => $bankNet - $fspNet,
-                    ];
-                });
+            return [
+                'total_date' => $date,
+                'bank_entry_id' => $bank?->id ? (int) $bank->id : null,
+                'account_number' => (string) ($bank?->account_number ?? ''),
+                'currency' => $currency,
+                'bank_transaction_count' => $bank ? 1 : 0,
+                'bank_net_total' => $bankNet,
+                'fsp_item_count' => (int) $fsp->item_count,
+                'fsp_net_total' => $fspNet,
+                'variance' => $variance,
+                'is_exact_match' => (bool) $isExactMatch,
+                'is_possible_wire_fee_match' => (bool) $isPossibleWireFeeMatch,
+                'is_match' => (bool) ($isExactMatch || $isPossibleWireFeeMatch),
+            ];
         });
 
         $rows = ($sortDir === 'asc' ? $rows->sortBy($sortField) : $rows->sortByDesc($sortField))->values();
@@ -349,6 +337,9 @@ class DailyTotalsComparisonController extends Controller
             'fsp_item_count' => $rows->sum('fsp_item_count'),
             'fsp_net_total' => $rows->sum('fsp_net_total'),
             'variance' => $rows->sum('variance'),
+            'exact_matches' => $rows->where('is_exact_match', true)->count(),
+            'possible_wire_fee_matches' => $rows->where('is_possible_wire_fee_match', true)->count(),
+            'unresolved_rows' => $rows->where('is_match', false)->count(),
         ];
 
         $currentPage = max(1, (int) $request->query('page', 1));

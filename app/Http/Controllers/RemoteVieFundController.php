@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Exports\VieFundReportSheetExport;
 use App\Models\RemoteVieFundCustomerTransaction;
+use App\Models\SettlementInstruction;
+use App\Services\Reconciliation\AgraFspBankMatcher;
 use App\Services\VieFund\VieFundRemoteService;
 use Exception;
 use Illuminate\Support\Carbon;
@@ -39,6 +41,13 @@ class RemoteVieFundController extends Controller
         'asc' => 'Earliest first',
         'desc' => 'Latest first',
     ];
+    private const ALL_TRANSACTION_SORT_COLUMNS = [
+        'created_date' => 'Created Date',
+        'trade_date' => 'Trade Date',
+        'processing_date' => 'Processing Date',
+        'settlement_date' => 'Settlement Date',
+        'amount' => 'Amount',
+    ];
     private const ALL_TRANSACTION_CURRENCIES = [
         '00' => 'CAD',
         '01' => 'USD',
@@ -54,7 +63,8 @@ class RemoteVieFundController extends Controller
     ];
 
     public function __construct(
-        private readonly VieFundRemoteService $remoteService
+        private readonly VieFundRemoteService $remoteService,
+        private readonly AgraFspBankMatcher $agraFspBankMatcher
     ) {}
 
     public function allTransactions(Request $request): View
@@ -65,8 +75,12 @@ class RemoteVieFundController extends Controller
         $trxTypesSelected = array_values(array_filter((array) $request->query('filter_trx_type', [])));
         $dateBasis = (string) $request->query('filter_date_basis', 'settlement_date');
         $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
-        $outputOrder = (string) $request->query('filter_output_order', 'desc');
-        $outputOrder = array_key_exists($outputOrder, self::ALL_TRANSACTION_OUTPUT_ORDERS) ? $outputOrder : 'desc';
+        $defaultSort = $dateBasis === 'create_date' ? 'created_date' : $dateBasis;
+        $sort = (string) $request->query('sort', $defaultSort);
+        $sort = array_key_exists($sort, self::ALL_TRANSACTION_SORT_COLUMNS) ? $sort : $defaultSort;
+        $sortDirection = strtolower((string) $request->query('sort_dir', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $hasEftMatch = $request->boolean('filter_has_eft_match');
+        $hasAgraFspMatch = $request->boolean('filter_has_agra_fsp_match');
         $currencyCode = (string) $request->query('filter_currency_code', '00');
         $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
         $statusIds = array_values(array_unique(array_filter(
@@ -82,10 +96,13 @@ class RemoteVieFundController extends Controller
             'date_from' => trim((string) $request->query('filter_date_from', $request->query('filter_created_from', $defaultFrom))),
             'date_to' => trim((string) $request->query('filter_date_to', $request->query('filter_created_to', $defaultTo))),
             'date_basis' => $dateBasis,
-            'output_order' => $outputOrder,
+            'output_order' => 'desc',
+            'sort' => $sort,
+            'sort_dir' => $sortDirection,
             'currency_code' => $currencyCode,
             'status_ids' => $statusIds,
             'trx_type' => $trxTypesSelected ?: null,
+            'has_reconciliation_match' => $hasEftMatch ?: null,
         ]);
         $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
             ? (int) $request->query('per_page', 100)
@@ -95,6 +112,13 @@ class RemoteVieFundController extends Controller
         $availableTrxTypes = [];
 
         try {
+            if ($hasAgraFspMatch) {
+                $filters['agra_fsp_source_ids_json'] = $this->agraFspSourceIdsJson(
+                    $dateBasis,
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null
+                );
+            }
             $transactions = $this->remoteService->fetchAllTransactions(
                 $perPage,
                 max(1, (int) $request->query('page', 1)),
@@ -108,7 +132,7 @@ class RemoteVieFundController extends Controller
         }
 
         $dateBasisOptions = self::ALL_TRANSACTION_DATE_BASES;
-        $outputOrderOptions = self::ALL_TRANSACTION_OUTPUT_ORDERS;
+        $sortOptions = self::ALL_TRANSACTION_SORT_COLUMNS;
         $currencyOptions = self::ALL_TRANSACTION_CURRENCIES;
         $statusOptions = self::ALL_TRANSACTION_STATUSES;
         $inceptionDates = [];
@@ -124,15 +148,242 @@ class RemoteVieFundController extends Controller
             'filters',
             'availableTrxTypes',
             'dateBasis',
-            'outputOrder',
+            'sort',
+            'sortDirection',
+            'hasEftMatch',
+            'hasAgraFspMatch',
             'currencyCode',
             'statusIds',
             'dateBasisOptions',
-            'outputOrderOptions',
+            'sortOptions',
             'currencyOptions',
             'statusOptions',
             'inceptionDates'
         ));
+    }
+
+    public function agraFspMatches(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'cash_transaction_ids' => ['required', 'array', 'max:250'],
+            'cash_transaction_ids.*' => ['required', 'integer', 'min:1', 'distinct'],
+        ]);
+        $sourceIdsByCashTransaction = $this->remoteService
+            ->fetchFundSourceIdsForCashTransactions($validated['cash_transaction_ids'])
+            ->groupBy('cash_transaction_id')
+            ->map(fn($rows) => $rows->pluck('source_id')->map(fn($value) => trim((string) $value))->filter()->unique()->values());
+        $sourceIds = $sourceIdsByCashTransaction->flatten()->unique()->values();
+
+        $fspItems = SettlementInstruction::query()
+            ->where('source_type', 'fundserv_agra')
+            ->whereIn('source_id', $sourceIds)
+            ->orderBy('settlement_date')
+            ->orderBy('id')
+            ->get([
+                'id', 'source_file', 'record_index', 'create_date', 'trade_date', 'settlement_date',
+                'fund_account_id', 'dealer_account_id', 'order_id', 'source_id', 'side',
+                'transaction_type', 'fund_id', 'switch_from_fund_id', 'switch_to_fund_id',
+                'currency', 'gross_amount', 'net_amount', 'settlement_amount', 'settlement_source',
+            ])
+            ->values();
+        $fspItemsBySourceId = $fspItems->groupBy(fn($record) => trim((string) $record->source_id));
+        $bankMatches = $this->agraFspBankMatcher->matchesForItems($fspItems);
+        $records = $fspItems
+            ->map(function (SettlementInstruction $record): array {
+                return [
+                    'id' => $record->id,
+                    'source_file' => $record->source_file,
+                    'record_index' => $record->record_index,
+                    'create_date' => optional($record->create_date)->toDateString(),
+                    'trade_date' => optional($record->trade_date)->toDateString(),
+                    'settlement_date' => optional($record->settlement_date)->toDateString(),
+                    'fund_account_id' => $record->fund_account_id,
+                    'dealer_account_id' => $record->dealer_account_id,
+                    'order_id' => $record->order_id,
+                    'source_id' => $record->source_id,
+                    'side' => $record->side,
+                    'transaction_type' => $record->transaction_type,
+                    'fund_id' => $record->fund_id,
+                    'switch_from_fund_id' => $record->switch_from_fund_id,
+                    'switch_to_fund_id' => $record->switch_to_fund_id,
+                    'currency' => $record->currency,
+                    'gross_amount' => $record->gross_amount,
+                    'net_amount' => $record->net_amount,
+                    'settlement_amount' => $record->settlement_amount,
+                    'url' => route('settlement-instructions.index', array_filter([
+                        'source_type' => 'fundserv_agra',
+                        'search' => $record->source_id,
+                        'date_from' => optional($record->settlement_date)->toDateString(),
+                        'date_to' => optional($record->settlement_date)->toDateString(),
+                    ])),
+                ];
+            })
+            ->groupBy('source_id');
+
+        $recordsByCashTransaction = $sourceIdsByCashTransaction->map(function ($cashSourceIds) use ($records) {
+            return $cashSourceIds
+                ->flatMap(fn($sourceId) => $records->get($sourceId, collect()))
+                ->unique('id')
+                ->values();
+        });
+
+        $bankRecordsByCashTransaction = $sourceIdsByCashTransaction->map(function ($cashSourceIds) use ($fspItemsBySourceId, $bankMatches) {
+            return $cashSourceIds
+                ->flatMap(fn($sourceId) => $fspItemsBySourceId->get((string) $sourceId, collect()))
+                ->map(function (SettlementInstruction $item) use ($bankMatches) {
+                    if (
+                        !$item->settlement_date
+                        || !$item->currency
+                        || strtoupper(trim((string) $item->settlement_source)) !== 'I'
+                    ) {
+                        return null;
+                    }
+
+                    return $bankMatches->get($this->agraFspBankMatcher->key(
+                        $item->settlement_date,
+                        $item->currency
+                    ));
+                })
+                ->filter()
+                ->unique(fn($entry) => (int) $entry->id)
+                ->map(function ($entry): array {
+                    return [
+                        'id' => (int) $entry->id,
+                        'source_file' => trim((string) ($entry->source_file ?? '')) ?: null,
+                        'account_number' => trim((string) ($entry->account_number ?? '')) ?: null,
+                        'value_date' => $entry->value_date,
+                        'direction' => trim((string) ($entry->credit_debit_indicator ?? '')) ?: null,
+                        'currency' => trim((string) ($entry->currency ?? '')) ?: null,
+                        'amount' => $entry->amount !== null ? (float) $entry->amount : null,
+                        'settlement_number' => trim((string) ($entry->settlement_number ?? '')) ?: null,
+                        'memo_type' => trim((string) ($entry->memo_type ?? '')) ?: null,
+                        'counterparty' => trim((string) ($entry->counterparty ?? '')) ?: null,
+                        'wire_reference' => trim((string) ($entry->wire_payment_reference ?? '')) ?: null,
+                        'description' => trim((string) ($entry->additional_info ?? '')) ?: null,
+                        'reconciliation_status' => (string) ($entry->reconciliation_status ?? ''),
+                        'reconciliation_variance' => isset($entry->variance) ? (float) $entry->variance : null,
+                        'reconciliation_note' => (string) ($entry->reconciliation_note ?? ''),
+                        'is_possible_wire_fee_match' => (bool) ($entry->is_possible_wire_fee_match ?? false),
+                        'url' => route('reconciliations.daily-totals.bank-day', [
+                            'date' => Carbon::parse($entry->value_date)->toDateString(),
+                            'entry_id' => (int) $entry->id,
+                        ]),
+                    ];
+                })
+                ->values();
+        });
+
+        return response()->json([
+            'fsp_records' => $recordsByCashTransaction,
+            'bank_records' => $bankRecordsByCashTransaction,
+        ]);
+    }
+
+    public function allTransactionsCountStatus(Request $request): JsonResponse
+    {
+        $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
+        $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
+        $dateBasis = (string) $request->query('filter_date_basis', 'settlement_date');
+        $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
+        $currencyCode = (string) $request->query('filter_currency_code', '00');
+        $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
+        $statusIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) $request->query('filter_status', [6])),
+            fn($status) => array_key_exists($status, self::ALL_TRANSACTION_STATUSES)
+        )));
+        $statusIds = $statusIds ?: [6];
+        sort($statusIds);
+        $transactionTypes = array_values(array_filter(array_map(
+            fn($type) => trim((string) $type),
+            (array) $request->query('filter_trx_type', [])
+        )));
+        sort($transactionTypes);
+
+        $filters = array_filter([
+            'customer_name' => trim((string) $request->query('filter_customer_name', '')),
+            'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
+            'trx_id' => trim((string) $request->query('filter_trx_id', '')),
+            'source_id' => trim((string) $request->query('filter_source_id', '')),
+            'date_from' => trim((string) $request->query('filter_date_from', $request->query('filter_created_from', $defaultFrom))),
+            'date_to' => trim((string) $request->query('filter_date_to', $request->query('filter_created_to', $defaultTo))),
+            'date_basis' => $dateBasis,
+            'currency_code' => $currencyCode,
+            'status_ids' => $statusIds,
+            'trx_type' => $transactionTypes ?: null,
+            'has_reconciliation_match' => $request->boolean('filter_has_eft_match') ?: null,
+            'has_agra_fsp_match' => $request->boolean('filter_has_agra_fsp_match') ?: null,
+        ]);
+        $payload = [
+            'search' => trim((string) $request->query('search', '')),
+            'filters' => $filters,
+        ];
+        $signature = sha1(json_encode($payload, JSON_THROW_ON_ERROR));
+        $valueKey = "viefund_all_transactions_total:{$signature}";
+        $statusKey = "viefund_all_transactions_total_status:{$signature}";
+        $lockKey = "viefund_all_transactions_total_lock:{$signature}";
+        $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
+            ? (int) $request->query('per_page', 100)
+            : 100;
+        $page = max(1, (int) $request->query('page', 1));
+
+        if (Cache::has($valueKey)) {
+            $total = (int) Cache::get($valueKey);
+
+            return response()->json([
+                'state' => 'complete',
+                'total' => $total,
+                'total_pages' => max(1, (int) ceil($total / $perPage)),
+                'page' => $page,
+                'cached' => true,
+            ], 200, $this->exportStatusNoCacheHeaders());
+        }
+
+        $status = Cache::get($statusKey);
+        if (is_array($status) && ($status['state'] ?? null) === 'failed') {
+            return response()->json($status, 200, $this->exportStatusNoCacheHeaders());
+        }
+
+        if (Cache::add($lockKey, true, now()->addMinutes(15))) {
+            Cache::put($statusKey, [
+                'state' => 'processing',
+                'message' => 'Calculating the filtered transaction total...',
+                'updated_at' => now()->toIso8601String(),
+            ], now()->addMinutes(15));
+            $phpPath = env('PHP_PATH', PHP_BINARY);
+            $logPath = storage_path('logs/viefund-all-transactions-count.log');
+            $encodedPayload = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
+            $command = sprintf(
+                '%s %s report:cache-viefund-all-transactions-count --cache-key=%s --payload=%s >> %s 2>&1 &',
+                escapeshellarg($phpPath),
+                escapeshellarg(base_path('artisan')),
+                escapeshellarg($signature),
+                escapeshellarg($encodedPayload),
+                escapeshellarg($logPath)
+            );
+            $process = proc_open($command, [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ], $pipes);
+
+            if (is_resource($process)) {
+                fclose($pipes[0]);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                proc_close($process);
+            } else {
+                Cache::forget($lockKey);
+                Cache::put($statusKey, [
+                    'state' => 'failed',
+                    'message' => 'The background total could not be started.',
+                ], now()->addMinutes(2));
+            }
+        }
+
+        return response()->json([
+            'state' => 'processing',
+            'message' => 'Calculating the filtered transaction total...',
+        ], 202, $this->exportStatusNoCacheHeaders());
     }
 
     public function startAllTransactionsExport(Request $request): JsonResponse
@@ -152,7 +403,13 @@ class RemoteVieFundController extends Controller
             'filter_status.*' => ['integer', 'between:0,6'],
             'filter_trx_type' => ['sometimes', 'array'],
             'filter_trx_type.*' => ['string', 'max:255'],
+            'filter_has_eft_match' => ['sometimes', 'boolean'],
+            'filter_has_agra_fsp_match' => ['sometimes', 'boolean'],
             'split_sheets' => ['sometimes', 'boolean'],
+            'linked_record_layout' => ['sometimes', 'in:single,split'],
+            'include_eft_records' => ['sometimes', 'boolean'],
+            'include_bank_records' => ['sometimes', 'boolean'],
+            'include_fsp_records' => ['sometimes', 'boolean'],
         ]);
 
         $userId = (int) auth()->id();
@@ -204,11 +461,19 @@ class RemoteVieFundController extends Controller
         $statusIds = array_values(array_unique(array_map('intval', (array) ($validated['filter_status'] ?? [6]))));
         $statusArgs = $repeatArgs('--status', $statusIds ?: [6]);
         $splitSheetsArg = $request->boolean('split_sheets') ? '--split-sheets' : '';
+        $hasEftMatchArg = $request->boolean('filter_has_eft_match') ? '--has-eft-match' : '';
+        $hasAgraFspMatchArg = $request->boolean('filter_has_agra_fsp_match') ? '--has-agra-fsp-match' : '';
+        $includeEftRecordsArg = $request->boolean('include_eft_records') ? '--include-eft-records' : '';
+        $includeBankRecordsArg = $request->boolean('include_bank_records') ? '--include-bank-records' : '';
+        $includeFspRecordsArg = $request->boolean('include_fsp_records') ? '--include-fsp-records' : '';
+        $linkedRecordLayoutArg = '--linked-record-layout=' . escapeshellarg(
+            (string) ($validated['linked_record_layout'] ?? 'split')
+        );
         $phpPath = env('PHP_PATH', PHP_BINARY);
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
-            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg(base_path('artisan')),
             escapeshellarg($runId),
@@ -225,6 +490,12 @@ class RemoteVieFundController extends Controller
             $transactionTypeArgs,
             $statusArgs,
             $splitSheetsArg,
+            $hasEftMatchArg,
+            $hasAgraFspMatchArg,
+            $includeEftRecordsArg,
+            $includeBankRecordsArg,
+            $includeFspRecordsArg,
+            $linkedRecordLayoutArg,
             escapeshellarg($outputBase),
             escapeshellarg($statusFile),
             escapeshellarg($lockFile),
@@ -874,6 +1145,34 @@ class RemoteVieFundController extends Controller
         if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $path)) {
             @unlink($temporaryFile);
         }
+    }
+
+    private function agraFspSourceIdsJson(string $dateBasis, ?string $dateFrom, ?string $dateTo): string
+    {
+        $query = SettlementInstruction::query()
+            ->where('source_type', 'fundserv_agra')
+            ->whereNotNull('source_id')
+            ->where('source_id', '<>', '');
+
+        // Settlement dates are comparable on both reports. For the other VieFund
+        // date bases, retain the complete imported AGRA identifier set so a valid
+        // cross-date match is never discarded by an unrelated FSP date field.
+        if ($dateBasis === 'settlement_date') {
+            if ($dateFrom) {
+                $query->where('settlement_date', '>=', $dateFrom);
+            }
+            if ($dateTo) {
+                $query->where('settlement_date', '<=', $dateTo);
+            }
+        }
+
+        return $query->distinct()
+            ->orderBy('source_id')
+            ->pluck('source_id')
+            ->map(fn($sourceId) => trim((string) $sourceId))
+            ->filter()
+            ->values()
+            ->toJson(JSON_THROW_ON_ERROR);
     }
 
     /** Resolve the configured or cached inception date for a cash date basis. */
