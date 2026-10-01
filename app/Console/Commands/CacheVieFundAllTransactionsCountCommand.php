@@ -35,10 +35,20 @@ class CacheVieFundAllTransactionsCountCommand extends Command
             $search = trim((string) ($payload['search'] ?? ''));
             $filters = is_array($payload['filters'] ?? null) ? $payload['filters'] : [];
             $hasAgraFspMatch = (bool) ($filters['has_agra_fsp_match'] ?? false);
-            unset($filters['has_agra_fsp_match']);
+            $has7960FspMatch = (bool) ($filters['has_7960_fsp_match'] ?? false);
+            unset($filters['has_agra_fsp_match'], $filters['has_7960_fsp_match']);
 
             if ($hasAgraFspMatch) {
-                $filters['agra_fsp_source_ids_json'] = $this->agraFspSourceIdsJson(
+                $filters['agra_fsp_source_ids_json'] = $this->fspSourceIdsJson(
+                    'fundserv_agra',
+                    (string) ($filters['date_basis'] ?? 'settlement_date'),
+                    $filters['date_from'] ?? null,
+                    $filters['date_to'] ?? null
+                );
+            }
+            if ($has7960FspMatch) {
+                $filters['fsp_7960_source_ids_json'] = $this->fspSourceIdsJson(
+                    'ltm',
                     (string) ($filters['date_basis'] ?? 'settlement_date'),
                     $filters['date_from'] ?? null,
                     $filters['date_to'] ?? null
@@ -68,10 +78,15 @@ class CacheVieFundAllTransactionsCountCommand extends Command
         }
     }
 
-    private function agraFspSourceIdsJson(string $dateBasis, ?string $dateFrom, ?string $dateTo): string
+    private function fspSourceIdsJson(
+        string $sourceType,
+        string $dateBasis,
+        ?string $dateFrom,
+        ?string $dateTo
+    ): string
     {
         $query = SettlementInstruction::query()
-            ->where('source_type', 'fundserv_agra')
+            ->where('source_type', $sourceType)
             ->whereNotNull('source_id')
             ->where('source_id', '<>', '');
 

@@ -95,7 +95,7 @@
                 <thead><tr style="background:#f7fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;">
                     <th style="text-align:left;"><a href="{{ $sortUrl('side') }}" style="color:inherit;text-decoration:none;">Side {{ $sortIndicator('side') }}</a></th>
                     <th style="text-align:right;"><a href="{{ $sortUrl('amount') }}" style="color:inherit;text-decoration:none;">Amount {{ $sortIndicator('amount') }}</a></th>
-                    <th style="text-align:left;">Order ID</th><th style="text-align:left;">Source ID</th><th style="text-align:left;">Fund Account</th><th style="text-align:left;">Fund ID</th>
+                    <th style="text-align:left;">Order ID</th><th style="text-align:left;">Source ID</th><th style="text-align:left;">Fund Account</th><th style="text-align:left;">Fund ID</th><th style="text-align:left;">Note</th>
                 </tr></thead>
                 <tbody>
                     @forelse($fspTransactions as $item)
@@ -103,10 +103,10 @@
                         <tr style="border-bottom:1px solid #e2e8f0;background:{{ $loop->even ? 'rgba(56,161,105,.07)' : 'transparent' }};">
                             <td>{{ $item->side ?: '—' }}</td>
                             <td style="text-align:right;color:{{ $signedAmount < 0 ? '#e53e3e' : '#276749' }};white-space:nowrap;">{{ $formatMoney($signedAmount) }}</td>
-                            <td>{{ $item->order_id ?: '—' }}</td><td>{{ $item->source_id ?: '—' }}</td><td>{{ $item->fund_account_id ?: '—' }}</td><td>{{ $item->fund_id ?: '—' }}</td>
+                            <td>{{ $item->order_id ?: '—' }}</td><td>{{ $item->source_id ?: '—' }}</td><td>{{ $item->fund_account_id ?: '—' }}</td><td>{{ $item->fund_id ?: '—' }}</td><td style="min-width:280px;white-space:normal;">{{ $item->fsp_note ?: '—' }}</td>
                         </tr>
                     @empty
-                        <tr><td colspan="6" style="text-align:center;color:#718096;padding:30px 10px;">No FSP transactions found.</td></tr>
+                        <tr><td colspan="7" style="text-align:center;color:#718096;padding:30px 10px;">No FSP transactions found.</td></tr>
                     @endforelse
                 </tbody>
             </table>

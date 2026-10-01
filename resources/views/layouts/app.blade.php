@@ -29,10 +29,7 @@
         <div class="header-main">
             <div class="container header-main-inner">
                 <div class="logo-container">
-                    <img src="{{ asset('images/agora-logo.png') }}" alt="Agora Logo" class="logo">
-                    <div class="brand-info">
-                        <div class="tagline">Your business. Your way.</div>
-                    </div>
+                    <img src="{{ asset('images/Agora-Logo-Black-1600px.png') }}" alt="Agora Logo" class="logo">
                 </div>
                 <div class="header-contact" aria-label="Contact information">
                     <a href="tel:+18554624672"><span aria-hidden="true">☎</span> +1.855.462.4672</a>

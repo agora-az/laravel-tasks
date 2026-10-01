@@ -2,8 +2,8 @@
 
 namespace App\Services\Reconciliation;
 
-use App\Models\SettlementInstruction;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -11,8 +11,12 @@ class AgraFspBankMatcher
 {
     private const PARSER_VERSION = 'v2';
 
+    public function __construct(
+        private readonly FspMatchedRecordCollapser $fspRecordCollapser
+    ) {}
+
     /**
-     * Match the complete AGRA settlement batch behind the supplied items to a
+     * Match the complete FSP settlement batch behind the supplied items to a
      * Fundserv-labelled bank entry. The relationship is batch-level: every
      * item sharing the settlement date and currency receives the same match.
      *
@@ -21,11 +25,15 @@ class AgraFspBankMatcher
     public function matchesForItems(Collection $items, string $sourceType = 'fundserv_agra'): Collection
     {
         $pairs = $items
-            ->map(function ($item): ?array {
+            ->map(function ($item) use ($sourceType): ?array {
                 $date = data_get($item, 'settlement_date');
                 $currency = strtoupper(trim((string) data_get($item, 'currency')));
                 $settlementSource = strtoupper(trim((string) data_get($item, 'settlement_source')));
-                if (!$date || $currency === '' || $settlementSource !== 'I') {
+                if (
+                    !$date
+                    || $currency === ''
+                    || ($sourceType === 'fundserv_agra' && $settlementSource !== 'I')
+                ) {
                     return null;
                 }
 
@@ -45,28 +53,48 @@ class AgraFspBankMatcher
         $pairKeys = $pairs
             ->map(fn(array $pair) => $this->key($pair['total_date'], $pair['currency']))
             ->flip();
-        $groups = SettlementInstruction::query()
-            ->where('source_type', $sourceType)
+        $deduplicated = $this->fspRecordCollapser
+            ->deduplicatedQuery($sourceType)
             ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
             ->whereIn('settlement_date', $pairs->pluck('total_date')->unique()->all())
-            ->whereIn('currency', $pairs->pluck('currency')->unique()->all())
+            ->whereIn('currency', $pairs->pluck('currency')->unique()->all());
+        $groups = $this->groupsFromDeduplicatedQuery($deduplicated)
+            ->filter(fn($group) => $pairKeys->has($this->key($group->total_date, $group->currency)))
+            ->values();
+
+        return $this->matchGroups($groups, $sourceType === 'fundserv_agra');
+    }
+
+    /**
+     * Return reconciliation totals after collapsing exact FSP redeliveries.
+     */
+    public function groupsForDateRange(string $dateFrom, string $dateTo, string $sourceType): Collection
+    {
+        $deduplicated = $this->fspRecordCollapser
+            ->deduplicatedQuery($sourceType)
+            ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
+            ->whereBetween('settlement_date', [$dateFrom, $dateTo]);
+
+        return $this->groupsFromDeduplicatedQuery($deduplicated);
+    }
+
+    private function groupsFromDeduplicatedQuery(Builder $deduplicated): Collection
+    {
+        return DB::query()
+            ->fromSub($deduplicated, 'fsp')
             ->selectRaw('settlement_date as total_date')
             ->selectRaw('currency')
             ->selectRaw('COUNT(*) as item_count')
             ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
             ->groupBy('settlement_date', 'currency')
-            ->get()
-            ->filter(fn($group) => $pairKeys->has($this->key($group->total_date, $group->currency)))
-            ->values();
-
-        return $this->matchGroups($groups);
+            ->get();
     }
 
     /**
      * @param Collection<int, object|array> $groups
      * @return Collection<string, object> keyed by YYYY-MM-DD|CURRENCY
      */
-    public function matchGroups(Collection $groups): Collection
+    public function matchGroups(Collection $groups, bool $allowWireFeeMatch = true): Collection
     {
         $groups = $groups
             ->map(function ($group): object {
@@ -110,7 +138,7 @@ class AgraFspBankMatcher
             ->get()
             ->groupBy(fn($entry) => $this->key($entry->value_date, $entry->currency));
 
-        return $groups->mapWithKeys(function (object $group) use ($bankByKey): array {
+        return $groups->mapWithKeys(function (object $group) use ($bankByKey, $allowWireFeeMatch): array {
             $key = $this->key($group->total_date, $group->currency);
             $bank = collect($bankByKey->get($key, collect()))
                 ->sort(function ($left, $right) use ($group): int {
@@ -130,7 +158,8 @@ class AgraFspBankMatcher
             $bank->bank_net_total = $this->signedBankAmount($bank);
             $bank->variance = $bank->bank_net_total - $group->net_total;
             $bank->is_exact_match = abs($bank->variance) < .01;
-            $bank->is_possible_wire_fee_match = abs(abs($bank->variance) - 15.0) < .01;
+            $bank->is_possible_wire_fee_match = $allowWireFeeMatch
+                && abs(abs($bank->variance) - 15.0) < .01;
             $bank->is_match = $bank->is_exact_match || $bank->is_possible_wire_fee_match;
             $bank->reconciliation_status = $bank->is_exact_match
                 ? 'Exact match'

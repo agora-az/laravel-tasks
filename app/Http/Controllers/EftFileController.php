@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Exports\EftFilesWorkbookExport;
 use App\Models\BankEftFile;
+use App\Services\Reconciliation\EftBankMatchStatusService;
+use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -22,7 +24,9 @@ class EftFileController extends Controller
     private const BANK_PARSER_VERSION = 'v2';
 
     public function __construct(
-        private readonly SqlServerEftRemoteRepository $repository
+        private readonly SqlServerEftRemoteRepository $repository,
+        private readonly EftBankMatchStatusService $eftBankMatchStatusService,
+        private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService
     ) {}
 
     public function index(Request $request)
@@ -91,8 +95,8 @@ class EftFileController extends Controller
 
     /**
      * Resolve detailed EFT and sequence-linked bank records for the trust
-     * transactions displayed on one All Transactions page. This remains
-     * opt-in so the remote lookup does not delay the normal table request.
+     * transactions displayed on one All Transactions page. The browser loads
+     * this asynchronously so it does not delay the normal table request.
      */
     public function transactionMatches(Request $request): JsonResponse
     {
@@ -142,6 +146,7 @@ class EftFileController extends Controller
                     ->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
                         ? (string) (int) trim((string) $entry->settlement_number)
                         : trim((string) $entry->settlement_number));
+            $bankMatchStatuses = $this->eftBankMatchStatusService->statusesForSequences($sequences);
         } catch (\Throwable $exception) {
             Log::warning('Unable to load EFT and bank matches for the All Transactions table.', [
                 'trust_id_count' => $trustIds->count(),
@@ -195,16 +200,23 @@ class EftFileController extends Controller
 
         $eftRecords = $items
             ->groupBy(fn($item) => (string) (int) $item->linked_id)
-            ->map(function ($linkedItems) {
-                return $linkedItems->map(function ($item) {
+            ->map(function ($linkedItems) use ($bankMatchStatuses) {
+                return $linkedItems->map(function ($item) use ($bankMatchStatuses) {
                     $fileId = $item->file_id !== null ? (int) $item->file_id : null;
                     $fileName = trim((string) ($item->file_name ?? ''));
+                    $sequence = $item->sequence_number !== null
+                        && ctype_digit((string) $item->sequence_number)
+                            ? (string) (int) $item->sequence_number
+                            : null;
 
                     return [
+                        'bank_match_status' => $sequence !== null
+                            ? $bankMatchStatuses->get($sequence, EftBankMatchStatusService::UNKNOWN)
+                            : EftBankMatchStatusService::UNKNOWN,
                         'id' => (int) $item->id,
                         'file_id' => $fileId,
                         'file_name' => $fileName !== '' ? $fileName : null,
-                        'sequence_number' => $item->sequence_number !== null ? (int) $item->sequence_number : null,
+                        'sequence_number' => $sequence !== null ? (int) $sequence : null,
                         'created_at' => $item->created_at,
                         'effective_date' => $item->effective_date,
                         'trade_date' => $item->trade_date,
@@ -304,12 +316,17 @@ class EftFileController extends Controller
                     ->values();
             });
 
+        $matchStatuses = $eftRecords->map(
+            fn($records) => $this->transactionBankMatchStatusService->summarizeEftItems(collect($records))
+        );
+
         return response()->json([
             'matches' => $matches,
             'eft_matches' => $matches,
             'eft_records' => $eftRecords,
             'bank_matches' => $bankMatches,
             'bank_records' => $bankRecords,
+            'match_statuses' => $matchStatuses,
             'matched_transactions' => $matches->count(),
             'bank_matched_transactions' => $bankMatches->filter(fn($items) => $items->isNotEmpty())->count(),
         ]);

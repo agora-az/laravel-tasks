@@ -473,7 +473,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             && empty($filters['trx_id'])
             && empty($filters['source_id'])
             && empty($filters['trx_type'])
-            && !array_key_exists('agra_fsp_source_ids_json', $filters);
+            && !array_key_exists('agra_fsp_source_ids_json', $filters)
+            && !array_key_exists('fsp_7960_source_ids_json', $filters);
     }
 
     /**
@@ -603,6 +604,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                     [(string) $filters['agra_fsp_source_ids_json']]
                 );
             })
+            ->when(array_key_exists('fsp_7960_source_ids_json', $filters), function ($query) use ($filters) {
+                $query->whereRaw(
+                    "EXISTS (SELECT 1 FROM OPENJSON(?) WITH ([source_id] VARCHAR(64) '$') AS fsp_7960 WHERE fsp_7960.[source_id] = fm_t.SourceID)",
+                    [(string) $filters['fsp_7960_source_ids_json']]
+                );
+            })
             ->groupBy('fm_fc.iCashTrxID');
 
         $cashLedger = $cashTransactionIdsJson !== null
@@ -666,7 +673,11 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                         ->whereColumn('reconciliation_eft.iLinkedID', 'ct.iTrustTrxID');
                 });
             })
-            ->when(array_key_exists('agra_fsp_source_ids_json', $filters), fn($query) => $query->whereNotNull('fund_meta.cash_id'))
+            ->when(
+                array_key_exists('agra_fsp_source_ids_json', $filters)
+                    || array_key_exists('fsp_7960_source_ids_json', $filters),
+                fn($query) => $query->whereNotNull('fund_meta.cash_id')
+            )
             ->selectRaw(implode(', ', [
                 "CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id",
                 'ct.ID AS cash_transaction_id',

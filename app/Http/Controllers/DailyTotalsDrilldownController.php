@@ -4,11 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Exports\VieFundReportSheetExport;
 use App\Models\BankStatementEntry;
+use App\Models\SettlementInstruction;
 use App\Models\VieFundCashDailySnapshot;
 use App\Models\VieFundCashSnapshotRun;
+use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
@@ -53,6 +56,7 @@ class DailyTotalsDrilldownController extends Controller
     public function __construct(
         private readonly VieFundRemoteService $vieFundRemoteService,
         private readonly SqlServerEftRemoteRepository $eftRepository,
+        private readonly FspMatchedRecordCollapser $fspRecordCollapser,
     ) {}
 
     /** Configured fallback fund status IDs (VIEFUND_DEFAULT_FUND_STATUS). */
@@ -413,28 +417,43 @@ class DailyTotalsDrilldownController extends Controller
             ? ($bankTransaction->credit_debit_indicator === 'DBIT' ? -(float) $bankTransaction->amount : (float) $bankTransaction->amount)
             : 0.0;
 
-        $fspBase = DB::table('settlement_instructions')
+        $fspItems = $this->fspRecordCollapser->collapse(SettlementInstruction::query()
             ->where('source_type', $sourceType)
             ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
             ->whereDate('settlement_date', $day->toDateString())
-            ->where('currency', $currency);
-        $fspSummary = (clone $fspBase)
-            ->selectRaw('COUNT(*) as item_count')
-            ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
-            ->first();
-        $fspTransactions = (clone $fspBase)
-            ->when($amountSearch !== null, fn($query) => $query->whereRaw(
-                'CAST(ABS(COALESCE(settlement_amount, 0)) AS CHAR) LIKE ?',
-                ['%'.$amountSearch.'%']
-            ))
-            ->when($sort === 'side', fn($query) => $query->orderBy('side', $direction))
-            ->when($sort === 'amount', fn($query) => $query->orderByRaw(
-                "CASE WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) ELSE 0 END ".strtoupper($direction)
-            ))
+            ->where('currency', $currency)
             ->orderBy('id')
-            ->paginate($perPage)
-            ->withQueryString();
-        $fspNet = (float) ($fspSummary?->net_total ?? 0);
+            ->get(FspMatchedRecordCollapser::queryColumns()));
+        $fspNet = $fspItems->sum(fn($item) => $item->side === 'SELL'
+            ? (float) $item->settlement_amount
+            : ($item->side === 'BUY' ? -(float) $item->settlement_amount : 0));
+        $filteredFspItems = $fspItems
+            ->when($amountSearch !== null, fn($items) => $items->filter(function ($item) use ($amountSearch): bool {
+                $amount = number_format(abs((float) ($item->settlement_amount ?? 0)), 2, '.', '');
+
+                return str_contains($amount, $amountSearch);
+            }))
+            ->when($sort === 'side', fn($items) => $direction === 'asc'
+                ? $items->sortBy('side')
+                : $items->sortByDesc('side'))
+            ->when($sort === 'amount', function ($items) use ($direction) {
+                $signedAmount = fn($item) => $item->side === 'BUY'
+                    ? -(float) $item->settlement_amount
+                    : ($item->side === 'SELL' ? (float) $item->settlement_amount : 0);
+
+                return $direction === 'asc'
+                    ? $items->sortBy($signedAmount)
+                    : $items->sortByDesc($signedAmount);
+            })
+            ->values();
+        $currentPage = max(1, (int) $request->query('page', 1));
+        $fspTransactions = (new LengthAwarePaginator(
+            $filteredFspItems->forPage($currentPage, $perPage)->values(),
+            $filteredFspItems->count(),
+            $perPage,
+            $currentPage,
+            ['path' => $request->url(), 'query' => $request->query()]
+        ))->withQueryString();
 
         return view('reconciliations.fsp-comparison', [
             'date' => $day->toDateString(),
@@ -445,7 +464,7 @@ class DailyTotalsDrilldownController extends Controller
             'bankTransaction' => $bankTransaction,
             'bankNet' => $bankNet,
             'fspTransactions' => $fspTransactions,
-            'fspItemCount' => (int) ($fspSummary?->item_count ?? 0),
+            'fspItemCount' => $fspItems->count(),
             'fspNet' => $fspNet,
             'variance' => $bankNet - $fspNet,
             'perPage' => $perPage,

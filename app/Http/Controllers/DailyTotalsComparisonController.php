@@ -288,17 +288,12 @@ class DailyTotalsComparisonController extends Controller
             ));
         }
 
-        $fspGroups = DB::table('settlement_instructions')
-            ->whereBetween('settlement_date', [$dateFrom, $dateTo])
-            ->where('source_type', $sourceType)
-            ->when($sourceType === 'fundserv_agra', fn($query) => $query->where('settlement_source', 'I'))
-            ->selectRaw('settlement_date as total_date')
-            ->selectRaw('currency')
-            ->selectRaw('COUNT(*) as item_count')
-            ->selectRaw("SUM(CASE WHEN side = 'SELL' THEN COALESCE(settlement_amount, 0) WHEN side = 'BUY' THEN -COALESCE(settlement_amount, 0) ELSE 0 END) as net_total")
-            ->groupBy('settlement_date', 'currency')
-            ->get();
-        $bankMatches = $this->agraFspBankMatcher->matchGroups($fspGroups);
+        $fspGroups = $this->agraFspBankMatcher->groupsForDateRange(
+            $dateFrom,
+            $dateTo,
+            $sourceType
+        );
+        $bankMatches = $this->agraFspBankMatcher->matchGroups($fspGroups, $source === 'agra');
 
         $rows = $fspGroups->map(function ($fsp) use ($bankMatches, $source) {
             $date = Carbon::parse($fsp->total_date)->toDateString();

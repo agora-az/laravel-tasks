@@ -22,6 +22,7 @@
         || $dateBasis !== 'settlement_date'
         || $hasEftMatch
         || $hasAgraFspMatch
+        || $has7960FspMatch
         || $currencyCode !== '00'
         || $statusIds !== [6];
     $dateBasisLabel = $dateBasisOptions[$dateBasis] ?? 'Settlement date';
@@ -40,6 +41,7 @@
         ? ($sortDirection === 'asc' ? ' ↑' : ' ↓')
         : ' ⇅';
     $coreHeadings = [
+        ['label' => 'Matched to Bank Transaction'],
         ['label' => 'Cash Txn ID'],
         ['label' => 'Fund Txn ID'],
         ['label' => 'Trust Txn ID'],
@@ -87,12 +89,13 @@
         ['label' => 'Bank Wire Ref', 'field' => 'wire_reference', 'width' => 170],
         ['label' => 'Bank Description', 'field' => 'description', 'width' => 260],
         ['label' => 'Bank Source File', 'field' => 'source_file', 'width' => 220],
-        ['label' => 'AGRA Bank Match', 'field' => 'reconciliation_status', 'width' => 175],
-        ['label' => 'AGRA Bank Variance', 'field' => 'reconciliation_variance', 'width' => 165],
-        ['label' => 'AGRA Bank Note', 'field' => 'reconciliation_note', 'width' => 300],
+        ['label' => 'FSP Bank Match', 'field' => 'reconciliation_status', 'width' => 175],
+        ['label' => 'FSP Bank Variance', 'field' => 'reconciliation_variance', 'width' => 165],
+        ['label' => 'FSP Bank Note', 'field' => 'reconciliation_note', 'width' => 300],
     ];
     $fspHeadings = [
-        ['label' => 'AGRA FSP File', 'field' => 'source_file', 'width' => 260],
+        ['label' => 'FSP Source', 'field' => 'fsp_source'],
+        ['label' => 'FSP File', 'field' => 'source_file', 'width' => 260],
         ['label' => 'FSP Record ID', 'field' => 'id'],
         ['label' => 'FSP Record #', 'field' => 'record_index'],
         ['label' => 'FSP Created', 'field' => 'create_date', 'width' => 125],
@@ -102,13 +105,20 @@
         ['label' => 'FSP Txn Type', 'field' => 'transaction_type', 'width' => 130],
         ['label' => 'FSP Order ID', 'field' => 'order_id', 'width' => 155],
         ['label' => 'FSP Source ID', 'field' => 'source_id', 'width' => 180],
+        ['label' => 'FSP Management Code', 'field' => 'management_code', 'width' => 160],
+        ['label' => 'FSP Dealer Code', 'field' => 'dealer_code', 'width' => 140],
         ['label' => 'FSP Dealer Account', 'field' => 'dealer_account_id', 'width' => 175],
+        ['label' => 'FSP Rep Code', 'field' => 'rep_code', 'width' => 140],
+        ['label' => 'FSP Intermediary Code', 'field' => 'intermediary_code', 'width' => 175],
+        ['label' => 'FSP Intermediary Account', 'field' => 'intermediary_account_id', 'width' => 190],
+        ['label' => 'FSP Account Type', 'field' => 'account_type', 'width' => 145],
         ['label' => 'FSP Fund Account', 'field' => 'fund_account_id', 'width' => 175],
         ['label' => 'FSP Fund ID', 'field' => 'fund_id'],
         ['label' => 'FSP Currency', 'field' => 'currency'],
         ['label' => 'FSP Gross', 'field' => 'gross_amount', 'width' => 130],
         ['label' => 'FSP Net', 'field' => 'net_amount', 'width' => 130],
         ['label' => 'FSP Settlement Amount', 'field' => 'settlement_amount', 'width' => 165],
+        ['label' => 'FSP Note', 'field' => 'fsp_note', 'width' => 360],
     ];
 @endphp
 <details class="card" style="padding:0;margin-bottom:20px;" open>
@@ -208,7 +218,11 @@
                     <input type="checkbox" name="filter_has_agra_fsp_match" value="1" {{ $hasAgraFspMatch ? 'checked' : '' }}>
                     FSP (AGRA) matches only
                 </label>
-                <div class="all-transactions-filter-help">FSP matches use AGRA Source ID = VieFund fund transaction SourceID.</div>
+                <label class="all-transactions-match-option all-transactions-match-option-fsp-7960">
+                    <input type="checkbox" name="filter_has_7960_fsp_match" value="1" {{ $has7960FspMatch ? 'checked' : '' }}>
+                    FSP (7960) matches only
+                </label>
+                <div class="all-transactions-filter-help">FSP matches use the file Source ID = VieFund fund transaction SourceID.</div>
             </fieldset>
         </div>
 
@@ -270,7 +284,8 @@
         background:#f0f9fd;
         border-color:#bee3f8;
     }
-    .all-transactions-match-option-fsp {
+    .all-transactions-match-option-fsp,
+    .all-transactions-match-option-fsp-7960 {
         background:#faf6fd;
         border-color:#e4d7ef;
     }
@@ -428,7 +443,7 @@
                         Display Matched Data
                         <span class="all-transactions-info" tabindex="0" aria-label="Excel export layout information">
                             i
-                            <span class="all-transactions-info-popover" role="tooltip">Single Sheet appends the selected EFT, Bank, and FSP (AGRA) details to each transaction row. Split Sheets writes a Transactions sheet plus deduplicated sheets for the matched data selected above.</span>
+                            <span class="all-transactions-info-popover" role="tooltip">Single Sheet appends the selected EFT, Bank, and FSP details to each transaction row. Split Sheets writes a Transactions sheet plus deduplicated sheets for the matched data selected above. AGRA and 7960 use the same FSP columns and are identified by FSP Source.</span>
                         </span>
                     </legend>
                     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
@@ -440,9 +455,13 @@
                             <input type="checkbox" id="all-transactions-show-bank" style="width:16px;height:16px;">
                             Bank
                         </label>
-                        <label for="all-transactions-show-fsp" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
-                            <input type="checkbox" id="all-transactions-show-fsp" style="width:16px;height:16px;">
+                        <label for="all-transactions-show-fsp-agra" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
+                            <input type="checkbox" id="all-transactions-show-fsp-agra" style="width:16px;height:16px;">
                             FSP (AGRA)
+                        </label>
+                        <label for="all-transactions-show-fsp-7960" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
+                            <input type="checkbox" id="all-transactions-show-fsp-7960" style="width:16px;height:16px;">
+                            FSP (7960)
                         </label>
                     </div>
                 </fieldset>
@@ -471,6 +490,9 @@
             @endif
             @if($hasAgraFspMatch)
                 <input type="hidden" name="filter_has_agra_fsp_match" value="1">
+            @endif
+            @if($has7960FspMatch)
+                <input type="hidden" name="filter_has_7960_fsp_match" value="1">
             @endif
             @foreach((array) ($filters['trx_type'] ?? []) as $type)
                 <input type="hidden" name="filter_trx_type[]" value="{{ $type }}">
@@ -509,6 +531,7 @@
                     @forelse($transactions as $transaction)
                         @php $amount = $transaction->amount !== null ? (float) $transaction->amount : null; @endphp
                         <tr style="border-bottom:1px solid #e2e8f0;">
+                            <td class="all-transactions-match-status-cell" data-trust-id="{{ $transaction->trust_transaction_id ?: '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" style="padding:12px;font-family:monospace;font-weight:700;white-space:nowrap;color:#718096;">Loading…</td>
                             <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->transaction_id }}</td>
                             <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->fund_transaction_id ? 'F-'.$transaction->fund_transaction_id : '–' }}</td>
                             <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->trust_transaction_id ? 'T-'.$transaction->trust_transaction_id : '–' }}</td>
@@ -563,16 +586,21 @@
     const ACTIVE_RUN_KEY = 'viefundAllTransactionsActiveRunId';
     const EFT_MATCH_VISIBILITY_KEY = 'viefundAllTransactionsShowEftMatches';
     const BANK_MATCH_VISIBILITY_KEY = 'viefundAllTransactionsShowBankMatches';
-    const FSP_MATCH_VISIBILITY_KEY = 'viefundAllTransactionsShowAgraFspMatches';
+    const FSP_AGRA_VISIBILITY_KEY = 'viefundAllTransactionsShowAgraFspMatches';
+    const FSP_7960_VISIBILITY_KEY = 'viefundAllTransactionsShow7960FspMatches';
     let pollTimer = null;
     let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
     let lastProgress = 0;
     let reconciliationMatchesLoaded = false;
     let reconciliationMatchesLoading = false;
-    let fspMatchesLoaded = false;
-    let fspMatchesLoading = false;
+    const fspMatchesLoaded = {agra: false, '7960': false};
+    const fspMatchesLoading = {agra: false, '7960': false};
+    const statusLoadFailed = {eft: false, agra: false, '7960': false};
     let eftBankRecordsByTrust = {};
-    let fspBankRecordsByCash = {};
+    let eftMatchStatusesByTrust = {};
+    const fspRecordsBySource = {agra: {}, '7960': {}};
+    const fspBankRecordsBySource = {agra: {}, '7960': {}};
+    const fspMatchStatusesBySource = {agra: {}, '7960': {}};
 
     const filterForm = document.querySelector('form[data-inception-dates]');
     const dateBasis = document.getElementById('all-date-basis');
@@ -594,7 +622,8 @@
 
     const eftToggle = document.getElementById('all-transactions-show-eft');
     const bankToggle = document.getElementById('all-transactions-show-bank');
-    const fspToggle = document.getElementById('all-transactions-show-fsp');
+    const fspAgraToggle = document.getElementById('all-transactions-show-fsp-agra');
+    const fsp7960Toggle = document.getElementById('all-transactions-show-fsp-7960');
     const transactionsTable = document.getElementById('all-transactions-table');
     const eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
     const eftCells = Array.from(document.querySelectorAll('.all-transactions-eft-cell'));
@@ -602,6 +631,7 @@
     const bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
     const fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
     const fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
+    const transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
     const setColumnVisible = (columns, visible) => {
         columns.forEach((column) => {
             column.style.display = visible ? '' : 'none';
@@ -609,7 +639,8 @@
     };
     const updateTableWidth = () => {
         if (!transactionsTable) return;
-        const width = 2200 + (eftToggle?.checked ? 2400 : 0) + (bankToggle?.checked ? 3000 : 0) + (fspToggle?.checked ? 2600 : 0);
+        const showFsp = fspAgraToggle?.checked || fsp7960Toggle?.checked;
+        const width = 2200 + (eftToggle?.checked ? 2400 : 0) + (bankToggle?.checked ? 3000 : 0) + (showFsp ? 3960 : 0);
         transactionsTable.style.minWidth = `${width}px`;
     };
     const formatLinkedDate = (value, includeTime = false) => {
@@ -644,12 +675,12 @@
         cell.replaceChildren();
         if (!Array.isArray(records) || records.length === 0) {
             const empty = document.createElement('span');
-            empty.textContent = '—';
+            empty.textContent = type === 'eft' && cell.dataset.recordField === 'bank_match_status' ? 'Unknown' : '—';
             empty.title = type === 'eft'
                 ? 'No EFT item is linked to this transaction.'
                 : (type === 'bank'
                     ? 'No bank transaction matches the linked EFT sequence.'
-                    : 'No imported AGRA FSP item has this VieFund fund source ID.');
+                    : 'No imported selected FSP item has this VieFund fund source ID.');
             empty.style.color = '#718096';
             cell.appendChild(empty);
             return;
@@ -676,7 +707,7 @@
                 link.textContent = value;
                 link.title = type === 'eft'
                     ? 'Open the matched EFT item'
-                    : (type === 'bank' ? 'Open this bank transaction' : 'Open this AGRA FSP item');
+                    : (type === 'bank' ? 'Open this bank transaction' : 'Open this FSP item');
                 link.style.color = '#2b6cb0';
                 link.style.fontWeight = '600';
                 link.style.textDecoration = 'underline';
@@ -685,6 +716,14 @@
                 const text = document.createElement('span');
                 text.textContent = value;
                 if (value === '—') text.style.color = '#718096';
+                if (type === 'eft' && field === 'bank_match_status') {
+                    text.style.color = value === 'Complete'
+                        ? '#276749'
+                        : (value === 'To be verified'
+                            ? '#b7791f'
+                            : (value === 'Possible match' ? '#2b6cb0' : '#718096'));
+                    text.style.fontWeight = '700';
+                }
                 if (['amount', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field) && record[field] !== null && record[field] !== undefined) {
                     const amount = Number(record[field]);
                     text.style.color = field === 'reconciliation_variance' && record.is_possible_wire_fee_match
@@ -698,9 +737,16 @@
         });
     };
     const renderBankRecords = () => {
+        const selectedFspSources = [
+            fspAgraToggle?.checked ? 'agra' : null,
+            fsp7960Toggle?.checked ? '7960' : null,
+        ].filter(Boolean);
+        const bankFspSources = selectedFspSources.length > 0 ? selectedFspSources : ['agra', '7960'];
         bankCells.forEach((cell) => {
             const eftRecords = eftBankRecordsByTrust[cell.dataset.trustId] || [];
-            const fspRecords = fspBankRecordsByCash[cell.dataset.cashId] || [];
+            const fspRecords = bankFspSources.flatMap(
+                (source) => fspBankRecordsBySource[source]?.[cell.dataset.cashId] || []
+            );
             const records = [...fspRecords, ...eftRecords].filter((record, index, all) =>
                 all.findIndex((candidate) => Number(candidate.id) === Number(record.id)) === index
             );
@@ -715,10 +761,68 @@
             renderLinkedRecords(cell, records, 'bank');
         });
     };
+    const renderFspRecords = () => {
+        const selectedSources = [
+            fspAgraToggle?.checked ? 'agra' : null,
+            fsp7960Toggle?.checked ? '7960' : null,
+        ].filter(Boolean);
+        fspCells.forEach((cell) => {
+            const records = selectedSources.flatMap(
+                (source) => fspRecordsBySource[source]?.[cell.dataset.cashId] || []
+            );
+            renderLinkedRecords(cell, records, 'fsp');
+        });
+    };
+    const summarizeMatchStatuses = (statuses) => {
+        const values = statuses.filter(Boolean);
+        if (values.length === 0) return null;
+        if (values.every((status) => status === 'Complete')) return 'Complete';
+        if (values.includes('Complete') || values.includes('To be verified')) return 'To be verified';
+        if (values.includes('Possible match')) return 'Possible match';
+        return 'Unknown';
+    };
+    const renderTransactionMatchStatuses = () => {
+        const ready = reconciliationMatchesLoaded && fspMatchesLoaded.agra && fspMatchesLoaded['7960'];
+        transactionStatusCells.forEach((cell) => {
+            if (!ready) {
+                cell.textContent = 'Loading…';
+                cell.style.color = '#718096';
+                return;
+            }
+            if (statusLoadFailed.eft || statusLoadFailed.agra || statusLoadFailed['7960']) {
+                cell.textContent = 'Unable to load';
+                cell.style.color = '#c53030';
+                return;
+            }
+
+            const trustId = cell.dataset.trustId;
+            const cashId = cell.dataset.cashId;
+            const hasEft = trustId !== '' && Object.prototype.hasOwnProperty.call(eftMatchStatusesByTrust, trustId);
+            const fspStatuses = ['agra', '7960']
+                .filter((source) => cashId !== '' && Object.prototype.hasOwnProperty.call(fspMatchStatusesBySource[source], cashId))
+                .map((source) => fspMatchStatusesBySource[source][cashId]);
+            const hasFsp = fspStatuses.length > 0;
+            const status = hasEft && hasFsp
+                ? 'To be verified'
+                : (hasEft
+                    ? eftMatchStatusesByTrust[trustId]
+                    : (summarizeMatchStatuses(fspStatuses) || 'Unknown'));
+
+            cell.textContent = status;
+            cell.title = hasEft && hasFsp
+                ? 'This transaction has both EFT and FSP supporting records and should be reviewed.'
+                : '';
+            cell.style.color = status === 'Complete'
+                ? '#276749'
+                : (status === 'To be verified'
+                    ? '#b7791f'
+                    : (status === 'Possible match' ? '#2b6cb0' : '#718096'));
+        });
+    };
     const loadReconciliationMatches = async () => {
-        if (reconciliationMatchesLoaded || reconciliationMatchesLoading || (eftCells.length === 0 && bankCells.length === 0)) return;
+        if (reconciliationMatchesLoaded || reconciliationMatchesLoading || (eftCells.length === 0 && bankCells.length === 0 && transactionStatusCells.length === 0)) return;
         const matchCells = [...eftCells, ...bankCells];
-        const trustIds = [...new Set(matchCells.map((cell) => cell.dataset.trustId).filter(Boolean))];
+        const trustIds = [...new Set([...matchCells, ...transactionStatusCells].map((cell) => cell.dataset.trustId).filter(Boolean))];
         matchCells.forEach((cell) => {
             const status = cell.querySelector('span') || document.createElement('span');
             const isGroupStart = cell.classList.contains('all-transactions-eft-group-start')
@@ -730,6 +834,7 @@
         });
         if (trustIds.length === 0) {
             reconciliationMatchesLoaded = true;
+            renderTransactionMatchStatuses();
             return;
         }
 
@@ -750,8 +855,10 @@
             if (!response.ok) throw new Error(data.message || 'EFT and bank matches could not be loaded.');
             eftCells.forEach((cell) => renderLinkedRecords(cell, data.eft_records?.[cell.dataset.trustId] || [], 'eft'));
             eftBankRecordsByTrust = data.bank_records || {};
+            eftMatchStatusesByTrust = data.match_statuses || {};
             renderBankRecords();
             reconciliationMatchesLoaded = true;
+            renderTransactionMatchStatuses();
         } catch (error) {
             eftCells.forEach((cell) => {
                 if (!cell.dataset.trustId) return;
@@ -763,31 +870,38 @@
                 cell.appendChild(message);
             });
             eftBankRecordsByTrust = {};
+            eftMatchStatusesByTrust = {};
+            statusLoadFailed.eft = true;
+            reconciliationMatchesLoaded = true;
             renderBankRecords();
+            renderTransactionMatchStatuses();
         } finally {
             reconciliationMatchesLoading = false;
         }
     };
-    const loadFspMatches = async () => {
-        if (fspMatchesLoaded || fspMatchesLoading || fspCells.length === 0) return;
-        const cashTransactionIds = [...new Set(fspCells.map((cell) => cell.dataset.cashId).filter(Boolean))];
-        fspCells.forEach((cell) => {
-            const status = document.createElement('span');
-            const hasSource = Boolean(cell.dataset.cashId);
-            const isGroupStart = cell.classList.contains('all-transactions-fsp-group-start');
-            status.className = hasSource && isGroupStart ? 'all-transactions-eft-loading' : '';
-            status.textContent = hasSource ? (isGroupStart ? 'Loading…' : '…') : '—';
-            status.title = hasSource ? '' : 'This cash transaction has no related fund source ID.';
-            cell.replaceChildren(status);
-        });
+    const loadFspMatches = async (source) => {
+        if (fspMatchesLoaded[source] || fspMatchesLoading[source] || (fspCells.length === 0 && transactionStatusCells.length === 0)) return;
+        const cashTransactionIds = [...new Set([...fspCells, ...transactionStatusCells].map((cell) => cell.dataset.cashId).filter(Boolean))];
+        if (!fspMatchesLoaded.agra && !fspMatchesLoaded['7960']) {
+            fspCells.forEach((cell) => {
+                const status = document.createElement('span');
+                const hasSource = Boolean(cell.dataset.cashId);
+                const isGroupStart = cell.classList.contains('all-transactions-fsp-group-start');
+                status.className = hasSource && isGroupStart ? 'all-transactions-eft-loading' : '';
+                status.textContent = hasSource ? (isGroupStart ? 'Loading…' : '…') : '—';
+                status.title = hasSource ? '' : 'This cash transaction has no related fund source ID.';
+                cell.replaceChildren(status);
+            });
+        }
         if (cashTransactionIds.length === 0) {
-            fspMatchesLoaded = true;
+            fspMatchesLoaded[source] = true;
+            renderTransactionMatchStatuses();
             return;
         }
 
-        fspMatchesLoading = true;
+        fspMatchesLoading[source] = true;
         try {
-            const response = await fetch('{{ route('viefund-transactions.agra-fsp-matches') }}', {
+            const response = await fetch('{{ route('viefund-transactions.fsp-matches') }}', {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: {
@@ -796,16 +910,20 @@
                     'X-Requested-With': 'XMLHttpRequest',
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
                 },
-                body: JSON.stringify({cash_transaction_ids: cashTransactionIds.map(Number)}),
+                body: JSON.stringify({
+                    cash_transaction_ids: cashTransactionIds.map(Number),
+                    sources: [source],
+                }),
             });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.message || 'AGRA FSP matches could not be loaded.');
-            fspCells.forEach((cell) => {
-                renderLinkedRecords(cell, data.fsp_records?.[cell.dataset.cashId] || [], 'fsp');
-            });
-            fspBankRecordsByCash = data.bank_records || {};
+            if (!response.ok) throw new Error(data.message || `${source.toUpperCase()} FSP matches could not be loaded.`);
+            fspRecordsBySource[source] = data.fsp_records || {};
+            fspBankRecordsBySource[source] = data.bank_records || {};
+            fspMatchStatusesBySource[source] = data.match_statuses || {};
+            renderFspRecords();
             renderBankRecords();
-            fspMatchesLoaded = true;
+            fspMatchesLoaded[source] = true;
+            renderTransactionMatchStatuses();
         } catch (error) {
             fspCells.forEach((cell) => {
                 if (!cell.dataset.cashId) return;
@@ -815,8 +933,12 @@
                 message.style.color = '#c53030';
                 cell.replaceChildren(message);
             });
+            fspMatchStatusesBySource[source] = {};
+            statusLoadFailed[source] = true;
+            fspMatchesLoaded[source] = true;
+            renderTransactionMatchStatuses();
         } finally {
-            fspMatchesLoading = false;
+            fspMatchesLoading[source] = false;
         }
     };
     eftToggle?.addEventListener('change', () => {
@@ -836,24 +958,38 @@
             sessionStorage.setItem(BANK_MATCH_VISIBILITY_KEY, visible ? '1' : '0');
         } catch (_) {}
         if (visible) loadReconciliationMatches();
-        if (visible) loadFspMatches();
+        if (visible) {
+            const selectedSources = [
+                fspAgraToggle?.checked ? 'agra' : null,
+                fsp7960Toggle?.checked ? '7960' : null,
+            ].filter(Boolean);
+            (selectedSources.length > 0 ? selectedSources : ['agra', '7960']).forEach(loadFspMatches);
+        }
     });
-    fspToggle?.addEventListener('change', () => {
-        const visible = fspToggle.checked;
+    const handleFspToggle = (source, storageKey) => {
+        const visible = fspAgraToggle?.checked || fsp7960Toggle?.checked;
         setColumnVisible(fspColumns, visible);
         updateTableWidth();
+        renderFspRecords();
+        renderBankRecords();
         try {
-            sessionStorage.setItem(FSP_MATCH_VISIBILITY_KEY, visible ? '1' : '0');
+            const toggle = source === 'agra' ? fspAgraToggle : fsp7960Toggle;
+            sessionStorage.setItem(storageKey, toggle?.checked ? '1' : '0');
         } catch (_) {}
-        if (visible) loadFspMatches();
-    });
+        const toggle = source === 'agra' ? fspAgraToggle : fsp7960Toggle;
+        if (toggle?.checked) loadFspMatches(source);
+    };
+    fspAgraToggle?.addEventListener('change', () => handleFspToggle('agra', FSP_AGRA_VISIBILITY_KEY));
+    fsp7960Toggle?.addEventListener('change', () => handleFspToggle('7960', FSP_7960_VISIBILITY_KEY));
     let showEftMatches = @json($hasEftMatch);
     let showBankMatches = false;
-    let showFspMatches = @json($hasAgraFspMatch);
+    let showAgraFspMatches = @json($hasAgraFspMatch);
+    let show7960FspMatches = @json($has7960FspMatch);
     try {
         showEftMatches = showEftMatches || sessionStorage.getItem(EFT_MATCH_VISIBILITY_KEY) === '1';
         showBankMatches = sessionStorage.getItem(BANK_MATCH_VISIBILITY_KEY) === '1';
-        showFspMatches = showFspMatches || sessionStorage.getItem(FSP_MATCH_VISIBILITY_KEY) === '1';
+        showAgraFspMatches = showAgraFspMatches || sessionStorage.getItem(FSP_AGRA_VISIBILITY_KEY) === '1';
+        show7960FspMatches = show7960FspMatches || sessionStorage.getItem(FSP_7960_VISIBILITY_KEY) === '1';
     } catch (_) {}
     if (eftToggle && showEftMatches) {
         eftToggle.checked = true;
@@ -863,17 +999,18 @@
         bankToggle.checked = true;
         setColumnVisible(bankColumns, true);
     }
-    if (fspToggle && showFspMatches) {
-        fspToggle.checked = true;
+    if (fspAgraToggle && showAgraFspMatches) {
+        fspAgraToggle.checked = true;
+        setColumnVisible(fspColumns, true);
+    }
+    if (fsp7960Toggle && show7960FspMatches) {
+        fsp7960Toggle.checked = true;
         setColumnVisible(fspColumns, true);
     }
     updateTableWidth();
-    if (showEftMatches || showBankMatches) {
-        loadReconciliationMatches();
-    }
-    if (showFspMatches || showBankMatches) {
-        loadFspMatches();
-    }
+    loadReconciliationMatches();
+    loadFspMatches('agra');
+    loadFspMatches('7960');
 
     const totalSummary = document.getElementById('all-transactions-total-summary');
     let totalPollAttempts = 0;
@@ -987,7 +1124,8 @@
             formData.set('linked_record_layout', exportMode);
             formData.set('include_eft_records', eftToggle?.checked ? '1' : '0');
             formData.set('include_bank_records', bankToggle?.checked ? '1' : '0');
-            formData.set('include_fsp_records', fspToggle?.checked ? '1' : '0');
+            formData.set('include_fsp_records', fspAgraToggle?.checked ? '1' : '0');
+            formData.set('include_7960_fsp_records', fsp7960Toggle?.checked ? '1' : '0');
             button.value = '';
             const response = await fetch(form.action, {
                 method: 'POST',
