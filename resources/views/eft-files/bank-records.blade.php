@@ -28,7 +28,7 @@
         ['Bank Records', number_format($bankFiles->sum('parsed_transaction_count')), '#345262'],
         ['Bank Total', $formatAmount($bankTotal), '#2d6a6a'],
         ['Count Variance', number_format($countVariance), $countVariance === 0 ? '#2f855a' : '#c53030'],
-        ['Bank Variance', $formatAmount($amountVariance), abs($amountVariance) < .005 ? '#2f855a' : '#c53030'],
+        ['Bank Txn Variance', $formatAmount($amountVariance), abs($amountVariance) < .005 ? '#2f855a' : '#c53030'],
     ] as [$label, $value, $color])
         <div class="card" style="text-align:center;border-top:4px solid {{ $color }};">
             <div style="font-size:22px;font-weight:800;color:{{ $color }};white-space:nowrap;">{{ $value }}</div>

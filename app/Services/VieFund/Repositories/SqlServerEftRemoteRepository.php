@@ -79,6 +79,7 @@ class SqlServerEftRemoteRepository
                         'i.Notes as notes',
                         'i.mAmount as amount',
                         'f.ID as file_id',
+                        'f.mTotalAmount as file_total',
                         'f.iSequenceNumber as sequence_number',
                         'f.FileName as file_name',
                         'tr.dtEffective as trade_date',

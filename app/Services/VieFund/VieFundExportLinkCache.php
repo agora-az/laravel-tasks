@@ -14,7 +14,8 @@ class VieFundExportLinkCache
     private const CACHE_KEYS_TABLE = 'viefund_export_link_cache_keys';
     private const EFT_ITEMS_TABLE = 'viefund_export_cached_eft_items';
     private const FUND_SOURCES_TABLE = 'viefund_export_cached_fund_sources';
-    private const EFT_CACHE_TYPE = 'eft_items';
+    // Increment when the cached EFT payload shape changes.
+    private const EFT_CACHE_TYPE = 'eft_items_v2';
     private const FUND_SOURCE_CACHE_TYPE = 'fund_sources';
 
     private ?bool $available = null;

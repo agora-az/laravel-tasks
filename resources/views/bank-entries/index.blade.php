@@ -192,6 +192,13 @@
 {{-- Filters --}}
 <div class="card" style="margin-bottom: 20px;">
     <form action="{{ route('bank-entries.index') }}" method="GET">
+        @if(request()->filled('source_file'))
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;background:#edfdf5;border:1px solid #9ae6b4;color:#276749;border-radius:4px;padding:9px 12px;margin-bottom:12px;font-size:12px;font-weight:600;">
+                <span>Viewing statements from {{ request('source_file') }}</span>
+                <a href="{{ route('bank-entries.index', ['view' => $activeTab]) }}" style="color:#276749;white-space:nowrap;">Clear file</a>
+            </div>
+            <input type="hidden" name="source_file" value="{{ request('source_file') }}">
+        @endif
         @if($selectedStatement)
             <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;background:#ebf8ff;border:1px solid #bee3f8;color:#2c5282;border-radius:4px;padding:9px 12px;margin-bottom:12px;font-size:12px;font-weight:600;">
                 <span>Viewing transactions for {{ $selectedStatement->account_number }} · {{ ($selectedStatement->closing_balance_date ?? $selectedStatement->opening_balance_date)?->format('Y-m-d') ?? 'statement' }}</span>
@@ -254,7 +261,7 @@
             </div>
             <div style="display: flex; gap: 8px;">
                 <button type="submit" class="btn" style="padding: 8px 20px; white-space: nowrap;">Filter</button>
-                @if(request()->hasAny(['statement_summary_id','date_from','date_to','channel','direction','currency','memo_type','search','sort','sort_dir']))
+                @if(request()->hasAny(['statement_summary_id','source_file','date_from','date_to','channel','direction','currency','memo_type','search','sort','sort_dir']))
                     <a href="{{ route('bank-entries.index') }}" class="btn" style="background: #718096; padding: 8px 14px; text-decoration: none;">Clear</a>
                 @endif
             </div>

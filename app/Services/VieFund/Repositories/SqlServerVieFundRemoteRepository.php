@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund\Repositories;
 
+use App\Support\AllTransactionColumns;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
@@ -265,6 +266,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             $pageFilters = $filters;
             $pageFilters['cash_transaction_ids'] = $candidateIds;
             $rows = $this->buildAllTransactionCashLedgerQuery($search, $pageFilters)
+                ->select(AllTransactionColumns::resultFields(false))
                 ->orderBy($sort, $sortDirection)
                 ->orderBy('sort_id', $sortDirection)
                 ->get();
@@ -280,7 +282,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return $query
             ->orderBy($sort, $sortDirection)
             ->orderBy('sort_id', $sortDirection)
-            ->simplePaginate($perPage, ['*'], 'page', $page);
+            ->simplePaginate($perPage, AllTransactionColumns::resultFields(false), 'page', $page);
     }
 
     /** Return every fund SourceID linked to the displayed cash-ledger rows. */
@@ -369,7 +371,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $comparison = $outputOrder === 'asc' ? '>' : '<';
         $query = $this->buildAllTransactionCashLedgerQuery($search, $filters)
-            ->select('*')
+            ->select(AllTransactionColumns::resultFields(true))
             ->whereNotNull($dateColumn)
             ->orderBy($dateColumn, $outputOrder)
             ->orderBy('sort_id', $outputOrder)
@@ -453,6 +455,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $batchFilters['cash_transaction_ids_json'] = json_encode($cashTransactionIds->all(), JSON_THROW_ON_ERROR);
         $batchFilters['cash_transaction_ids_prevalidated'] = true;
         $rowsByCashTransaction = $this->buildAllTransactionCashLedgerQuery($search, $batchFilters)
+            ->select(AllTransactionColumns::resultFields(true))
             ->get()
             ->keyBy(fn($row) => (string) (int) $row->cash_transaction_id);
 
@@ -585,9 +588,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $cashTransactionIdsPrevalidated = !empty($filters['cash_transaction_ids_prevalidated']);
         $fundMetadata = $cashTransactionIdsJson !== null
             ? DB::connection(self::CONNECTION)
-                ->query()
-                ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
-                ->join("{$schema}.UB_FundTrxCash as fm_fc", 'fm_fc.iCashTrxID', '=', 'export_cash.cash_transaction_id')
+            ->query()
+            ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
+            ->join("{$schema}.UB_FundTrxCash as fm_fc", 'fm_fc.iCashTrxID', '=', 'export_cash.cash_transaction_id')
             : DB::connection(self::CONNECTION)->table("{$schema}.UB_FundTrxCash as fm_fc");
         $fundMetadata
             ->join("{$schema}.UB_FundTrx as fm_t", 'fm_t.ID', '=', 'fm_fc.iTrxID')
@@ -614,9 +617,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
         $cashLedger = $cashTransactionIdsJson !== null
             ? DB::connection(self::CONNECTION)
-                ->query()
-                ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
-                ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'export_cash.cash_transaction_id')
+            ->query()
+            ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS export_cash", [$cashTransactionIdsJson])
+            ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'export_cash.cash_transaction_id')
             : DB::connection(self::CONNECTION)->table("{$schema}.UB_CashTrx as ct");
         $cashLedger
             ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
@@ -865,13 +868,15 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->join("{$schema}.UB_FundTrxCash as fc", 'fc.iTrxID', '=', 'l.iTrxID')
             ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'fc.iCashTrxID')
             ->whereNotNull('ct.iTrustTrxID')
-            ->when($trustIds !== null,
+            ->when(
+                $trustIds !== null,
                 fn($query) => $query->whereIn('ct.iTrustTrxID', $trustIds),
                 fn($query) => $query->whereExists(function ($exists) use ($schema) {
                     $exists->selectRaw('1')
                         ->from("{$schema}.UB_EFTItem as ei")
                         ->whereColumn('ei.iLinkedID', 'ct.iTrustTrxID');
-                }))
+                })
+            )
             ->selectRaw("CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id, t.dtCreated AS created_date, ct.ID AS sort_id")
             ->orderByDesc('t.dtCreated')
             ->orderByDesc('ct.ID')
@@ -880,13 +885,15 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $trustMatch = DB::connection(self::CONNECTION)
             ->table("{$schema}.UB_TrustTrx as tr")
             ->whereRaw('ISNULL(tr.iTrxID, 0) = 0')
-            ->when($trustIds !== null,
+            ->when(
+                $trustIds !== null,
                 fn($query) => $query->whereIn('tr.ID', $trustIds),
                 fn($query) => $query->whereExists(function ($exists) use ($schema) {
                     $exists->selectRaw('1')
                         ->from("{$schema}.UB_EFTItem as ei")
                         ->whereColumn('ei.iLinkedID', 'tr.ID');
-                }))
+                })
+            )
             ->selectRaw("CONCAT('T-', CAST(tr.ID AS NVARCHAR(30))) AS transaction_id, tr.dtCreated AS created_date, tr.ID AS sort_id")
             ->orderByDesc('tr.dtCreated')
             ->orderByDesc('tr.ID')
@@ -961,7 +968,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     public function fetchDistinctTrxTypes(array $filters = []): array
     {
-        $cacheKey = 'viefund_distinct_transaction_types:v2:' . sha1(serialize($filters));
+        // The source lookup tables are global; page filters do not change this list.
+        $cacheKey = 'viefund_distinct_transaction_types:v3';
 
         return Cache::remember($cacheKey, 3600, function (): array {
             $schema = env('VIEFUND_DB_SCHEMA', 'dbo');

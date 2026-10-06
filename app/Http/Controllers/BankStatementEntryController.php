@@ -513,6 +513,9 @@ class BankStatementEntryController extends Controller
         if ($request->filled('statement_summary_id') && ctype_digit((string) $request->input('statement_summary_id'))) {
             $query->where('bank_statement_entries.bank_statement_summary_id', (int) $request->input('statement_summary_id'));
         }
+        if ($request->filled('source_file')) {
+            $query->where('bank_statement_entries.source_file', trim((string) $request->input('source_file')));
+        }
         if ($request->filled('date_from')) {
             $query->where('bank_statement_entries.value_date', '>=', $request->date_from);
         }

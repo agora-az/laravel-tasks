@@ -9,14 +9,17 @@ use Illuminate\Support\Facades\DB;
 class EftBankMatchStatusService
 {
     public const COMPLETE = 'Complete';
-    public const TO_BE_VERIFIED = 'To be verified';
-    public const POSSIBLE_MATCH = 'Possible match';
+    public const TO_BE_VERIFIED = 'Verify';
+    public const POSSIBLE_MATCH = 'Possible';
     public const UNKNOWN = 'Unknown';
 
     private const BANK_PARSER_VERSION = 'v2';
 
     /** @var array<string, string> */
     private array $statusBySequence = [];
+
+    /** @var array<string, object|null> */
+    private array $comparisonBySequence = [];
 
     public function __construct(
         private readonly SqlServerEftRemoteRepository $eftRepository
@@ -55,6 +58,33 @@ class EftBankMatchStatusService
         ]);
     }
 
+    public function annotateBankEntries(Collection $entries): Collection
+    {
+        $sequences = $entries
+            ->pluck('settlement_number')
+            ->filter(fn($sequence) => $sequence !== null && ctype_digit(trim((string) $sequence)))
+            ->map(fn($sequence) => (string) (int) trim((string) $sequence))
+            ->unique()
+            ->values();
+        $this->statusesForSequences($sequences);
+
+        return $entries->each(function (object $entry): void {
+            $rawSequence = trim((string) ($entry->settlement_number ?? ''));
+            $sequence = ctype_digit($rawSequence) ? (string) (int) $rawSequence : $rawSequence;
+            $comparison = $this->comparisonBySequence[$sequence] ?? null;
+            if (
+                !$comparison
+                || strtoupper(trim((string) ($entry->currency ?? ''))) !== $comparison->currency
+            ) {
+                return;
+            }
+
+            $entry->variance = $comparison->variance;
+            $entry->reconciliation_note = $comparison->note;
+            $entry->is_possible_wire_fee_match = $comparison->is_possible_wire_fee_match;
+        });
+    }
+
     private function loadStatuses(Collection $sequences): void
     {
         $eftTotals = $this->eftRepository
@@ -71,6 +101,7 @@ class EftBankMatchStatusService
             ->selectRaw('a.settlement_number')
             ->selectRaw("COALESCE(NULLIF(b.currency, ''), '—') as currency")
             ->selectRaw("SUM(CASE WHEN b.credit_debit_indicator = 'DBIT' THEN -b.amount ELSE b.amount END) as net_total")
+            ->selectRaw('COUNT(DISTINCT b.id) as transaction_count')
             ->groupBy('a.settlement_number', 'b.currency')
             ->get()
             ->groupBy(fn($row) => ctype_digit(trim((string) $row->settlement_number))
@@ -83,24 +114,66 @@ class EftBankMatchStatusService
 
             if ($eftTotal === null || $sequenceBankTotals->isEmpty()) {
                 $this->statusBySequence[$sequence] = self::UNKNOWN;
+                $this->comparisonBySequence[$sequence] = null;
                 continue;
             }
 
-            $variances = $sequenceBankTotals->map(
-                fn($bankTotal) => abs((float) $bankTotal->net_total - (float) $eftTotal)
-            );
+            $bankTotal = $sequenceBankTotals
+                ->sortBy(fn($candidate) => abs((float) $candidate->net_total - (float) $eftTotal))
+                ->first();
+            $variance = (float) $bankTotal->net_total - (float) $eftTotal;
+            $isExactMatch = abs($variance) < .01;
+            $isPossibleWireFeeMatch = abs(abs($variance) - 15.0) < .01;
+            $status = $isExactMatch
+                ? self::COMPLETE
+                : ($isPossibleWireFeeMatch ? self::TO_BE_VERIFIED : self::POSSIBLE_MATCH);
 
-            if ($variances->contains(fn(float $variance) => $variance < .01)) {
-                $this->statusBySequence[$sequence] = self::COMPLETE;
-                continue;
-            }
-
-            if ($variances->contains(fn(float $variance) => abs($variance - 15.0) < .01)) {
-                $this->statusBySequence[$sequence] = self::TO_BE_VERIFIED;
-                continue;
-            }
-
-            $this->statusBySequence[$sequence] = self::POSSIBLE_MATCH;
+            $this->statusBySequence[$sequence] = $status;
+            $this->comparisonBySequence[$sequence] = (object) [
+                'variance' => $variance,
+                'currency' => strtoupper((string) $bankTotal->currency),
+                'is_possible_wire_fee_match' => $isPossibleWireFeeMatch,
+                'note' => $this->varianceNote(
+                    $variance,
+                    'EFT total',
+                    'sequence '.$sequence,
+                    (string) $bankTotal->currency,
+                    (int) $bankTotal->transaction_count
+                ),
+            ];
         }
+    }
+
+    private function varianceNote(
+        float $variance,
+        string $comparisonLabel,
+        string $reference,
+        string $currency,
+        int $transactionCount
+    ): string {
+        $context = trim($reference.' '.$currency);
+        $transactionContext = $transactionCount > 1
+            ? sprintf(' Candidate bank total combines %d transactions.', $transactionCount)
+            : '';
+
+        if (abs($variance) < .01) {
+            return sprintf('Candidate bank transaction matches the %s for %s.%s', $comparisonLabel, $context, $transactionContext);
+        }
+
+        $difference = number_format(abs($variance), 2);
+        $direction = $variance > 0 ? 'higher' : 'lower';
+        $wireFeeClue = abs(abs($variance) - 15.0) < .01
+            ? ' Possible $15 wire transfer fee.'
+            : '';
+
+        return sprintf(
+            'Candidate bank transaction is $%s %s than the %s for %s.%s%s',
+            $difference,
+            $direction,
+            $comparisonLabel,
+            $context,
+            $wireFeeClue,
+            $transactionContext
+        );
     }
 }

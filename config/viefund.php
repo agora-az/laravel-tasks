@@ -1,5 +1,20 @@
 <?php
 
+$parseColumnList = static function (string $environmentKey): array {
+    $raw = trim((string) env($environmentKey, ''));
+    if ($raw === '') {
+        return [];
+    }
+
+    $decoded = json_decode($raw, true);
+    $values = is_array($decoded) ? $decoded : preg_split('/\s*,\s*/', $raw);
+
+    return array_values(array_unique(array_filter(array_map(
+        static fn($value): string => strtolower(trim((string) $value)),
+        $values ?: []
+    ))));
+};
+
 return [
 
     /*
@@ -227,11 +242,31 @@ return [
         min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_BATCH_SIZE', 20000))
     ),
 
+    'all_transactions_working_set' => [
+        'ttl_minutes' => max(15, (int) env('VIEFUND_ALL_TRANSACTIONS_WORKING_SET_TTL_MINUTES', 240)),
+        'batch_size' => max(
+            100,
+            min(5000, (int) env('VIEFUND_ALL_TRANSACTIONS_WORKING_SET_BATCH_SIZE', 1000))
+        ),
+    ],
+
+    /*
+    | Comma-separated or JSON arrays of stable All Transactions column keys to
+    | display. Each group is configured independently. Unlisted columns are
+    | omitted from the table and exports; core fields are also omitted from
+    | the SQL result projection unless they are required internally. An empty
+    | value preserves that group's full default column set.
+    */
+    'all_transactions_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_VISIBLE_COLUMNS'),
+    'all_transactions_eft_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_EFT_VISIBLE_COLUMNS'),
+    'all_transactions_bank_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_BANK_VISIBLE_COLUMNS'),
+    'all_transactions_fsp_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_FSP_VISIBLE_COLUMNS'),
+
     /*
     | Cache export-only VieFund relationship lookups in the local database.
-    | This cache is not used by the interactive table. A short freshness window
-    | avoids repeating remote EFT and fund-link queries during report retries,
-    | while bounded bulk requests keep the export worker's memory predictable.
+    | Working-set hydration and exports use this relationship cache to avoid
+    | repeating remote EFT and fund-link queries, while bounded bulk requests
+    | keep queue and export worker memory predictable.
     */
 
     'all_transactions_link_cache' => [

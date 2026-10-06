@@ -16,7 +16,7 @@
     };
     $sourceViewUrl = static fn(string $sourceType): string => route(
         'settlement-instructions.index',
-        array_merge(request()->except(['source_type', 'source_file', 'agra_page', 'ltm_page', 'agra_summary_page', 'ltm_summary_page']), ['source_type' => $sourceType])
+        array_merge(request()->except(['source_type', 'source_file', 'item_id', 'agra_page', 'ltm_page', 'agra_summary_page', 'ltm_summary_page']), ['source_type' => $sourceType])
     );
 @endphp
 <div class="sync-page-header">
@@ -250,7 +250,7 @@
             </div>
             <div style="display: flex; gap: 8px;">
                 <button type="submit" class="btn" style="padding: 8px 20px; white-space: nowrap;">Filter</button>
-                @if(request()->hasAny(['source_type','side','currency','date_from','date_to','source_file','search']))
+                @if(request()->hasAny(['source_type','side','currency','date_from','date_to','source_file','item_id','search']))
                     <a href="{{ route('settlement-instructions.index') }}" class="btn" style="background: #718096; padding: 8px 14px; text-decoration: none;">Clear</a>
                 @endif
             </div>

@@ -42,6 +42,9 @@ class SettlementInstructionController extends Controller
 
             $entriesQuery = SettlementInstruction::query();
             $this->applyFilters($entriesQuery, $request, $sourceType);
+            if ($request->filled('item_id')) {
+                $entriesQuery->whereKey((int) $request->item_id);
+            }
 
             if (in_array($sort, ['gross_amount', 'net_amount', 'settlement_amount'], true)) {
                 $entriesQuery->orderByRaw(

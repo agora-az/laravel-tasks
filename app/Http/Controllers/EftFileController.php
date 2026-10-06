@@ -7,6 +7,7 @@ use App\Models\BankEftFile;
 use App\Services\Reconciliation\EftBankMatchStatusService;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
+use App\Support\AllTransactionColumns;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -127,6 +128,7 @@ class EftFileController extends Controller
                     ->whereIn('a.settlement_number', $sequences->all())
                     ->select([
                         'b.id',
+                        'b.bank_statement_summary_id',
                         'b.source_file',
                         'b.account_number',
                         'b.booking_date',
@@ -147,6 +149,7 @@ class EftFileController extends Controller
                         ? (string) (int) trim((string) $entry->settlement_number)
                         : trim((string) $entry->settlement_number));
             $bankMatchStatuses = $this->eftBankMatchStatusService->statusesForSequences($sequences);
+            $this->eftBankMatchStatusService->annotateBankEntries($bankEntriesBySequence->flatten(1));
         } catch (\Throwable $exception) {
             Log::warning('Unable to load EFT and bank matches for the All Transactions table.', [
                 'trust_id_count' => $trustIds->count(),
@@ -188,9 +191,8 @@ class EftFileController extends Controller
                             'item_count' => $fileItems->count(),
                             'url' => $fileId !== null
                                 ? route('eft-files.index', [
-                                    'tab' => 'items',
+                                    'tab' => 'files',
                                     'file_id' => $fileId,
-                                    'linked_id' => (int) $item->linked_id,
                                 ])
                                 : null,
                         ];
@@ -227,8 +229,15 @@ class EftFileController extends Controller
                         'holder_id' => trim((string) ($item->holder_id ?? '')) ?: null,
                         'source' => trim((string) ($item->source_name ?? '')) ?: (trim((string) ($item->source_code ?? '')) ?: null),
                         'amount' => $item->amount !== null ? (float) $item->amount : null,
+                        'file_total' => isset($item->file_total) ? (float) $item->file_total : null,
                         'notes' => trim((string) ($item->notes ?? '')) ?: null,
                         'url' => $fileId !== null
+                            ? route('eft-files.index', [
+                                'tab' => 'files',
+                                'file_id' => $fileId,
+                            ])
+                            : null,
+                        'linked_item_url' => $fileId !== null
                             ? route('eft-files.index', [
                                 'tab' => 'items',
                                 'file_id' => $fileId,
@@ -305,6 +314,21 @@ class EftFileController extends Controller
                             'counterparty' => trim((string) ($entry->counterparty ?? '')) ?: null,
                             'wire_reference' => trim((string) ($entry->wire_payment_reference ?? '')) ?: null,
                             'description' => trim((string) ($entry->additional_info ?? '')) ?: null,
+                            'reconciliation_variance' => isset($entry->variance) ? (float) $entry->variance : null,
+                            'reconciliation_note' => trim((string) ($entry->reconciliation_note ?? '')),
+                            'is_possible_wire_fee_match' => (bool) ($entry->is_possible_wire_fee_match ?? false),
+                            'account_url' => !empty($entry->bank_statement_summary_id)
+                                ? route('bank-entries.index', [
+                                    'view' => 'transactions',
+                                    'statement_summary_id' => (int) $entry->bank_statement_summary_id,
+                                ])
+                                : null,
+                            'file_url' => trim((string) ($entry->source_file ?? '')) !== ''
+                                ? route('bank-entries.index', [
+                                    'view' => 'summaries',
+                                    'source_file' => trim((string) $entry->source_file),
+                                ])
+                                : null,
                             'url' => $entryDate
                                 ? route('reconciliations.daily-totals.bank-day', [
                                     'date' => Carbon::parse($entryDate)->toDateString(),
@@ -319,6 +343,12 @@ class EftFileController extends Controller
         $matchStatuses = $eftRecords->map(
             fn($records) => $this->transactionBankMatchStatusService->summarizeEftItems(collect($records))
         );
+        $eftRecords = $eftRecords->map(fn($records) => collect($records)
+            ->map(fn(array $record) => AllTransactionColumns::filterLinkedPayload($record, 'eft'))
+            ->values());
+        $bankRecords = $bankRecords->map(fn($records) => collect($records)
+            ->map(fn(array $record) => AllTransactionColumns::filterLinkedPayload($record, 'bank'))
+            ->values());
 
         return response()->json([
             'matches' => $matches,

@@ -8,7 +8,11 @@ use App\Models\SettlementInstruction;
 use App\Services\Reconciliation\AgraFspBankMatcher;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
+use App\Services\VieFund\VieFundDailyBalanceService;
 use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundTransactionWorkingSetManager;
+use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
+use App\Support\AllTransactionColumns;
 use Exception;
 use Illuminate\Support\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +31,7 @@ use Illuminate\View\View;
 class RemoteVieFundController extends Controller
 {
     private const ALL_TRANSACTIONS_EXPORT_LOCK_TTL_SECONDS = 14400;
+    private const TRANSACTION_FILTER_SET_LIMIT = 10;
     private const ALL_TRANSACTION_DATE_BASES = [
         'create_date' => 'Created date',
         'trade_date' => 'Trade date',
@@ -66,40 +71,50 @@ class RemoteVieFundController extends Controller
 
     public function __construct(
         private readonly VieFundRemoteService $remoteService,
+        private readonly VieFundDailyBalanceService $dailyBalanceService,
         private readonly AgraFspBankMatcher $agraFspBankMatcher,
         private readonly FspMatchedRecordCollapser $fspRecordCollapser,
-        private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService
+        private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService,
+        private readonly VieFundTransactionWorkingSetManager $workingSetManager,
+        private readonly VieFundTransactionWorkingSetQuery $workingSetQuery
     ) {}
 
-    public function allTransactions(Request $request): View
+    public function allTransactions(Request $request): View|JsonResponse
     {
+        $asyncPage = $request->ajax() && $request->boolean('_table_page');
+        $filterRequest = $this->transactionFilterRequest($request, 'all');
+
         $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
         $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
-        $search = trim((string) $request->query('search', ''));
-        $trxTypesSelected = array_values(array_filter((array) $request->query('filter_trx_type', [])));
-        $dateBasis = (string) $request->query('filter_date_basis', 'settlement_date');
+        $search = trim((string) $filterRequest->query('search', ''));
+        $trxTypesSelected = array_values(array_filter((array) $filterRequest->query('filter_trx_type', [])));
+        $dateBasis = (string) $filterRequest->query('filter_date_basis', 'settlement_date');
         $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
         $defaultSort = $dateBasis === 'create_date' ? 'created_date' : $dateBasis;
-        $sort = (string) $request->query('sort', $defaultSort);
+        $sort = (string) $filterRequest->query('sort', $defaultSort);
         $sort = array_key_exists($sort, self::ALL_TRANSACTION_SORT_COLUMNS) ? $sort : $defaultSort;
-        $sortDirection = strtolower((string) $request->query('sort_dir', 'desc')) === 'asc' ? 'asc' : 'desc';
-        $hasEftMatch = $request->boolean('filter_has_eft_match');
-        $hasAgraFspMatch = $request->boolean('filter_has_agra_fsp_match');
-        $has7960FspMatch = $request->boolean('filter_has_7960_fsp_match');
-        $currencyCode = (string) $request->query('filter_currency_code', '00');
+        $sortDirection = strtolower((string) $filterRequest->query('sort_dir', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $hasEftMatch = $filterRequest->boolean('filter_has_eft_match');
+        $hasAgraFspMatch = $filterRequest->boolean('filter_has_agra_fsp_match');
+        $has7960FspMatch = $filterRequest->boolean('filter_has_7960_fsp_match');
+        $matchStatuses = array_values(array_intersect(
+            ['Complete', 'Verify', 'Possible', 'Unknown'],
+            (array) $filterRequest->query('filter_match_status', [])
+        ));
+        $currencyCode = (string) $filterRequest->query('filter_currency_code', '00');
         $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
         $statusIds = array_values(array_unique(array_filter(
-            array_map('intval', (array) $request->query('filter_status', [6])),
+            array_map('intval', (array) $filterRequest->query('filter_status', [6])),
             fn($status) => array_key_exists($status, self::ALL_TRANSACTION_STATUSES)
         )));
         $statusIds = $statusIds ?: [6];
         $filters = array_filter([
-            'customer_name' => trim((string) $request->query('filter_customer_name', '')),
-            'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
-            'trx_id' => trim((string) $request->query('filter_trx_id', '')),
-            'source_id' => trim((string) $request->query('filter_source_id', '')),
-            'date_from' => trim((string) $request->query('filter_date_from', $request->query('filter_created_from', $defaultFrom))),
-            'date_to' => trim((string) $request->query('filter_date_to', $request->query('filter_created_to', $defaultTo))),
+            'customer_name' => trim((string) $filterRequest->query('filter_customer_name', '')),
+            'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
+            'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
+            'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'date_from' => trim((string) $filterRequest->query('filter_date_from', $filterRequest->query('filter_created_from', $defaultFrom))),
+            'date_to' => trim((string) $filterRequest->query('filter_date_to', $filterRequest->query('filter_created_to', $defaultTo))),
             'date_basis' => $dateBasis,
             'output_order' => 'desc',
             'sort' => $sort,
@@ -108,16 +123,29 @@ class RemoteVieFundController extends Controller
             'status_ids' => $statusIds,
             'trx_type' => $trxTypesSelected ?: null,
             'has_reconciliation_match' => $hasEftMatch ?: null,
+            'has_agra_fsp_match' => $hasAgraFspMatch ?: null,
+            'has_7960_fsp_match' => $has7960FspMatch ?: null,
+            'match_statuses' => $matchStatuses ?: null,
         ]);
-        $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
-            ? (int) $request->query('per_page', 100)
+        $perPage = in_array((int) $filterRequest->query('per_page', 100), [50, 100, 250], true)
+            ? (int) $filterRequest->query('per_page', 100)
             : 100;
         $connectionError = null;
         $transactions = null;
         $availableTrxTypes = [];
+        $workingSet = $this->workingSetManager->ensure($filters);
+        $workingSetQueryable = $workingSet?->hasQueryableGeneration() ?? false;
 
         try {
-            if ($hasAgraFspMatch) {
+            if ($workingSetQueryable) {
+                $transactions = $this->workingSetQuery->paginate(
+                    $workingSet,
+                    $perPage,
+                    max(1, (int) $filterRequest->query('page', 1)),
+                    $search ?: null,
+                    $filters
+                );
+            } elseif ($hasAgraFspMatch) {
                 $filters['agra_fsp_source_ids_json'] = $this->fspSourceIdsJson(
                     'fundserv_agra',
                     $dateBasis,
@@ -125,7 +153,7 @@ class RemoteVieFundController extends Controller
                     $filters['date_to'] ?? null
                 );
             }
-            if ($has7960FspMatch) {
+            if (!$workingSetQueryable && $has7960FspMatch) {
                 $filters['fsp_7960_source_ids_json'] = $this->fspSourceIdsJson(
                     'ltm',
                     $dateBasis,
@@ -133,13 +161,17 @@ class RemoteVieFundController extends Controller
                     $filters['date_to'] ?? null
                 );
             }
-            $transactions = $this->remoteService->fetchAllTransactions(
-                $perPage,
-                max(1, (int) $request->query('page', 1)),
-                $search ?: null,
-                $filters
-            );
-            $availableTrxTypes = $this->remoteService->fetchDistinctTrxTypes();
+            if (!$workingSetQueryable) {
+                $transactions = $this->remoteService->fetchAllTransactions(
+                    $perPage,
+                    max(1, (int) $filterRequest->query('page', 1)),
+                    $search ?: null,
+                    $filters
+                );
+            }
+            if (!$asyncPage) {
+                $availableTrxTypes = $this->remoteService->fetchDistinctTrxTypes();
+            }
         } catch (Exception $e) {
             Log::error('Unable to load the complete VieFund transaction ledger.', ['exception' => $e]);
             $connectionError = 'Could not connect to the remote VieFund database: ' . $e->getMessage();
@@ -149,11 +181,51 @@ class RemoteVieFundController extends Controller
         $sortOptions = self::ALL_TRANSACTION_SORT_COLUMNS;
         $currencyOptions = self::ALL_TRANSACTION_CURRENCIES;
         $statusOptions = self::ALL_TRANSACTION_STATUSES;
+        $visibleTransactionColumns = AllTransactionColumns::visible();
+        $visibleEftColumns = AllTransactionColumns::eftVisible();
+        $visibleBankColumns = AllTransactionColumns::bankVisible();
+        $visibleBankSummaryColumns = AllTransactionColumns::bankSummaryVisible();
+        $visibleBankDetailColumns = AllTransactionColumns::bankDetailVisible();
+        $visibleFspColumns = AllTransactionColumns::fspVisible();
+        $workingSetStatus = $this->workingSetManager->status($workingSet);
+        if ($asyncPage) {
+            if ($connectionError || !$transactions) {
+                return response()->json([
+                    'message' => $connectionError ?: 'The transaction page could not be loaded.',
+                ], 503, $this->exportStatusNoCacheHeaders());
+            }
+
+            $coreHeadings = [];
+            foreach ($visibleTransactionColumns as $key => $definition) {
+                $coreHeadings[] = array_merge($definition, ['key' => $key]);
+            }
+            $eftHeadings = array_values($visibleEftColumns);
+            $bankSummaryHeadings = array_values($visibleBankSummaryColumns);
+            $bankHeadings = array_values($visibleBankDetailColumns);
+            $fspHeadings = array_values($visibleFspColumns);
+
+            return response()->json([
+                'rows_html' => view('viefund-transactions.partials.rows', compact(
+                    'transactions',
+                    'coreHeadings',
+                    'eftHeadings',
+                    'bankSummaryHeadings',
+                    'bankHeadings',
+                    'fspHeadings',
+                    'currencyOptions'
+                ))->render(),
+                'from' => $transactions->firstItem() ?? 0,
+                'to' => $transactions->lastItem() ?? 0,
+                'page' => $transactions->currentPage(),
+                'per_page' => $perPage,
+                'has_more_pages' => $transactions->hasMorePages(),
+            ], 200, $this->exportStatusNoCacheHeaders());
+        }
+
         $inceptionDates = [];
         foreach (array_keys(self::ALL_TRANSACTION_DATE_BASES) as $basis) {
             $inceptionDates[$basis] = $this->resolveAllTransactionInceptionDate($basis);
         }
-
         return view('viefund-transactions.index', compact(
             'transactions',
             'connectionError',
@@ -167,14 +239,101 @@ class RemoteVieFundController extends Controller
             'hasEftMatch',
             'hasAgraFspMatch',
             'has7960FspMatch',
+            'matchStatuses',
+            'workingSetStatus',
             'currencyCode',
             'statusIds',
             'dateBasisOptions',
             'sortOptions',
             'currencyOptions',
             'statusOptions',
-            'inceptionDates'
+            'inceptionDates',
+            'visibleTransactionColumns',
+            'visibleEftColumns',
+            'visibleBankColumns',
+            'visibleBankSummaryColumns',
+            'visibleBankDetailColumns',
+            'visibleFspColumns'
         ));
+    }
+
+    public function allTransactionsWorkingSetStatus(int $workingSet): JsonResponse
+    {
+        return response()->json(
+            $this->workingSetManager->status(\App\Models\VieFundTransactionWorkingSet::query()->find($workingSet)),
+            200,
+            $this->exportStatusNoCacheHeaders()
+        );
+    }
+
+    public function applyAllTransactionsFilters(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:120'],
+            'filter_customer_name' => ['nullable', 'string', 'max:255'],
+            'filter_plan_account_id' => ['nullable', 'string', 'max:100'],
+            'filter_trx_id' => ['nullable', 'string', 'max:10000'],
+            'filter_source_id' => ['nullable', 'string', 'max:10000'],
+            'filter_date_from' => ['required', 'date'],
+            'filter_date_to' => ['required', 'date', 'after_or_equal:filter_date_from'],
+            'filter_date_basis' => ['required', 'in:' . implode(',', array_keys(self::ALL_TRANSACTION_DATE_BASES))],
+            'filter_currency_code' => ['required', 'in:' . implode(',', array_keys(self::ALL_TRANSACTION_CURRENCIES))],
+            'filter_status' => ['sometimes', 'array', 'max:7'],
+            'filter_status.*' => ['integer', 'between:0,6', 'distinct'],
+            'filter_trx_type' => ['sometimes', 'array', 'max:2000'],
+            'filter_trx_type.*' => ['string', 'max:255', 'distinct'],
+            'filter_has_eft_match' => ['sometimes', 'boolean'],
+            'filter_has_agra_fsp_match' => ['sometimes', 'boolean'],
+            'filter_has_7960_fsp_match' => ['sometimes', 'boolean'],
+            'filter_match_status' => ['sometimes', 'array', 'max:4'],
+            'filter_match_status.*' => ['string', 'in:Complete,Verify,Possible,Unknown', 'distinct'],
+        ]);
+
+        $transactionTypes = $this->canonicalTransactionTypes((array) ($validated['filter_trx_type'] ?? []));
+
+        if ($transactionTypes === []) {
+            unset($validated['filter_trx_type']);
+        } else {
+            sort($transactionTypes);
+            $validated['filter_trx_type'] = $transactionTypes;
+        }
+
+        if (isset($validated['filter_status'])) {
+            $validated['filter_status'] = array_values(array_unique(array_map(
+                'intval',
+                (array) $validated['filter_status']
+            )));
+            sort($validated['filter_status']);
+        }
+
+        return $this->rememberTransactionFilters($request, 'all', $validated, 'viefund-transactions.index');
+    }
+
+    public function applyCustomerTransactionFilters(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'search' => ['nullable', 'string', 'max:500'],
+            'filter_customer_id' => ['nullable', 'string', 'max:100'],
+            'filter_customer_name' => ['nullable', 'string', 'max:255'],
+            'filter_account_id' => ['nullable', 'string', 'max:100'],
+            'filter_trx_id' => ['nullable', 'string', 'max:10000'],
+            'filter_source_id' => ['nullable', 'string', 'max:10000'],
+            'filter_created_from' => ['nullable', 'date'],
+            'filter_created_to' => ['nullable', 'date'],
+            'filter_status_group' => ['sometimes', 'array', 'max:3'],
+            'filter_status_group.*' => ['string', 'in:not_completed,open,completed', 'distinct'],
+            'filter_trx_type' => ['sometimes', 'array', 'max:2000'],
+            'filter_trx_type.*' => ['string', 'max:255', 'distinct'],
+        ]);
+
+        $transactionTypes = $this->canonicalTransactionTypes((array) ($validated['filter_trx_type'] ?? []));
+        if ($transactionTypes === []) {
+            unset($validated['filter_trx_type']);
+        } else {
+            $validated['filter_trx_type'] = $transactionTypes;
+        }
+
+        return $this->rememberTransactionFilters($request, 'customer', $validated, 'remote-viefund.index');
     }
 
     public function fspMatches(Request $request): JsonResponse
@@ -193,12 +352,14 @@ class RemoteVieFundController extends Controller
             ->map(fn($rows) => $rows->pluck('source_id')->map(fn($value) => trim((string) $value))->filter()->unique()->values());
         $sourceIds = $sourceIdsByCashTransaction->flatten()->unique()->values();
 
-        $fspItems = $this->fspRecordCollapser->collapse(SettlementInstruction::query()
+        $fspItems = $this->fspRecordCollapser->withFileNetTotals(
+            $this->fspRecordCollapser->collapse(SettlementInstruction::query()
             ->whereIn('source_type', $sourceTypes->values()->all())
             ->whereIn('source_id', $sourceIds)
             ->orderBy('settlement_date')
             ->orderBy('id')
-            ->get(FspMatchedRecordCollapser::queryColumns()));
+            ->get(FspMatchedRecordCollapser::queryColumns()))
+        );
         $fspItemsBySourceId = $fspItems->groupBy(fn($record) => trim((string) $record->source_id));
         $bankMatchesBySource = $sourceTypes->mapWithKeys(fn(string $sourceType) => [
             $sourceType => $this->agraFspBankMatcher->matchesForItems(
@@ -228,6 +389,7 @@ class RemoteVieFundController extends Controller
                     'id' => $record->id,
                     'fsp_source' => $source,
                     'source_file' => $record->source_file,
+                    'items_total' => $record->items_total,
                     'record_index' => $record->record_index,
                     'create_date' => optional($record->create_date)->toDateString(),
                     'trade_date' => optional($record->trade_date)->toDateString(),
@@ -253,12 +415,15 @@ class RemoteVieFundController extends Controller
                     'settlement_amount' => $record->settlement_amount,
                     'fsp_note' => $record->fsp_note,
                     'bank_match_status' => $record->bank_match_status,
-                    'url' => route('settlement-instructions.index', array_filter([
+                    'file_url' => route('settlement-instructions.index', [
                         'source_type' => $record->source_type,
-                        'search' => $record->source_id,
-                        'date_from' => optional($record->settlement_date)->toDateString(),
-                        'date_to' => optional($record->settlement_date)->toDateString(),
-                    ])),
+                        'source_file' => $record->source_file,
+                    ]),
+                    'item_url' => route('settlement-instructions.index', [
+                        'source_type' => $record->source_type,
+                        'source_file' => $record->source_file,
+                        'item_id' => $record->id,
+                    ]),
                 ];
             })
             ->groupBy('source_id');
@@ -317,6 +482,18 @@ class RemoteVieFundController extends Controller
                         'reconciliation_variance' => isset($entry->variance) ? (float) $entry->variance : null,
                         'reconciliation_note' => (string) ($entry->reconciliation_note ?? ''),
                         'is_possible_wire_fee_match' => (bool) ($entry->is_possible_wire_fee_match ?? false),
+                        'account_url' => !empty($entry->bank_statement_summary_id)
+                            ? route('bank-entries.index', [
+                                'view' => 'transactions',
+                                'statement_summary_id' => (int) $entry->bank_statement_summary_id,
+                            ])
+                            : null,
+                        'file_url' => trim((string) ($entry->source_file ?? '')) !== ''
+                            ? route('bank-entries.index', [
+                                'view' => 'summaries',
+                                'source_file' => trim((string) $entry->source_file),
+                            ])
+                            : null,
                         'url' => route('reconciliations.daily-totals.bank-day', [
                             'date' => Carbon::parse($entry->value_date)->toDateString(),
                             'entry_id' => (int) $entry->id,
@@ -325,6 +502,12 @@ class RemoteVieFundController extends Controller
                 })
                 ->values();
         });
+        $recordsByCashTransaction = $recordsByCashTransaction->map(fn($records) => collect($records)
+            ->map(fn(array $record) => AllTransactionColumns::filterLinkedPayload($record, 'fsp'))
+            ->values());
+        $bankRecordsByCashTransaction = $bankRecordsByCashTransaction->map(fn($records) => collect($records)
+            ->map(fn(array $record) => AllTransactionColumns::filterLinkedPayload($record, 'bank'))
+            ->values());
 
         return response()->json([
             'fsp_records' => $recordsByCashTransaction,
@@ -335,51 +518,73 @@ class RemoteVieFundController extends Controller
 
     public function allTransactionsCountStatus(Request $request): JsonResponse
     {
+        $filterRequest = $this->transactionFilterRequest($request, 'all');
+
         $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
         $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
-        $dateBasis = (string) $request->query('filter_date_basis', 'settlement_date');
+        $dateBasis = (string) $filterRequest->query('filter_date_basis', 'settlement_date');
         $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
-        $currencyCode = (string) $request->query('filter_currency_code', '00');
+        $currencyCode = (string) $filterRequest->query('filter_currency_code', '00');
         $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
         $statusIds = array_values(array_unique(array_filter(
-            array_map('intval', (array) $request->query('filter_status', [6])),
+            array_map('intval', (array) $filterRequest->query('filter_status', [6])),
             fn($status) => array_key_exists($status, self::ALL_TRANSACTION_STATUSES)
         )));
         $statusIds = $statusIds ?: [6];
         sort($statusIds);
         $transactionTypes = array_values(array_filter(array_map(
             fn($type) => trim((string) $type),
-            (array) $request->query('filter_trx_type', [])
+            (array) $filterRequest->query('filter_trx_type', [])
         )));
         sort($transactionTypes);
+        $matchStatuses = array_values(array_intersect(
+            ['Complete', 'Verify', 'Possible', 'Unknown'],
+            (array) $filterRequest->query('filter_match_status', [])
+        ));
 
         $filters = array_filter([
-            'customer_name' => trim((string) $request->query('filter_customer_name', '')),
-            'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
-            'trx_id' => trim((string) $request->query('filter_trx_id', '')),
-            'source_id' => trim((string) $request->query('filter_source_id', '')),
-            'date_from' => trim((string) $request->query('filter_date_from', $request->query('filter_created_from', $defaultFrom))),
-            'date_to' => trim((string) $request->query('filter_date_to', $request->query('filter_created_to', $defaultTo))),
+            'customer_name' => trim((string) $filterRequest->query('filter_customer_name', '')),
+            'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
+            'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
+            'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'date_from' => trim((string) $filterRequest->query('filter_date_from', $filterRequest->query('filter_created_from', $defaultFrom))),
+            'date_to' => trim((string) $filterRequest->query('filter_date_to', $filterRequest->query('filter_created_to', $defaultTo))),
             'date_basis' => $dateBasis,
             'currency_code' => $currencyCode,
             'status_ids' => $statusIds,
             'trx_type' => $transactionTypes ?: null,
-            'has_reconciliation_match' => $request->boolean('filter_has_eft_match') ?: null,
-            'has_agra_fsp_match' => $request->boolean('filter_has_agra_fsp_match') ?: null,
-            'has_7960_fsp_match' => $request->boolean('filter_has_7960_fsp_match') ?: null,
+            'has_reconciliation_match' => $filterRequest->boolean('filter_has_eft_match') ?: null,
+            'has_agra_fsp_match' => $filterRequest->boolean('filter_has_agra_fsp_match') ?: null,
+            'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
+            'match_statuses' => $matchStatuses ?: null,
         ]);
         $payload = [
-            'search' => trim((string) $request->query('search', '')),
+            'search' => trim((string) $filterRequest->query('search', '')),
             'filters' => $filters,
         ];
         $signature = sha1(json_encode($payload, JSON_THROW_ON_ERROR));
         $valueKey = "viefund_all_transactions_total:{$signature}";
         $statusKey = "viefund_all_transactions_total_status:{$signature}";
         $lockKey = "viefund_all_transactions_total_lock:{$signature}";
-        $perPage = in_array((int) $request->query('per_page', 100), [50, 100, 250], true)
-            ? (int) $request->query('per_page', 100)
+        $perPage = in_array((int) $filterRequest->query('per_page', 100), [50, 100, 250], true)
+            ? (int) $filterRequest->query('per_page', 100)
             : 100;
-        $page = max(1, (int) $request->query('page', 1));
+        $page = max(1, (int) $filterRequest->query('page', 1));
+        $workingSet = $this->workingSetManager->findQueryable($filters);
+        if ($workingSet) {
+            $total = $this->workingSetQuery->count($workingSet, $payload['search'] ?: null, $filters);
+            $complete = $workingSet->isReady();
+
+            return response()->json([
+                'state' => $complete ? 'complete' : 'partial',
+                'total' => $total,
+                'total_pages' => max(1, (int) ceil($total / $perPage)),
+                'page' => $page,
+                'cached' => true,
+                'source' => 'working_set',
+                'rows_cached' => (int) $workingSet->rows_cached,
+            ], 200, $this->exportStatusNoCacheHeaders());
+        }
 
         if (Cache::has($valueKey)) {
             $total = (int) Cache::get($valueKey);
@@ -441,6 +646,88 @@ class RemoteVieFundController extends Controller
         ], 202, $this->exportStatusNoCacheHeaders());
     }
 
+    public function allTransactionsSummary(Request $request): JsonResponse
+    {
+        $filterRequest = $this->transactionFilterRequest($request, 'all');
+        $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
+        $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
+        $dateBasis = (string) $filterRequest->query('filter_date_basis', 'settlement_date');
+        $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
+        $currencyCode = (string) $filterRequest->query('filter_currency_code', '00');
+        $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
+        $statusIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) $filterRequest->query('filter_status', [6])),
+            fn($status) => array_key_exists($status, self::ALL_TRANSACTION_STATUSES)
+        )));
+        $statusIds = $statusIds ?: [6];
+        sort($statusIds);
+
+        try {
+            $dateFrom = Carbon::createFromFormat(
+                'Y-m-d',
+                trim((string) $filterRequest->query('filter_date_from', $defaultFrom))
+            )->startOfDay();
+            $dateTo = Carbon::createFromFormat(
+                'Y-m-d',
+                trim((string) $filterRequest->query('filter_date_to', $defaultTo))
+            )->startOfDay();
+
+            if ($dateFrom->gt($dateTo)) {
+                throw new Exception('The start date must be before or equal to the end date.');
+            }
+
+            // Deliberately exclude search, customer, transaction type, source, and match
+            // filters so this remains a stable cash-ledger summary for the selected period.
+            $signature = sha1(json_encode([
+                'date_from' => $dateFrom->toDateString(),
+                'date_to' => $dateTo->toDateString(),
+                'date_basis' => $dateBasis,
+                'currency_code' => $currencyCode,
+                'status_ids' => $statusIds,
+            ], JSON_THROW_ON_ERROR));
+
+            $summary = Cache::remember(
+                "viefund_all_transactions_summary:{$signature}",
+                now()->addMinutes(5),
+                function () use ($dateFrom, $dateTo, $dateBasis, $currencyCode, $statusIds): array {
+                    $report = $this->dailyBalanceService->build(
+                        $dateFrom,
+                        $dateTo,
+                        $dateBasis,
+                        $currencyCode,
+                        $statusIds,
+                        null,
+                        'asc'
+                    );
+
+                    return [
+                        'opening_balance' => (float) $report['opening_balance'],
+                        'period_net' => (float) array_sum(array_column($report['rows'], 'daily_net_transactions')),
+                        'closing_balance' => (float) $report['final_balance'],
+                        'transaction_count' => (int) array_sum(array_column($report['rows'], 'transaction_count')),
+                        'balance_source' => (string) $report['balance_source'],
+                        'uses_snapshots' => (bool) $report['uses_snapshots'],
+                    ];
+                }
+            );
+            $summary['period_label'] = $dateFrom->isSameDay($dateTo)
+                ? $dateFrom->format('M j, Y')
+                : ($dateFrom->isSameMonth($dateTo) && $dateFrom->isSameYear($dateTo)
+                    ? $dateFrom->format('M j') . '–' . $dateTo->format('j, Y')
+                    : ($dateFrom->isSameYear($dateTo)
+                        ? $dateFrom->format('M j') . ' – ' . $dateTo->format('M j, Y')
+                        : $dateFrom->format('M j, Y') . ' – ' . $dateTo->format('M j, Y')));
+
+            return response()->json($summary, 200, $this->exportStatusNoCacheHeaders());
+        } catch (Exception $e) {
+            Log::error('Unable to load the All Transactions period summary.', ['exception' => $e]);
+
+            return response()->json([
+                'message' => 'The period summary could not be loaded.',
+            ], 503, $this->exportStatusNoCacheHeaders());
+        }
+    }
+
     public function startAllTransactionsExport(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -461,6 +748,8 @@ class RemoteVieFundController extends Controller
             'filter_has_eft_match' => ['sometimes', 'boolean'],
             'filter_has_agra_fsp_match' => ['sometimes', 'boolean'],
             'filter_has_7960_fsp_match' => ['sometimes', 'boolean'],
+            'filter_match_status' => ['sometimes', 'array', 'max:4'],
+            'filter_match_status.*' => ['string', 'in:Complete,Verify,Possible,Unknown', 'distinct'],
             'split_sheets' => ['sometimes', 'boolean'],
             'linked_record_layout' => ['sometimes', 'in:single,split'],
             'include_eft_records' => ['sometimes', 'boolean'],
@@ -517,6 +806,7 @@ class RemoteVieFundController extends Controller
         $transactionTypeArgs = $repeatArgs('--transaction-type', (array) ($validated['filter_trx_type'] ?? []));
         $statusIds = array_values(array_unique(array_map('intval', (array) ($validated['filter_status'] ?? [6]))));
         $statusArgs = $repeatArgs('--status', $statusIds ?: [6]);
+        $matchStatusArgs = $repeatArgs('--match-status', (array) ($validated['filter_match_status'] ?? []));
         $splitSheetsArg = $request->boolean('split_sheets') ? '--split-sheets' : '';
         $hasEftMatchArg = $request->boolean('filter_has_eft_match') ? '--has-eft-match' : '';
         $hasAgraFspMatchArg = $request->boolean('filter_has_agra_fsp_match') ? '--has-agra-fsp-match' : '';
@@ -532,7 +822,7 @@ class RemoteVieFundController extends Controller
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
-            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg(base_path('artisan')),
             escapeshellarg($runId),
@@ -548,6 +838,7 @@ class RemoteVieFundController extends Controller
             escapeshellarg((string) $validated['filter_currency_code']),
             $transactionTypeArgs,
             $statusArgs,
+            $matchStatusArgs,
             $splitSheetsArg,
             $hasEftMatchArg,
             $hasAgraFspMatchArg,
@@ -711,24 +1002,25 @@ class RemoteVieFundController extends Controller
 
     public function index(Request $request): View
     {
-        $search = trim((string) $request->query('search', ''));
-        $trxTypesSelected  = array_values(array_filter((array) $request->query('filter_trx_type', [])));
+        $filterRequest = $this->transactionFilterRequest($request, 'customer');
+        $search = trim((string) $filterRequest->query('search', ''));
+        $trxTypesSelected  = array_values(array_filter((array) $filterRequest->query('filter_trx_type', [])));
         $statusGroupSelected = array_values(array_intersect(
-            (array) $request->query('filter_status_group', []),
+            (array) $filterRequest->query('filter_status_group', []),
             ['not_completed', 'open', 'completed']
         ));
         $filters = array_filter([
-            'customer_id'     => trim((string) $request->query('filter_customer_id', '')),
-            'customer_name'   => trim((string) $request->query('filter_customer_name', '')),
-            'account_id'      => trim((string) $request->query('filter_account_id', '')),
-            'trx_id'          => trim((string) $request->query('filter_trx_id', '')),
-            'trust_trx_id'    => trim((string) $request->query('filter_trust_trx_id', '')),
-            'source_id'       => trim((string) $request->query('filter_source_id', '')),
-            'plan_account_id' => trim((string) $request->query('filter_plan_account_id', '')),
+            'customer_id'     => trim((string) $filterRequest->query('filter_customer_id', '')),
+            'customer_name'   => trim((string) $filterRequest->query('filter_customer_name', '')),
+            'account_id'      => trim((string) $filterRequest->query('filter_account_id', '')),
+            'trx_id'          => trim((string) $filterRequest->query('filter_trx_id', '')),
+            'trust_trx_id'    => trim((string) $filterRequest->query('filter_trust_trx_id', '')),
+            'source_id'       => trim((string) $filterRequest->query('filter_source_id', '')),
+            'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
             'trx_type'        => $trxTypesSelected ?: null,
             'status_group'    => $statusGroupSelected ?: null,
-            'created_from'    => trim((string) $request->query('filter_created_from', '')),
-            'created_to'      => trim((string) $request->query('filter_created_to', '')),
+            'created_from'    => trim((string) $filterRequest->query('filter_created_from', '')),
+            'created_to'      => trim((string) $filterRequest->query('filter_created_to', '')),
         ]);
         $connectionError    = null;
         $transactions       = null;
@@ -863,24 +1155,25 @@ class RemoteVieFundController extends Controller
 
     public function export(Request $request): BinaryFileResponse|StreamedResponse
     {
-        $format = $request->query('format', 'csv');
-        $search = trim((string) $request->query('search', ''));
-        $trxTypesSelected  = array_values(array_filter((array) $request->query('filter_trx_type', [])));
+        $filterRequest = $this->transactionFilterRequest($request, 'customer');
+        $format = $filterRequest->query('format', 'csv');
+        $search = trim((string) $filterRequest->query('search', ''));
+        $trxTypesSelected  = array_values(array_filter((array) $filterRequest->query('filter_trx_type', [])));
         $statusGroupSelected = array_values(array_intersect(
-            (array) $request->query('filter_status_group', []),
+            (array) $filterRequest->query('filter_status_group', []),
             ['not_completed', 'open', 'completed']
         ));
         $filters = array_filter([
-            'customer_id'     => trim((string) $request->query('filter_customer_id', '')),
-            'customer_name'   => trim((string) $request->query('filter_customer_name', '')),
-            'account_id'      => trim((string) $request->query('filter_account_id', '')),
-            'trx_id'          => trim((string) $request->query('filter_trx_id', '')),
-            'trust_trx_id'    => trim((string) $request->query('filter_trust_trx_id', '')),
-            'source_id'       => trim((string) $request->query('filter_source_id', '')),
+            'customer_id'     => trim((string) $filterRequest->query('filter_customer_id', '')),
+            'customer_name'   => trim((string) $filterRequest->query('filter_customer_name', '')),
+            'account_id'      => trim((string) $filterRequest->query('filter_account_id', '')),
+            'trx_id'          => trim((string) $filterRequest->query('filter_trx_id', '')),
+            'trust_trx_id'    => trim((string) $filterRequest->query('filter_trust_trx_id', '')),
+            'source_id'       => trim((string) $filterRequest->query('filter_source_id', '')),
             'trx_type'        => $trxTypesSelected ?: null,
             'status_group'    => $statusGroupSelected ?: null,
-            'created_from'    => trim((string) $request->query('filter_created_from', '')),
-            'created_to'      => trim((string) $request->query('filter_created_to', '')),
+            'created_from'    => trim((string) $filterRequest->query('filter_created_from', '')),
+            'created_to'      => trim((string) $filterRequest->query('filter_created_to', '')),
         ]);
 
         $rows = $this->remoteService->exportTransactions($search ?: null, $filters)
@@ -1108,7 +1401,12 @@ class RemoteVieFundController extends Controller
             proc_close($process);
         }
 
-        return redirect()->route('remote-viefund.index', $request->query());
+        $filterToken = strtolower(trim((string) $request->input('filter_token', '')));
+
+        return redirect()->route('remote-viefund.index', preg_match(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $filterToken
+        ) ? ['filter_token' => $filterToken] : []);
     }
 
     public function planAccounts(Request $request): JsonResponse
@@ -1153,6 +1451,71 @@ class RemoteVieFundController extends Controller
             Log::error('Plan account snapshot error', ['error' => $e->getMessage()]);
             return response()->json(['error' => 'Could not load snapshot.'], 500);
         }
+    }
+
+    private function transactionFilterRequest(Request $request, string $scope): Request
+    {
+        $token = strtolower(trim((string) $request->query('filter_token', '')));
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/', $token)) {
+            return $request;
+        }
+
+        $filterSets = (array) $request->session()->get("viefund_transaction_filter_sets.{$scope}", []);
+        $storedFilters = $filterSets[$token]['filters'] ?? null;
+        if (!is_array($storedFilters)) {
+            return $request;
+        }
+
+        // Keep the potentially large filter payload in the server-side session.
+        // Small navigation values in the URL (page, sort, per_page) still take precedence.
+        return $request->duplicate(array_merge($storedFilters, $request->query->all()));
+    }
+
+    private function rememberTransactionFilters(
+        Request $request,
+        string $scope,
+        array $filters,
+        string $routeName
+    ): RedirectResponse {
+        $token = (string) Str::uuid();
+        $sessionKey = "viefund_transaction_filter_sets.{$scope}";
+        $filterSets = array_filter((array) $request->session()->get($sessionKey, []), 'is_array');
+        $filterSets[$token] = [
+            'filters' => array_filter($filters, fn($value) => $value !== null && $value !== '' && $value !== []),
+            'created_at' => now()->timestamp,
+        ];
+        uasort($filterSets, fn(array $left, array $right) => ($left['created_at'] ?? 0) <=> ($right['created_at'] ?? 0));
+        $request->session()->put(
+            $sessionKey,
+            array_slice($filterSets, -self::TRANSACTION_FILTER_SET_LIMIT, null, true)
+        );
+
+        return redirect()->route($routeName, ['filter_token' => $token]);
+    }
+
+    private function canonicalTransactionTypes(array $transactionTypes): array
+    {
+        $transactionTypes = array_values(array_unique(array_filter(array_map(
+            fn($type) => trim((string) $type),
+            $transactionTypes
+        ))));
+        sort($transactionTypes);
+
+        if ($transactionTypes === []) {
+            return [];
+        }
+
+        try {
+            $availableTypes = $this->remoteService->fetchDistinctTrxTypes();
+            sort($availableTypes);
+            if ($availableTypes !== [] && $transactionTypes === $availableTypes) {
+                return [];
+            }
+        } catch (Exception $e) {
+            Log::warning('Unable to simplify the transaction type filter.', ['exception' => $e]);
+        }
+
+        return $transactionTypes;
     }
 
     private function allTransactionsRunId(Request $request): ?string

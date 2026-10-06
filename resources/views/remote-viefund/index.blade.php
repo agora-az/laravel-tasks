@@ -190,7 +190,8 @@
 
             <!-- Collapsible filter body -->
             <div id="filter-body" style="padding: 20px 24px 20px;">
-            <form action="{{ route('remote-viefund.index') }}" method="GET" id="viefund-filter-form">
+            <form action="{{ route('remote-viefund.filters') }}" method="POST" id="viefund-filter-form">
+                @csrf
                 <input type="hidden" name="filter_customer_id" id="filter-customer-id" value="{{ $filters['customer_id'] ?? '' }}">
                 <input type="hidden" name="filter_customer_name" id="filter-customer-name" value="{{ $filters['customer_name'] ?? '' }}">
                 <input type="hidden" name="filter_account_id" id="filter-account-id" value="{{ $filters['account_id'] ?? '' }}">
@@ -301,7 +302,7 @@
                     @if(!empty($availableTrxTypes))
                         <div>
                             <label style="display: block; font-size: 12px; font-weight: 800; color: #4a5568; margin-bottom: 6px;">Txn Type</label>
-                            <div class="ms-wrap">
+                            <div class="ms-wrap" data-empty-means-all="true">
                                 <div class="ms-trigger">
                                     <div class="ms-tags"></div>
                                     <span class="ms-placeholder">All types</span>
@@ -310,7 +311,7 @@
                                 <div class="ms-panel">
                                     <div class="ms-item ms-select-all">
                                         <span class="ms-checkbox"></span>
-                                        <span>Select All</span>
+                                        <span>All transaction types</span>
                                     </div>
                                     @foreach($availableTrxTypes as $type)
                                     <div class="ms-item" data-value="{{ $type }}">
@@ -687,6 +688,7 @@
                 const placeholder = wrap.querySelector('.ms-placeholder');
                 const allItem     = panel.querySelector('.ms-select-all');
                 const items       = Array.from(panel.querySelectorAll('.ms-item:not(.ms-select-all)'));
+                const emptyMeansAll = wrap.dataset.emptyMeansAll === 'true';
 
                 // Sync initial checked state from hidden checkboxes
                 items.forEach(item => {
@@ -723,7 +725,10 @@
 
                 function refreshSelectAll() {
                     if (!allItem) return;
-                    const allChecked = items.length > 0 && items.every(i => i.classList.contains('checked'));
+                    const checkedCount = items.filter(i => i.classList.contains('checked')).length;
+                    const allChecked = emptyMeansAll
+                        ? checkedCount === 0
+                        : items.length > 0 && checkedCount === items.length;
                     allItem.classList.toggle('checked', allChecked);
                 }
 
@@ -734,6 +739,15 @@
 
                 if (allItem) {
                     allItem.addEventListener('click', () => {
+                        if (emptyMeansAll) {
+                            items.forEach(item => {
+                                item.classList.remove('checked');
+                                const cb = item.querySelector('input[type="checkbox"]');
+                                if (cb) cb.checked = false;
+                            });
+                            refreshTags(); refreshSelectAll();
+                            return;
+                        }
                         const toCheck = !items.every(i => i.classList.contains('checked'));
                         items.forEach(item => {
                             item.classList.toggle('checked', toCheck);

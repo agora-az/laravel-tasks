@@ -376,7 +376,7 @@
                         <th style="text-align:right;">Bank Records</th>
                         <th style="text-align:right;">Bank Total</th>
                         <th style="text-align:right;"><a href="{{ $fileSortUrl('bank_count_variance') }}" style="color:inherit;text-decoration:none;">Count Variance{{ $fileSortArrow('bank_count_variance') }}</a></th>
-                        <th style="text-align:right;"><a href="{{ $fileSortUrl('bank_amount_variance') }}" style="color:inherit;text-decoration:none;">Bank Variance{{ $fileSortArrow('bank_amount_variance') }}</a></th>
+                        <th style="text-align:right;"><a href="{{ $fileSortUrl('bank_amount_variance') }}" style="color:inherit;text-decoration:none;">Bank Txn Variance{{ $fileSortArrow('bank_amount_variance') }}</a></th>
                         <th style="text-align:left;">Trust Account</th>
                     </tr></thead>
                     <tbody>

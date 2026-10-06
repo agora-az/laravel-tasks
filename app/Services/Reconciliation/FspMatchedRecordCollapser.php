@@ -52,7 +52,7 @@ class FspMatchedRecordCollapser
     /** @return string[] */
     public static function queryColumns(): array
     {
-        return array_merge(['id', 'source_file', 'record_index'], self::SEMANTIC_COLUMNS);
+        return array_merge(['id', 'settlement_instruction_summary_id', 'source_file', 'record_index'], self::SEMANTIC_COLUMNS);
     }
 
     /**
@@ -160,6 +160,38 @@ class FspMatchedRecordCollapser
         });
 
         return collect($collapsed);
+    }
+
+    public function withFileNetTotals(Collection $items): Collection
+    {
+        $summaryIds = $items
+            ->pluck('settlement_instruction_summary_id')
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($summaryIds->isEmpty()) {
+            return $items;
+        }
+
+        $totals = SettlementInstruction::query()
+            ->whereIn('settlement_instruction_summary_id', $summaryIds->all())
+            ->whereNotNull('currency')
+            ->selectRaw(
+                "settlement_instruction_summary_id,
+                 currency,
+                 sum(case when side = 'SELL' then coalesce(gross_amount, 0) when side = 'BUY' then -coalesce(gross_amount, 0) else 0 end) as items_total"
+            )
+            ->groupBy('settlement_instruction_summary_id', 'currency')
+            ->get()
+            ->keyBy(fn($total) => $total->settlement_instruction_summary_id.'|'.$total->currency);
+
+        return $items->each(function ($item) use ($totals): void {
+            $key = data_get($item, 'settlement_instruction_summary_id').'|'.data_get($item, 'currency');
+            $total = $totals->get($key);
+
+            data_set($item, 'items_total', $total !== null ? (float) $total->items_total : null);
+        });
     }
 
     private function sourceIdentity(mixed $item): string

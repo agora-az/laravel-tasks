@@ -120,13 +120,20 @@ class DailyTotalsDrilldownController extends Controller
         $day = $this->parseDateOrFail($date);
         $account = trim((string) $request->query('account', ''));
         $entryId = $request->integer('entry_id') ?: null;
+        $entryIds = collect(preg_split('/[,\s]+/', (string) $request->query('entry_ids', ''), -1, PREG_SPLIT_NO_EMPTY))
+            ->filter(fn($id) => ctype_digit((string) $id) && (int) $id > 0)
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->take(500)
+            ->values();
         $settlementNumbers = collect(preg_split('/[,\s]+/', (string) $request->query('settlement_numbers', ''), -1, PREG_SPLIT_NO_EMPTY))
             ->map(fn($number) => trim((string) $number))
             ->filter()
             ->unique()
             ->take(500)
             ->values();
-        $allDates = $request->boolean('all_dates') && $settlementNumbers->isNotEmpty();
+        $allDates = $entryIds->isNotEmpty()
+            || ($request->boolean('all_dates') && $settlementNumbers->isNotEmpty());
         $onlyFundservBank = $request->has('only_fundserv_bank')
             ? $request->boolean('only_fundserv_bank')
             : false;
@@ -143,6 +150,7 @@ class DailyTotalsDrilldownController extends Controller
             ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
             ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
             ->when($entryId, fn($query) => $query->where('bank_statement_entries.id', $entryId))
+            ->when($entryIds->isNotEmpty(), fn($query) => $query->whereIn('bank_statement_entries.id', $entryIds->all()))
             ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
@@ -171,6 +179,7 @@ class DailyTotalsDrilldownController extends Controller
             ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
             ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
             ->when($entryId, fn($query) => $query->where('bank_statement_entries.id', $entryId))
+            ->when($entryIds->isNotEmpty(), fn($query) => $query->whereIn('bank_statement_entries.id', $entryIds->all()))
             ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);
@@ -185,6 +194,7 @@ class DailyTotalsDrilldownController extends Controller
             'onlyFundservBank' => $onlyFundservBank,
             'account' => $account,
             'entryId' => $entryId,
+            'entryIds' => $entryIds,
             'settlementNumbers' => $settlementNumbers,
             'allDates' => $allDates,
         ]);
@@ -194,13 +204,20 @@ class DailyTotalsDrilldownController extends Controller
     {
         $day = $this->parseDateOrFail($date);
         $account = trim((string) $request->query('account', ''));
+        $entryIds = collect(preg_split('/[,\s]+/', (string) $request->query('entry_ids', ''), -1, PREG_SPLIT_NO_EMPTY))
+            ->filter(fn($id) => ctype_digit((string) $id) && (int) $id > 0)
+            ->map(fn($id) => (int) $id)
+            ->unique()
+            ->take(500)
+            ->values();
         $settlementNumbers = collect(preg_split('/[,\s]+/', (string) $request->query('settlement_numbers', ''), -1, PREG_SPLIT_NO_EMPTY))
             ->map(fn($number) => trim((string) $number))
             ->filter()
             ->unique()
             ->take(500)
             ->values();
-        $allDates = $request->boolean('all_dates') && $settlementNumbers->isNotEmpty();
+        $allDates = $entryIds->isNotEmpty()
+            || ($request->boolean('all_dates') && $settlementNumbers->isNotEmpty());
         $onlyFundservBank = $request->has('only_fundserv_bank')
             ? $request->boolean('only_fundserv_bank')
             : false;
@@ -217,6 +234,7 @@ class DailyTotalsDrilldownController extends Controller
             })
             ->when(!$allDates, fn($query) => $query->whereDate('bank_statement_entries.value_date', '=', $day->toDateString()))
             ->when($account !== '', fn($query) => $query->where('bank_statement_entries.account_number', $account))
+            ->when($entryIds->isNotEmpty(), fn($query) => $query->whereIn('bank_statement_entries.id', $entryIds->all()))
             ->when($settlementNumbers->isNotEmpty(), fn($query) => $query->whereIn('a.settlement_number', $settlementNumbers->all()))
             ->when($onlyFundservBank, function ($query) {
                 $query->whereRaw('LOWER(a.counterparty) LIKE ?', ['%fundserv%']);

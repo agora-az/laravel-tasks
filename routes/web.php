@@ -42,9 +42,14 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
     Route::get('/dashboard/stats-status', [ReconciliationController::class, 'dashboardStatsStatus'])->name('dashboard.stats-status');
     Route::get('/viefund-transactions', [RemoteVieFundController::class, 'allTransactions'])->name('viefund-transactions.index');
+    Route::get('/viefund-transactions/working-set/{workingSet}', [RemoteVieFundController::class, 'allTransactionsWorkingSetStatus'])
+        ->whereNumber('workingSet')
+        ->name('viefund-transactions.working-set.status');
+    Route::post('/viefund-transactions/filters', [RemoteVieFundController::class, 'applyAllTransactionsFilters'])->name('viefund-transactions.filters');
     Route::post('/viefund-transactions/eft-matches', [EftFileController::class, 'transactionMatches'])->name('viefund-transactions.eft-matches');
     Route::post('/viefund-transactions/fsp-matches', [RemoteVieFundController::class, 'fspMatches'])->name('viefund-transactions.fsp-matches');
     Route::get('/viefund-transactions/count', [RemoteVieFundController::class, 'allTransactionsCountStatus'])->name('viefund-transactions.count');
+    Route::get('/viefund-transactions/summary', [RemoteVieFundController::class, 'allTransactionsSummary'])->name('viefund-transactions.summary');
     Route::post('/viefund-transactions/export', [RemoteVieFundController::class, 'startAllTransactionsExport'])->name('viefund-transactions.export.start');
     Route::get('/viefund-transactions/export/status', [RemoteVieFundController::class, 'allTransactionsExportStatus'])->name('viefund-transactions.export.status');
     Route::get('/viefund-transactions/export/download', [RemoteVieFundController::class, 'downloadAllTransactionsExport'])->name('viefund-transactions.export.download');
@@ -54,6 +59,7 @@ Route::middleware('auth.check')->group(function () {
 
     // Remote VieFund live data
     Route::get('/remote-viefund', [RemoteVieFundController::class, 'index'])->name('remote-viefund.index');
+    Route::post('/remote-viefund/filters', [RemoteVieFundController::class, 'applyCustomerTransactionFilters'])->name('remote-viefund.filters');
     Route::get('/remote-viefund/export', [RemoteVieFundController::class, 'export'])->name('remote-viefund.export');
     Route::post('/remote-viefund/sync', [RemoteVieFundController::class, 'sync'])->name('remote-viefund.sync');
     Route::get('/remote-viefund/sync-status', [RemoteVieFundController::class, 'syncStatus'])->name('remote-viefund.sync-status');

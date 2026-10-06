@@ -23,6 +23,7 @@
         || $hasEftMatch
         || $hasAgraFspMatch
         || $has7960FspMatch
+        || !empty($matchStatuses)
         || $currencyCode !== '00'
         || $statusIds !== [6];
     $dateBasisLabel = $dateBasisOptions[$dateBasis] ?? 'Settlement date';
@@ -40,93 +41,22 @@
     $sortIndicator = fn(string $column): string => $sort === $column
         ? ($sortDirection === 'asc' ? ' ↑' : ' ↓')
         : ' ⇅';
-    $coreHeadings = [
-        ['label' => 'Matched to Bank Transaction'],
-        ['label' => 'Cash Txn ID'],
-        ['label' => 'Fund Txn ID'],
-        ['label' => 'Trust Txn ID'],
-        ['label' => 'Relationship'],
-        ['label' => 'Source ID'],
-        ['label' => 'Customer Name'],
-        ['label' => 'Plan Account ID'],
-        ['label' => 'Txn Type'],
-        ['label' => 'Cash Status'],
-        ['label' => 'Trust Status'],
-        ['label' => 'Notes'],
-        ['label' => 'Created Date', 'sort' => 'created_date'],
-        ['label' => 'Trade Date', 'sort' => 'trade_date'],
-        ['label' => 'Processing Date', 'sort' => 'processing_date'],
-        ['label' => 'Settlement Date', 'sort' => 'settlement_date'],
-        ['label' => 'Currency'],
-        ['label' => 'Amount', 'sort' => 'amount'],
-    ];
-    $eftHeadings = [
-        ['label' => 'EFT File', 'field' => 'file_name', 'width' => 260],
-        ['label' => 'EFT Item ID', 'field' => 'id'],
-        ['label' => 'EFT Sequence', 'field' => 'sequence_number'],
-        ['label' => 'EFT Created', 'field' => 'created_at', 'width' => 145],
-        ['label' => 'EFT Effective', 'field' => 'effective_date', 'width' => 125],
-        ['label' => 'EFT Trade', 'field' => 'trade_date', 'width' => 125],
-        ['label' => 'EFT Settlement', 'field' => 'settlement_date', 'width' => 125],
-        ['label' => 'EFT Type', 'field' => 'type', 'width' => 170],
-        ['label' => 'EFT Status', 'field' => 'status_id'],
-        ['label' => 'EFT Holder', 'field' => 'holder_name', 'width' => 180],
-        ['label' => 'EFT Holder ID', 'field' => 'holder_id', 'width' => 170],
-        ['label' => 'EFT Source', 'field' => 'source', 'width' => 160],
-        ['label' => 'EFT Amount', 'field' => 'amount', 'width' => 130],
-        ['label' => 'EFT Notes', 'field' => 'notes', 'width' => 220],
-    ];
-    $bankHeadings = [
-        ['label' => 'Bank Txn ID', 'field' => 'id'],
-        ['label' => 'Bank Value Date', 'field' => 'value_date', 'width' => 130],
-        ['label' => 'Bank Direction', 'field' => 'direction'],
-        ['label' => 'Bank Amount', 'field' => 'amount', 'width' => 130],
-        ['label' => 'Bank Currency', 'field' => 'currency'],
-        ['label' => 'Bank Account', 'field' => 'account_number', 'width' => 165],
-        ['label' => 'Bank Settlement #', 'field' => 'settlement_number', 'width' => 145],
-        ['label' => 'Bank Memo Type', 'field' => 'memo_type', 'width' => 150],
-        ['label' => 'Bank Counterparty', 'field' => 'counterparty', 'width' => 180],
-        ['label' => 'Bank Wire Ref', 'field' => 'wire_reference', 'width' => 170],
-        ['label' => 'Bank Description', 'field' => 'description', 'width' => 260],
-        ['label' => 'Bank Source File', 'field' => 'source_file', 'width' => 220],
-        ['label' => 'FSP Bank Match', 'field' => 'reconciliation_status', 'width' => 175],
-        ['label' => 'FSP Bank Variance', 'field' => 'reconciliation_variance', 'width' => 165],
-        ['label' => 'FSP Bank Note', 'field' => 'reconciliation_note', 'width' => 300],
-    ];
-    $fspHeadings = [
-        ['label' => 'FSP Source', 'field' => 'fsp_source'],
-        ['label' => 'FSP File', 'field' => 'source_file', 'width' => 260],
-        ['label' => 'FSP Record ID', 'field' => 'id'],
-        ['label' => 'FSP Record #', 'field' => 'record_index'],
-        ['label' => 'FSP Created', 'field' => 'create_date', 'width' => 125],
-        ['label' => 'FSP Trade', 'field' => 'trade_date', 'width' => 125],
-        ['label' => 'FSP Settlement', 'field' => 'settlement_date', 'width' => 125],
-        ['label' => 'FSP Side', 'field' => 'side'],
-        ['label' => 'FSP Txn Type', 'field' => 'transaction_type', 'width' => 130],
-        ['label' => 'FSP Order ID', 'field' => 'order_id', 'width' => 155],
-        ['label' => 'FSP Source ID', 'field' => 'source_id', 'width' => 180],
-        ['label' => 'FSP Management Code', 'field' => 'management_code', 'width' => 160],
-        ['label' => 'FSP Dealer Code', 'field' => 'dealer_code', 'width' => 140],
-        ['label' => 'FSP Dealer Account', 'field' => 'dealer_account_id', 'width' => 175],
-        ['label' => 'FSP Rep Code', 'field' => 'rep_code', 'width' => 140],
-        ['label' => 'FSP Intermediary Code', 'field' => 'intermediary_code', 'width' => 175],
-        ['label' => 'FSP Intermediary Account', 'field' => 'intermediary_account_id', 'width' => 190],
-        ['label' => 'FSP Account Type', 'field' => 'account_type', 'width' => 145],
-        ['label' => 'FSP Fund Account', 'field' => 'fund_account_id', 'width' => 175],
-        ['label' => 'FSP Fund ID', 'field' => 'fund_id'],
-        ['label' => 'FSP Currency', 'field' => 'currency'],
-        ['label' => 'FSP Gross', 'field' => 'gross_amount', 'width' => 130],
-        ['label' => 'FSP Net', 'field' => 'net_amount', 'width' => 130],
-        ['label' => 'FSP Settlement Amount', 'field' => 'settlement_amount', 'width' => 165],
-        ['label' => 'FSP Note', 'field' => 'fsp_note', 'width' => 360],
-    ];
+    $coreHeadings = [];
+    foreach($visibleTransactionColumns as $key => $definition) {
+        $coreHeadings[] = array_merge($definition, ['key' => $key]);
+    }
+    $eftHeadings = array_values($visibleEftColumns);
+    $bankSummaryHeadings = array_values($visibleBankSummaryColumns);
+    $bankHeadings = array_values($visibleBankDetailColumns);
+    $fspHeadings = array_values($visibleFspColumns);
 @endphp
 <details class="card" style="padding:0;margin-bottom:20px;" open>
     <summary style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#edf2f7;cursor:pointer;list-style:none;border-radius:6px;font-size:12px;font-weight:800;color:#4a5568;text-transform:uppercase;letter-spacing:.08em;">
         <span>Transaction Filters</span>
         <span style="color:#718096;">Collapse⌄</span>
     </summary>
-    <form action="{{ route('viefund-transactions.index') }}" method="GET" style="padding:20px 24px;" data-inception-dates='@json($inceptionDates)'>
+    <form action="{{ route('viefund-transactions.filters') }}" method="POST" style="padding:20px 24px;" data-inception-dates='@json($inceptionDates)'>
+        @csrf
         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;margin-bottom:16px;">
             <div>
                 <label for="all-customer-search" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Customer</label>
@@ -195,6 +125,7 @@
                         <option value="{{ $type }}" {{ in_array($type, (array)($filters['trx_type'] ?? []), true) ? 'selected' : '' }}>{{ $type }}</option>
                     @endforeach
                 </select>
+                <div class="all-transactions-filter-help">No selection means all transaction types.</div>
             </fieldset>
 
             <fieldset class="all-transactions-filter-group all-transactions-status-filter">
@@ -296,6 +227,29 @@
         font-size:11px;
         line-height:1.35;
     }
+    .all-transactions-working-set-status {
+        display:inline-flex;
+        align-items:center;
+        min-height:26px;
+        padding:4px 9px;
+        border:1px solid #f59e0b;
+        border-radius:5px;
+        background:#fffbeb;
+        color:#92400e;
+        font-size:11px;
+        font-weight:700;
+        line-height:1.35;
+    }
+    .all-transactions-working-set-status--ready {
+        border-color:#10b981;
+        background:#ecfdf5;
+        color:#065f46;
+    }
+    .all-transactions-working-set-status--failed {
+        border-color:#ef4444;
+        background:#fef2f2;
+        color:#991b1b;
+    }
     .all-transactions-info {
         position:relative;
         display:inline-flex;
@@ -371,16 +325,18 @@
     #all-transactions-table td.all-transactions-bank-column {
         background:#f1faf5;
     }
-    #all-transactions-table td.all-transactions-bank-column.all-transactions-wire-fee-cell {
-        background:#fffaf0;
-        color:#975a16;
+    #all-transactions-table th.all-transactions-reconciliation-column {
+        background:#fff;
+        color:#2d3748;
     }
-    #all-transactions-table tr.all-transactions-wire-fee-row > td {
-        border-top:1px solid #ecc94b;
-        border-bottom:1px solid #ecc94b;
+    #all-transactions-table .all-transactions-reconciliation-start {
+        border-left:3px solid #4a5568;
     }
-    #all-transactions-table tr.all-transactions-wire-fee-row > td:not(.all-transactions-eft-column):not(.all-transactions-bank-column):not(.all-transactions-fsp-column) {
-        background:#fffaf0;
+    #all-transactions-table .all-transactions-reconciliation-end {
+        border-right:3px solid #4a5568;
+    }
+    #all-transactions-table .all-transactions-reconciliation-column.all-transactions-bank-group-start {
+        border-left:0;
     }
     #all-transactions-table th.all-transactions-fsp-column {
         background:#eadcf4;
@@ -399,7 +355,265 @@
         border-left:3px solid #805ad5;
     }
     #all-transactions-table tbody td {
-        vertical-align:middle;
+        vertical-align:top;
+    }
+    #all-transactions-table tbody td.all-transactions-reconciliation-column {
+        border-bottom:1px solid rgba(74, 85, 104, .18);
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="complete"] {
+        background:#c6f6d5 !important;
+        color:#22543d !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="complete"] {
+        box-shadow:inset 5px 0 #38a169;
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="possible"] {
+        background:#bee3f8 !important;
+        color:#2a4365 !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="possible"] {
+        box-shadow:inset 5px 0 #4299e1;
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="verify"] {
+        background:#fefcbf !important;
+        color:#975a16 !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="verify"] {
+        box-shadow:inset 5px 0 #d69e2e;
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="unknown"],
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="loading"] {
+        background:#edf2f7 !important;
+        color:#4a5568 !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="unknown"],
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="loading"] {
+        box-shadow:inset 5px 0 #a0aec0;
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="error"] {
+        background:#fed7d7 !important;
+        color:#9b2c2c !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="error"] {
+        box-shadow:inset 5px 0 #e53e3e;
+    }
+    #all-transactions-table tbody tr {
+        cursor:pointer;
+    }
+    #all-transactions-table tbody tr:hover > td {
+        background:#e6fffa !important;
+    }
+    #all-transactions-table tbody tr:hover > td.all-transactions-reconciliation-column {
+        background:#e6fffa !important;
+        color:#234e52 !important;
+    }
+    #all-transactions-table tbody tr.all-transactions-row-selected > td,
+    #all-transactions-table tbody tr.all-transactions-row-selected:hover > td {
+        background:#fff5b8 !important;
+        border-top-color:#d69e2e;
+        border-bottom-color:#d69e2e;
+    }
+    #all-transactions-table tbody tr.all-transactions-row-selected > td.all-transactions-reconciliation-column,
+    #all-transactions-table tbody tr.all-transactions-row-selected:hover > td.all-transactions-reconciliation-column {
+        background:#fff5b8 !important;
+        color:#744210 !important;
+    }
+    #all-transactions-table thead th {
+        position:sticky;
+        top:0;
+        z-index:4;
+        background:#f7fafc;
+        box-shadow:inset 0 -2px 0 #cbd5e0;
+    }
+    .all-transactions-table-card {
+        position:relative;
+    }
+    .all-transactions-table-toolbar {
+        position:sticky;
+        top:0;
+        z-index:8;
+        display:grid;
+        grid-template-columns:minmax(190px,.75fr) minmax(510px,1.5fr) minmax(190px,.55fr);
+        align-items:center;
+        gap:24px;
+        padding:16px 20px;
+        border-radius:6px 6px 0 0;
+        border-bottom:1px solid #bee3f8;
+        background:linear-gradient(90deg,#ebf8ff,#f0fff4);
+        box-shadow:0 2px 5px rgba(45,55,72,.12);
+    }
+    .all-transactions-toolbar-title-kicker,
+    .all-transactions-toolbar-section-label {
+        color:#2c5282;
+        font-size:11px;
+        font-weight:800;
+        text-transform:uppercase;
+        letter-spacing:.08em;
+    }
+    .all-transactions-toolbar-title {
+        margin-top:3px;
+        color:#1a365d;
+        font-size:24px;
+        font-weight:700;
+    }
+    .all-transactions-match-controls {
+        min-width:0;
+        margin:0;
+        padding:0;
+        border:0;
+    }
+    .all-transactions-match-controls legend {
+        margin-bottom:8px;
+        padding:0;
+        color:#4a5568;
+        font-size:11px;
+        font-weight:800;
+        text-transform:uppercase;
+        letter-spacing:.06em;
+    }
+    .all-transactions-match-controls-row {
+        display:flex;
+        align-items:center;
+        gap:12px;
+        flex-wrap:wrap;
+    }
+    .all-transactions-match-controls-row > span,
+    .all-transactions-match-controls-row label {
+        color:#4a5568;
+        font-size:13px;
+        white-space:nowrap;
+    }
+    .all-transactions-match-controls-row > span {
+        font-weight:700;
+    }
+    .all-transactions-match-controls-row label {
+        display:flex;
+        align-items:center;
+        gap:5px;
+        cursor:pointer;
+    }
+    .all-transactions-match-controls-row input {
+        width:15px;
+        height:15px;
+    }
+    #all-transactions-apply-match-filter {
+        min-height:34px;
+        margin-left:4px;
+        padding:6px 14px;
+        border:1px solid #2b6cb0;
+        border-radius:4px;
+        background:#2b6cb0;
+        color:#fff;
+        font-size:12px;
+        font-weight:800;
+        cursor:pointer;
+    }
+    #all-transactions-apply-match-filter:hover,
+    #all-transactions-apply-match-filter:focus-visible {
+        background:#2c5282;
+    }
+    #all-transactions-clear-match-filter {
+        min-height:34px;
+        padding:6px 12px;
+        border:1px solid #a0aec0;
+        border-radius:4px;
+        background:#fff;
+        color:#4a5568;
+        font-size:12px;
+        font-weight:800;
+        cursor:pointer;
+    }
+    #all-transactions-clear-match-filter:hover,
+    #all-transactions-clear-match-filter:focus-visible {
+        border-color:#718096;
+        background:#edf2f7;
+        color:#2d3748;
+    }
+    .all-transactions-export-zone {
+        display:flex;
+        min-height:64px;
+        padding-left:22px;
+        border-left:1px solid #9ae6b4;
+        flex-direction:column;
+        justify-content:center;
+        gap:7px;
+    }
+    #all-transactions-excel-export {
+        width:100%;
+        min-width:175px;
+        padding:8px 30px 8px 14px;
+        font-size:13px;
+        white-space:nowrap;
+        cursor:pointer;
+    }
+    .all-transactions-pagination {
+        display:flex;
+        align-items:center;
+        justify-content:flex-end;
+        gap:10px;
+        margin-left:auto;
+        flex-wrap:wrap;
+    }
+    .all-transactions-page-links {
+        display:flex;
+        align-items:center;
+        gap:4px;
+    }
+    .all-transactions-page-link,
+    .all-transactions-page-current {
+        display:inline-flex;
+        min-width:34px;
+        height:34px;
+        padding:0 9px;
+        align-items:center;
+        justify-content:center;
+        border:1px solid #cbd5e0;
+        border-radius:4px;
+        background:#fff;
+        color:#2b6cb0;
+        font-size:12px;
+        font-weight:700;
+        line-height:1;
+        text-decoration:none;
+    }
+    .all-transactions-page-link:hover,
+    .all-transactions-page-link:focus-visible {
+        border-color:#4299e1;
+        background:#ebf8ff;
+    }
+    .all-transactions-page-current {
+        border-color:#2b6cb0;
+        background:#2b6cb0;
+        color:#fff;
+    }
+    .all-transactions-page-ellipsis {
+        padding:0 3px;
+        color:#718096;
+    }
+    .all-transactions-page-jump {
+        display:none;
+        align-items:center;
+        gap:6px;
+        white-space:nowrap;
+    }
+    .all-transactions-page-jump input {
+        width:72px;
+        height:34px;
+        padding:5px 8px;
+        border:1px solid #cbd5e0;
+        border-radius:4px;
+        font-size:12px;
+    }
+    .all-transactions-page-jump button {
+        height:34px;
+        padding:0 11px;
+        border:1px solid #2b6cb0;
+        border-radius:4px;
+        background:#fff;
+        color:#2b6cb0;
+        font-size:12px;
+        font-weight:700;
+        cursor:pointer;
     }
     .all-transactions-linked-value {
         display:flex;
@@ -419,53 +633,123 @@
         text-overflow:ellipsis;
         white-space:nowrap;
     }
+    .all-transactions-summary-grid {
+        display:grid;
+        grid-template-columns:repeat(5,minmax(150px,1fr));
+        gap:12px;
+    }
+    .all-transactions-summary-card {
+        padding:14px 16px;
+        min-height:78px;
+    }
+    .all-transactions-summary-label {
+        font-size:11px;
+        font-weight:700;
+        color:#718096;
+        text-transform:uppercase;
+        letter-spacing:.04em;
+    }
+    .all-transactions-summary-value {
+        margin-top:4px;
+        color:#2d3748;
+        font-size:20px;
+        font-weight:700;
+        font-variant-numeric:tabular-nums;
+    }
     @media (max-width: 1100px) {
         .all-transactions-date-filters { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
         .all-transactions-secondary-filters { grid-template-columns:1fr; }
+        .all-transactions-summary-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
+        .all-transactions-table-toolbar { grid-template-columns:1fr; gap:16px; }
+        .all-transactions-export-zone { min-height:0; padding:14px 0 0; border-top:1px solid #9ae6b4; border-left:0; }
+        #all-transactions-excel-export { width:min(100%,320px); }
     }
     @media (max-width: 700px) {
         .all-transactions-date-filters { grid-template-columns:1fr !important; }
+        .all-transactions-summary-grid { grid-template-columns:1fr; }
     }
 </style>
 
 @if($connectionError)
     <div class="alert alert-error">{{ $connectionError }}</div>
 @elseif($transactions)
-    <div class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:16px 20px;background:linear-gradient(90deg,#ebf8ff,#f0fff4);border-bottom:1px solid #bee3f8;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+    <section id="all-transactions-summary" aria-labelledby="all-transactions-summary-heading" aria-busy="true" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
             <div>
-                <div style="font-size:11px;font-weight:700;color:#2c5282;text-transform:uppercase;letter-spacing:.08em;">VieFund Transactions</div>
-                <div style="font-size:24px;font-weight:700;color:#1a365d;">All Transactions</div>
+                <h3 id="all-transactions-summary-heading" style="margin:0;color:#2d3748;">Unfiltered Period Summary</h3>
+                <div style="margin-top:3px;color:#718096;font-size:12px;">Cash-ledger totals for the selected period, date basis, currency, and statuses. Table search and detail filters do not affect these values.</div>
             </div>
-            <div style="display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;justify-content:flex-end;">
-                <fieldset style="margin:0;padding:0;border:0;">
-                    <legend style="margin-bottom:7px;padding:0;color:#4a5568;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;">
-                        Display Matched Data
-                        <span class="all-transactions-info" tabindex="0" aria-label="Excel export layout information">
-                            i
-                            <span class="all-transactions-info-popover" role="tooltip">Single Sheet appends the selected EFT, Bank, and FSP details to each transaction row. Split Sheets writes a Transactions sheet plus deduplicated sheets for the matched data selected above. AGRA and 7960 use the same FSP columns and are identified by FSP Source.</span>
-                        </span>
-                    </legend>
-                    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-                        <label for="all-transactions-show-eft" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
-                            <input type="checkbox" id="all-transactions-show-eft" style="width:16px;height:16px;">
-                            EFT
-                        </label>
-                        <label for="all-transactions-show-bank" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
-                            <input type="checkbox" id="all-transactions-show-bank" style="width:16px;height:16px;">
-                            Bank
-                        </label>
-                        <label for="all-transactions-show-fsp-agra" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
-                            <input type="checkbox" id="all-transactions-show-fsp-agra" style="width:16px;height:16px;">
-                            FSP (AGRA)
-                        </label>
-                        <label for="all-transactions-show-fsp-7960" style="display:flex;align-items:center;gap:6px;color:#4a5568;font-size:13px;cursor:pointer;white-space:nowrap;">
-                            <input type="checkbox" id="all-transactions-show-fsp-7960" style="width:16px;height:16px;">
-                            FSP (7960)
-                        </label>
+            <div id="all-transactions-summary-source" style="display:none;align-items:center;gap:7px;color:#4a5568;font-size:12px;">
+                <strong>Balance source:</strong>
+                <span id="all-transactions-summary-source-badge" style="display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:999px;font-weight:700;"></span>
+            </div>
+        </div>
+        <div class="all-transactions-summary-grid">
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Summary Period</div>
+                <div id="all-transactions-summary-period" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Opening Balance</div>
+                <div id="all-transactions-summary-opening" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Period Net</div>
+                <div id="all-transactions-summary-net" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Closing Balance</div>
+                <div id="all-transactions-summary-closing" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Cash Transactions</div>
+                <div id="all-transactions-summary-count" class="all-transactions-summary-value">Loading…</div>
+            </div>
+        </div>
+        <div id="all-transactions-summary-error" role="status" style="display:none;margin-top:8px;color:#b91c1c;font-size:12px;"></div>
+    </section>
+
+    <div class="card all-transactions-table-card" style="padding:0;overflow:visible;">
+        <div class="all-transactions-table-toolbar">
+            <div class="all-transactions-toolbar-title-block">
+                @if(!empty($workingSetStatus['id']))
+                    <div id="all-transactions-working-set-status"
+                         class="all-transactions-working-set-status {{ !empty($workingSetStatus['ready']) ? 'all-transactions-working-set-status--ready' : (($workingSetStatus['state'] ?? null) === 'failed' ? 'all-transactions-working-set-status--failed' : '') }}"
+                         role="status"
+                         aria-live="polite"
+                         data-status-url="{{ route('viefund-transactions.working-set.status', $workingSetStatus['id']) }}"
+                         data-ready="{{ !empty($workingSetStatus['ready']) ? '1' : '0' }}"
+                         data-queryable="{{ !empty($workingSetStatus['queryable']) ? '1' : '0' }}">
+                        @if(!empty($workingSetStatus['ready']))
+                            Period cache ready
+                        @elseif(!empty($workingSetStatus['queryable']))
+                            Partial period cache: {{ number_format($workingSetStatus['rows_cached'] ?? 0) }} rows available and growing
+                        @else
+                            Preparing first cache chunk
+                        @endif
                     </div>
-                </fieldset>
-                <select id="all-transactions-excel-export" aria-label="Export Excel" class="btn" style="padding:8px 34px 8px 14px;font-size:13px;white-space:nowrap;cursor:pointer;">
+                @else
+                    <div class="all-transactions-toolbar-title-kicker">VieFund Transactions</div>
+                @endif
+                <div class="all-transactions-toolbar-title">All Transactions</div>
+            </div>
+            <fieldset class="all-transactions-match-controls">
+                <legend>{{ !empty($workingSetStatus['queryable']) ? 'Period Match Filter' : 'Filter Current Page' }}</legend>
+                <div class="all-transactions-match-controls-row">
+                    <span>Match</span>
+                    @foreach(['Complete', 'Verify', 'Possible', 'Unknown'] as $label)
+                        <label>
+                            <input class="all-transactions-match-filter" type="checkbox" value="{{ $label }}" {{ in_array($label, $matchStatuses, true) ? 'checked' : '' }}>
+                            {{ $label }}
+                        </label>
+                    @endforeach
+                    <button id="all-transactions-apply-match-filter" type="button">Apply Filter</button>
+                    <button id="all-transactions-clear-match-filter" type="button">Clear</button>
+                </div>
+            </fieldset>
+            <div class="all-transactions-export-zone">
+                <label class="all-transactions-toolbar-section-label" for="all-transactions-excel-export">Export</label>
+                <select id="all-transactions-excel-export" aria-label="Export Excel" class="btn">
                     <option value="">↓ Export Excel</option>
                     <option value="single">Single Sheet</option>
                     <option value="split">Split Sheets (Trx, EFT, Bank, FSP)</option>
@@ -497,86 +781,70 @@
             @foreach((array) ($filters['trx_type'] ?? []) as $type)
                 <input type="hidden" name="filter_trx_type[]" value="{{ $type }}">
             @endforeach
+            @foreach($matchStatuses as $matchStatus)
+                <input type="hidden" name="filter_match_status[]" value="{{ $matchStatus }}">
+            @endforeach
             @foreach($statusIds as $statusId)
                 <input type="hidden" name="filter_status[]" value="{{ $statusId }}">
             @endforeach
         </form>
         <div id="all-transactions-export-status" role="status" style="display:none;margin:16px 20px;padding:10px 14px;border:1px solid #99f6e4;border-radius:5px;background:#ecfdf5;color:#115e59;font-size:12px;font-weight:600;"></div>
 
-        <div style="overflow-x:auto;">
-            <table id="all-transactions-table" style="width:100%;border-collapse:collapse;min-width:2200px;">
+        <div id="all-transactions-table-scroll" style="overflow:auto;max-height:72vh;position:relative;">
+            <table id="all-transactions-table" style="width:max-content;max-width:none;border-collapse:collapse;table-layout:auto;">
                 <thead>
                     <tr style="background:#f7fafc;border-bottom:2px solid #cbd5e0;">
                         @foreach($coreHeadings as $heading)
-                            <th style="padding:12px;text-align:{{ $heading['label'] === 'Amount' ? 'right' : 'left' }};font-weight:700;color:#2d3748;white-space:nowrap;">
+                            <th class="{{ $heading['key'] === 'matched_to_bank' ? 'all-transactions-reconciliation-column all-transactions-reconciliation-start' : '' }}" style="padding:12px;text-align:{{ $heading['label'] === 'Amount' ? 'right' : 'left' }};font-weight:700;color:{{ $heading['key'] === 'matched_to_bank' ? '#22543d' : '#2d3748' }};white-space:nowrap;">
                                 @if(!empty($heading['sort']))
                                     <a href="{{ $sortUrl($heading['sort']) }}" style="color:#2d3748;text-decoration:none;">{{ $heading['label'] }}{{ $sortIndicator($heading['sort']) }}</a>
                                 @else
                                     {{ $heading['label'] }}
                                 @endif
                             </th>
+                            @if($heading['key'] === 'matched_to_bank')
+                                @foreach($bankSummaryHeadings as $bankSummaryHeading)
+                                    <th class="all-transactions-bank-column all-transactions-reconciliation-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }} {{ $loop->last ? 'all-transactions-reconciliation-end' : '' }}" style="padding:12px;text-align:{{ $bankSummaryHeading['field'] === 'reconciliation_variance' ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $bankSummaryHeading['width'] ?? 220 }}px;">{{ $bankSummaryHeading['label'] }}</th>
+                                @endforeach
+                            @endif
                         @endforeach
                         @foreach($eftHeadings as $heading)
-                            <th class="all-transactions-eft-column {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" style="display:none;padding:12px;text-align:{{ $heading['field'] === 'amount' ? 'right' : 'left' }};font-weight:700;white-space:nowrap;min-width:{{ $heading['width'] ?? 105 }}px;">{{ $heading['label'] }}</th>
-                        @endforeach
-                        @foreach($bankHeadings as $heading)
-                            <th class="all-transactions-bank-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" style="display:none;padding:12px;text-align:{{ in_array($heading['field'], ['amount','reconciliation_variance'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;min-width:{{ $heading['width'] ?? 110 }}px;">{{ $heading['label'] }}</th>
+                            <th class="all-transactions-eft-column {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','file_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
                         @endforeach
                         @foreach($fspHeadings as $heading)
-                            <th class="all-transactions-fsp-column {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" style="display:none;padding:12px;text-align:{{ in_array($heading['field'], ['gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;min-width:{{ $heading['width'] ?? 110 }}px;">{{ $heading['label'] }}</th>
+                            <th class="all-transactions-fsp-column {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['items_total','gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
+                        @endforeach
+                        @foreach($bankHeadings as $heading)
+                            <th class="all-transactions-bank-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','transaction_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
                         @endforeach
                     </tr>
                 </thead>
-                <tbody>
-                    @forelse($transactions as $transaction)
-                        @php $amount = $transaction->amount !== null ? (float) $transaction->amount : null; @endphp
-                        <tr style="border-bottom:1px solid #e2e8f0;">
-                            <td class="all-transactions-match-status-cell" data-trust-id="{{ $transaction->trust_transaction_id ?: '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" style="padding:12px;font-family:monospace;font-weight:700;white-space:nowrap;color:#718096;">Loading…</td>
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->transaction_id }}</td>
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->fund_transaction_id ? 'F-'.$transaction->fund_transaction_id : '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->trust_transaction_id ? 'T-'.$transaction->trust_transaction_id : '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->ledger_relationship }}</td>
-                            <td style="padding:12px;font-family:monospace;">{{ $transaction->source_id ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;">{{ $transaction->customer_name ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->plan_account_id ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;">{{ $transaction->transaction_type ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;">{{ $transaction->status ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;">{{ $transaction->trust_status ?: '–' }}</td>
-                            <td style="padding:12px;font-family:monospace;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ $transaction->notes }}">{{ $transaction->notes ?: '–' }}</td>
-                            @foreach(['created_date','trade_date','processing_date','settlement_date'] as $dateField)
-                                <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $transaction->{$dateField} ? date('m/d/Y H:i', strtotime($transaction->{$dateField})) : '–' }}</td>
-                            @endforeach
-                            <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $currencyOptions[$transaction->currency_code] ?? ($transaction->currency_code ?: '–') }}</td>
-                            <td style="padding:12px;text-align:right;color:{{ $amount === null || $amount == 0 ? '#718096' : ($amount < 0 ? '#c53030' : '#276749') }};font-family:monospace;font-weight:600;">{{ $amount === null ? '–' : ($amount < 0 ? '($'.number_format(abs($amount), 2).')' : '$'.number_format($amount, 2)) }}</td>
-                            @foreach($eftHeadings as $heading)
-                                <td class="all-transactions-eft-column all-transactions-eft-cell {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" data-trust-id="{{ $transaction->trust_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="display:none;padding:12px;font-family:monospace;min-width:{{ $heading['width'] ?? 105 }}px;text-align:{{ $heading['field'] === 'amount' ? 'right' : 'left' }};"><span>—</span></td>
-                            @endforeach
-                            @foreach($bankHeadings as $heading)
-                                <td class="all-transactions-bank-column all-transactions-bank-cell {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" data-trust-id="{{ $transaction->trust_transaction_id ?: '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="display:none;padding:12px;font-family:monospace;min-width:{{ $heading['width'] ?? 110 }}px;text-align:{{ in_array($heading['field'], ['amount','reconciliation_variance'], true) ? 'right' : 'left' }};"><span>—</span></td>
-                            @endforeach
-                            @foreach($fspHeadings as $heading)
-                                <td class="all-transactions-fsp-column all-transactions-fsp-cell {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="display:none;padding:12px;font-family:monospace;min-width:{{ $heading['width'] ?? 110 }}px;text-align:{{ in_array($heading['field'], ['gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};"><span>—</span></td>
-                            @endforeach
-                        </tr>
-                    @empty
-                        <tr><td colspan="{{ count($coreHeadings) + count($eftHeadings) + count($bankHeadings) + count($fspHeadings) }}" style="padding:48px;text-align:center;color:#718096;">No VieFund cash-ledger transactions were found.</td></tr>
-                    @endforelse
+                <tbody id="all-transactions-table-body">
+                    @include('viefund-transactions.partials.rows')
                 </tbody>
             </table>
         </div>
 
         <div style="padding:14px 16px;border-top:1px solid #e2e8f0;display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:#718096;">
             <label for="per-page">Rows per page:</label>
-            <select id="per-page" onchange="window.location=this.value" style="border:1px solid #cbd5e0;border-radius:4px;padding:5px 8px;background:#fff;">
+            <select id="per-page" style="border:1px solid #cbd5e0;border-radius:4px;padding:5px 8px;background:#fff;">
                 @foreach([50,100,250] as $option)
                     <option value="{{ request()->fullUrlWithQuery(['per_page'=>$option,'page'=>1]) }}" {{ $perPage === $option ? 'selected' : '' }}>{{ $option }}</option>
                 @endforeach
             </select>
             <span>
-                Showing {{ number_format($transactions->firstItem() ?? 0) }}–{{ number_format($transactions->lastItem() ?? 0) }} transactions
+                <span id="all-transactions-range-summary">Showing {{ number_format($transactions->firstItem() ?? 0) }}–{{ number_format($transactions->lastItem() ?? 0) }} transactions</span>
                 <span id="all-transactions-total-summary" style="color:#718096;" aria-live="polite"> · Calculating filtered total…</span>
             </span>
-            <div style="margin-left:auto;">{{ $transactions->withQueryString()->links() }}</div>
+            <nav id="all-transactions-pagination" class="all-transactions-pagination" aria-label="Transaction pages">
+                <div id="all-transactions-simple-pagination">{{ $transactions->withQueryString()->links() }}</div>
+                <div id="all-transactions-numbered-pagination" class="all-transactions-page-links" hidden></div>
+                <form id="all-transactions-page-jump" class="all-transactions-page-jump">
+                    <label for="all-transactions-page-number">Go to page</label>
+                    <input id="all-transactions-page-number" type="number" min="1" step="1" inputmode="numeric" aria-label="Page number">
+                    <button type="submit">Go</button>
+                </form>
+            </nav>
         </div>
     </div>
 @endif
@@ -584,15 +852,12 @@
 <script>
 (() => {
     const ACTIVE_RUN_KEY = 'viefundAllTransactionsActiveRunId';
-    const EFT_MATCH_VISIBILITY_KEY = 'viefundAllTransactionsShowEftMatches';
-    const BANK_MATCH_VISIBILITY_KEY = 'viefundAllTransactionsShowBankMatches';
-    const FSP_AGRA_VISIBILITY_KEY = 'viefundAllTransactionsShowAgraFspMatches';
-    const FSP_7960_VISIBILITY_KEY = 'viefundAllTransactionsShow7960FspMatches';
     let pollTimer = null;
     let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
     let lastProgress = 0;
     let reconciliationMatchesLoaded = false;
     let reconciliationMatchesLoading = false;
+    let tablePageGeneration = 0;
     const fspMatchesLoaded = {agra: false, '7960': false};
     const fspMatchesLoading = {agra: false, '7960': false};
     const statusLoadFailed = {eft: false, agra: false, '7960': false};
@@ -603,6 +868,24 @@
     const fspMatchStatusesBySource = {agra: {}, '7960': {}};
 
     const filterForm = document.querySelector('form[data-inception-dates]');
+    const transactionTypeSelect = document.getElementById('all-trx-types');
+    filterForm?.addEventListener('submit', () => {
+        const options = Array.from(transactionTypeSelect?.options || []);
+        if (options.length > 0 && options.every((option) => option.selected)) {
+            options.forEach((option) => {
+                option.selected = false;
+            });
+        }
+        filterForm.querySelectorAll('[data-match-status-filter]').forEach((input) => input.remove());
+        matchStatusInputs.filter((input) => input.checked).forEach((input) => {
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'filter_match_status[]';
+            hidden.value = input.value;
+            hidden.dataset.matchStatusFilter = '1';
+            filterForm.appendChild(hidden);
+        });
+    });
     const dateBasis = document.getElementById('all-date-basis');
     const dateFrom = document.getElementById('all-date-from');
     const inceptionButton = document.getElementById('all-set-inception-date');
@@ -620,28 +903,27 @@
     });
     updateInceptionControl();
 
-    const eftToggle = document.getElementById('all-transactions-show-eft');
-    const bankToggle = document.getElementById('all-transactions-show-bank');
-    const fspAgraToggle = document.getElementById('all-transactions-show-fsp-agra');
-    const fsp7960Toggle = document.getElementById('all-transactions-show-fsp-7960');
-    const transactionsTable = document.getElementById('all-transactions-table');
-    const eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
-    const eftCells = Array.from(document.querySelectorAll('.all-transactions-eft-cell'));
-    const bankColumns = Array.from(document.querySelectorAll('.all-transactions-bank-column'));
-    const bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
-    const fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
-    const fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
-    const transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
+    const matchStatusInputs = Array.from(document.querySelectorAll('.all-transactions-match-filter'));
+    const applyMatchFilterButton = document.getElementById('all-transactions-apply-match-filter');
+    const clearMatchFilterButton = document.getElementById('all-transactions-clear-match-filter');
+    const workingSetStatus = document.getElementById('all-transactions-working-set-status');
+    const setWorkingSetStatus = (state, message) => {
+        if (!workingSetStatus) return;
+        workingSetStatus.classList.toggle('all-transactions-working-set-status--ready', state === 'ready');
+        workingSetStatus.classList.toggle('all-transactions-working-set-status--failed', state === 'failed');
+        workingSetStatus.textContent = message;
+    };
+    let eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
+    let eftCells = Array.from(document.querySelectorAll('.all-transactions-eft-cell'));
+    let bankColumns = Array.from(document.querySelectorAll('.all-transactions-bank-column'));
+    let bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
+    let fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
+    let fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
+    let transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
     const setColumnVisible = (columns, visible) => {
         columns.forEach((column) => {
             column.style.display = visible ? '' : 'none';
         });
-    };
-    const updateTableWidth = () => {
-        if (!transactionsTable) return;
-        const showFsp = fspAgraToggle?.checked || fsp7960Toggle?.checked;
-        const width = 2200 + (eftToggle?.checked ? 2400 : 0) + (bankToggle?.checked ? 3000 : 0) + (showFsp ? 3960 : 0);
-        transactionsTable.style.minWidth = `${width}px`;
     };
     const formatLinkedDate = (value, includeTime = false) => {
         if (!value) return '—';
@@ -658,7 +940,7 @@
         return amount < 0 ? `($${formatted})` : `$${formatted}`;
     };
     const linkedRecordValue = (record, type, field) => {
-        if (['amount', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field)) return formatLinkedAmount(record[field]);
+        if (['amount', 'transaction_total', 'file_total', 'items_total', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field)) return formatLinkedAmount(record[field]);
         if (['effective_date', 'create_date', 'trade_date', 'settlement_date', 'value_date', 'booking_date'].includes(field)) {
             return formatLinkedDate(record[field]);
         }
@@ -670,6 +952,20 @@
         if (type === 'fsp' && field === 'id') return `FSP item #${record.id}`;
         const value = record[field];
         return value === null || value === undefined || value === '' ? '—' : String(value);
+    };
+    const bankTransactionGroupUrl = (records) => {
+        const transactionIds = [...new Set(records
+            .map((record) => Number(record.id))
+            .filter((id) => Number.isInteger(id) && id > 0))];
+        const firstLinkedRecord = records.find((record) => record.url);
+        if (transactionIds.length === 0 || !firstLinkedRecord?.url) return null;
+
+        const url = new URL(firstLinkedRecord.url, window.location.origin);
+        url.searchParams.delete('entry_id');
+        url.searchParams.delete('settlement_numbers');
+        url.searchParams.delete('all_dates');
+        url.searchParams.set('entry_ids', transactionIds.join(','));
+        return url.toString();
     };
     const renderLinkedRecords = (cell, records, type) => {
         cell.replaceChildren();
@@ -686,28 +982,52 @@
             return;
         }
 
-        records.forEach((record) => {
+        const displayedRecords = type === 'bank' && cell.dataset.recordField === 'transaction_total'
+            ? [{
+                transaction_total: records.reduce((total, record) => total + Number(record.amount || 0), 0),
+                url: bankTransactionGroupUrl(records),
+            }]
+            : records;
+        displayedRecords.forEach((record) => {
             const row = document.createElement('div');
             row.className = 'all-transactions-linked-value';
             const field = cell.dataset.recordField;
-            if (['amount', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field)) {
+            if (['amount', 'transaction_total', 'file_total', 'items_total', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field)) {
                 row.style.justifyContent = 'flex-end';
                 row.style.textAlign = 'right';
             }
             const value = linkedRecordValue(record, type, field);
             row.title = value === '—' ? '' : value;
-            const isLink = (type === 'eft' && field === 'file_name')
-                || (type === 'bank' && field === 'id')
-                || (type === 'fsp' && field === 'source_file');
-            if (isLink && record.url) {
+            const isFspFileLink = type === 'fsp' && field === 'source_file';
+            const isFspItemLink = type === 'fsp' && field === 'settlement_amount';
+            const isBankFileLink = type === 'bank' && field === 'source_file';
+            const isBankAccountLink = type === 'bank' && field === 'account_number';
+            const isLink = (type === 'eft' && ['file_name', 'holder_name'].includes(field))
+                || (type === 'bank' && ['id', 'amount', 'transaction_total'].includes(field))
+                || isBankFileLink
+                || isBankAccountLink
+                || isFspFileLink
+                || isFspItemLink;
+            const linkUrl = type === 'eft' && field === 'holder_name'
+                ? record.linked_item_url
+                : (isBankAccountLink
+                    ? record.account_url
+                    : ((isBankFileLink || isFspFileLink) ? record.file_url : (isFspItemLink ? record.item_url : record.url)));
+            if (isLink && linkUrl) {
                 const link = document.createElement('a');
-                link.href = record.url;
+                link.href = linkUrl;
                 link.target = '_blank';
                 link.rel = 'noopener noreferrer';
                 link.textContent = value;
                 link.title = type === 'eft'
-                    ? 'Open the matched EFT item'
-                    : (type === 'bank' ? 'Open this bank transaction' : 'Open this FSP item');
+                    ? (field === 'file_name' ? 'Open the complete EFT file' : 'Open the linked EFT item')
+                    : (type === 'bank'
+                        ? (isBankAccountLink
+                            ? 'Open this bank account statement'
+                            : (isBankFileLink
+                            ? 'Open statements from this bank source file'
+                            : (field === 'transaction_total' ? 'Open all bank transactions included in this total' : 'Open this bank transaction')))
+                        : (isFspFileLink ? 'Open this FSP file' : 'Open this FSP item'));
                 link.style.color = '#2b6cb0';
                 link.style.fontWeight = '600';
                 link.style.textDecoration = 'underline';
@@ -719,12 +1039,12 @@
                 if (type === 'eft' && field === 'bank_match_status') {
                     text.style.color = value === 'Complete'
                         ? '#276749'
-                        : (value === 'To be verified'
+                        : (value === 'Verify'
                             ? '#b7791f'
-                            : (value === 'Possible match' ? '#2b6cb0' : '#718096'));
+                            : (value === 'Possible' ? '#2b6cb0' : '#718096'));
                     text.style.fontWeight = '700';
                 }
-                if (['amount', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field) && record[field] !== null && record[field] !== undefined) {
+                if (['amount', 'transaction_total', 'file_total', 'items_total', 'gross_amount', 'net_amount', 'settlement_amount', 'reconciliation_variance'].includes(field) && record[field] !== null && record[field] !== undefined) {
                     const amount = Number(record[field]);
                     text.style.color = field === 'reconciliation_variance' && record.is_possible_wire_fee_match
                         ? '#b7791f'
@@ -737,37 +1057,20 @@
         });
     };
     const renderBankRecords = () => {
-        const selectedFspSources = [
-            fspAgraToggle?.checked ? 'agra' : null,
-            fsp7960Toggle?.checked ? '7960' : null,
-        ].filter(Boolean);
-        const bankFspSources = selectedFspSources.length > 0 ? selectedFspSources : ['agra', '7960'];
         bankCells.forEach((cell) => {
             const eftRecords = eftBankRecordsByTrust[cell.dataset.trustId] || [];
-            const fspRecords = bankFspSources.flatMap(
+            const fspRecords = ['agra', '7960'].flatMap(
                 (source) => fspBankRecordsBySource[source]?.[cell.dataset.cashId] || []
             );
             const records = [...fspRecords, ...eftRecords].filter((record, index, all) =>
                 all.findIndex((candidate) => Number(candidate.id) === Number(record.id)) === index
             );
-            cell.classList.toggle(
-                'all-transactions-wire-fee-cell',
-                fspRecords.some((record) => record.is_possible_wire_fee_match === true)
-            );
-            cell.closest('tr')?.classList.toggle(
-                'all-transactions-wire-fee-row',
-                fspRecords.some((record) => record.is_possible_wire_fee_match === true)
-            );
             renderLinkedRecords(cell, records, 'bank');
         });
     };
     const renderFspRecords = () => {
-        const selectedSources = [
-            fspAgraToggle?.checked ? 'agra' : null,
-            fsp7960Toggle?.checked ? '7960' : null,
-        ].filter(Boolean);
         fspCells.forEach((cell) => {
-            const records = selectedSources.flatMap(
+            const records = ['agra', '7960'].flatMap(
                 (source) => fspRecordsBySource[source]?.[cell.dataset.cashId] || []
             );
             renderLinkedRecords(cell, records, 'fsp');
@@ -777,21 +1080,43 @@
         const values = statuses.filter(Boolean);
         if (values.length === 0) return null;
         if (values.every((status) => status === 'Complete')) return 'Complete';
-        if (values.includes('Complete') || values.includes('To be verified')) return 'To be verified';
-        if (values.includes('Possible match')) return 'Possible match';
+        if (values.includes('Complete') || values.includes('Verify')) return 'Verify';
+        if (values.includes('Possible')) return 'Possible';
         return 'Unknown';
+    };
+    const applyLocalMatchFilters = () => {
+        const selected = matchStatusInputs
+            .filter((input) => input.checked)
+            .map((input) => input.value.toLowerCase());
+        document.querySelectorAll('#all-transactions-table-body tr[data-transaction-row]').forEach((row) => {
+            const status = row.querySelector('.all-transactions-match-status-cell')?.dataset.matchStatus || 'loading';
+            row.hidden = selected.length > 0 && !selected.includes(status);
+        });
+    };
+    const setTransactionMatchStatusAppearance = (cell, status) => {
+        const normalized = String(status || '').toLowerCase();
+        const appearance = normalized === 'complete'
+            ? 'complete'
+            : (normalized === 'possible'
+                ? 'possible'
+                : (normalized === 'verify'
+                    ? 'verify'
+                    : (normalized === 'unable to load' ? 'error' : (normalized === 'loading…' ? 'loading' : 'unknown'))));
+        cell.closest('tr')?.querySelectorAll('.all-transactions-reconciliation-column').forEach((column) => {
+            column.dataset.matchStatus = appearance;
+        });
     };
     const renderTransactionMatchStatuses = () => {
         const ready = reconciliationMatchesLoaded && fspMatchesLoaded.agra && fspMatchesLoaded['7960'];
         transactionStatusCells.forEach((cell) => {
             if (!ready) {
                 cell.textContent = 'Loading…';
-                cell.style.color = '#718096';
+                setTransactionMatchStatusAppearance(cell, 'Loading…');
                 return;
             }
             if (statusLoadFailed.eft || statusLoadFailed.agra || statusLoadFailed['7960']) {
                 cell.textContent = 'Unable to load';
-                cell.style.color = '#c53030';
+                setTransactionMatchStatusAppearance(cell, 'Unable to load');
                 return;
             }
 
@@ -803,7 +1128,7 @@
                 .map((source) => fspMatchStatusesBySource[source][cashId]);
             const hasFsp = fspStatuses.length > 0;
             const status = hasEft && hasFsp
-                ? 'To be verified'
+                ? 'Verify'
                 : (hasEft
                     ? eftMatchStatusesByTrust[trustId]
                     : (summarizeMatchStatuses(fspStatuses) || 'Unknown'));
@@ -812,15 +1137,13 @@
             cell.title = hasEft && hasFsp
                 ? 'This transaction has both EFT and FSP supporting records and should be reviewed.'
                 : '';
-            cell.style.color = status === 'Complete'
-                ? '#276749'
-                : (status === 'To be verified'
-                    ? '#b7791f'
-                    : (status === 'Possible match' ? '#2b6cb0' : '#718096'));
+            setTransactionMatchStatusAppearance(cell, status);
         });
+        applyLocalMatchFilters();
     };
     const loadReconciliationMatches = async () => {
         if (reconciliationMatchesLoaded || reconciliationMatchesLoading || (eftCells.length === 0 && bankCells.length === 0 && transactionStatusCells.length === 0)) return;
+        const generation = tablePageGeneration;
         const matchCells = [...eftCells, ...bankCells];
         const trustIds = [...new Set([...matchCells, ...transactionStatusCells].map((cell) => cell.dataset.trustId).filter(Boolean))];
         matchCells.forEach((cell) => {
@@ -852,6 +1175,7 @@
                 body: JSON.stringify({trust_ids: trustIds.map(Number)}),
             });
             const data = await response.json();
+            if (generation !== tablePageGeneration) return;
             if (!response.ok) throw new Error(data.message || 'EFT and bank matches could not be loaded.');
             eftCells.forEach((cell) => renderLinkedRecords(cell, data.eft_records?.[cell.dataset.trustId] || [], 'eft'));
             eftBankRecordsByTrust = data.bank_records || {};
@@ -860,6 +1184,7 @@
             reconciliationMatchesLoaded = true;
             renderTransactionMatchStatuses();
         } catch (error) {
+            if (generation !== tablePageGeneration) return;
             eftCells.forEach((cell) => {
                 if (!cell.dataset.trustId) return;
                 cell.replaceChildren();
@@ -876,11 +1201,12 @@
             renderBankRecords();
             renderTransactionMatchStatuses();
         } finally {
-            reconciliationMatchesLoading = false;
+            if (generation === tablePageGeneration) reconciliationMatchesLoading = false;
         }
     };
     const loadFspMatches = async (source) => {
         if (fspMatchesLoaded[source] || fspMatchesLoading[source] || (fspCells.length === 0 && transactionStatusCells.length === 0)) return;
+        const generation = tablePageGeneration;
         const cashTransactionIds = [...new Set([...fspCells, ...transactionStatusCells].map((cell) => cell.dataset.cashId).filter(Boolean))];
         if (!fspMatchesLoaded.agra && !fspMatchesLoaded['7960']) {
             fspCells.forEach((cell) => {
@@ -916,6 +1242,7 @@
                 }),
             });
             const data = await response.json();
+            if (generation !== tablePageGeneration) return;
             if (!response.ok) throw new Error(data.message || `${source.toUpperCase()} FSP matches could not be loaded.`);
             fspRecordsBySource[source] = data.fsp_records || {};
             fspBankRecordsBySource[source] = data.bank_records || {};
@@ -925,6 +1252,7 @@
             fspMatchesLoaded[source] = true;
             renderTransactionMatchStatuses();
         } catch (error) {
+            if (generation !== tablePageGeneration) return;
             fspCells.forEach((cell) => {
                 if (!cell.dataset.cashId) return;
                 const message = document.createElement('span');
@@ -938,81 +1266,274 @@
             fspMatchesLoaded[source] = true;
             renderTransactionMatchStatuses();
         } finally {
-            fspMatchesLoading[source] = false;
+            if (generation === tablePageGeneration) fspMatchesLoading[source] = false;
         }
     };
-    eftToggle?.addEventListener('change', () => {
-        const visible = eftToggle.checked;
-        setColumnVisible(eftColumns, visible);
-        updateTableWidth();
-        try {
-            sessionStorage.setItem(EFT_MATCH_VISIBILITY_KEY, visible ? '1' : '0');
-        } catch (_) {}
-        if (visible) loadReconciliationMatches();
-    });
-    bankToggle?.addEventListener('change', () => {
-        const visible = bankToggle.checked;
-        setColumnVisible(bankColumns, visible);
-        updateTableWidth();
-        try {
-            sessionStorage.setItem(BANK_MATCH_VISIBILITY_KEY, visible ? '1' : '0');
-        } catch (_) {}
-        if (visible) loadReconciliationMatches();
-        if (visible) {
-            const selectedSources = [
-                fspAgraToggle?.checked ? 'agra' : null,
-                fsp7960Toggle?.checked ? '7960' : null,
-            ].filter(Boolean);
-            (selectedSources.length > 0 ? selectedSources : ['agra', '7960']).forEach(loadFspMatches);
-        }
-    });
-    const handleFspToggle = (source, storageKey) => {
-        const visible = fspAgraToggle?.checked || fsp7960Toggle?.checked;
-        setColumnVisible(fspColumns, visible);
-        updateTableWidth();
-        renderFspRecords();
-        renderBankRecords();
-        try {
-            const toggle = source === 'agra' ? fspAgraToggle : fsp7960Toggle;
-            sessionStorage.setItem(storageKey, toggle?.checked ? '1' : '0');
-        } catch (_) {}
-        const toggle = source === 'agra' ? fspAgraToggle : fsp7960Toggle;
-        if (toggle?.checked) loadFspMatches(source);
-    };
-    fspAgraToggle?.addEventListener('change', () => handleFspToggle('agra', FSP_AGRA_VISIBILITY_KEY));
-    fsp7960Toggle?.addEventListener('change', () => handleFspToggle('7960', FSP_7960_VISIBILITY_KEY));
-    let showEftMatches = @json($hasEftMatch);
-    let showBankMatches = false;
-    let showAgraFspMatches = @json($hasAgraFspMatch);
-    let show7960FspMatches = @json($has7960FspMatch);
-    try {
-        showEftMatches = showEftMatches || sessionStorage.getItem(EFT_MATCH_VISIBILITY_KEY) === '1';
-        showBankMatches = sessionStorage.getItem(BANK_MATCH_VISIBILITY_KEY) === '1';
-        showAgraFspMatches = showAgraFspMatches || sessionStorage.getItem(FSP_AGRA_VISIBILITY_KEY) === '1';
-        show7960FspMatches = show7960FspMatches || sessionStorage.getItem(FSP_7960_VISIBILITY_KEY) === '1';
-    } catch (_) {}
-    if (eftToggle && showEftMatches) {
-        eftToggle.checked = true;
+    const initializeLinkedRecordsForCurrentPage = () => {
+        tablePageGeneration += 1;
+        eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
+        eftCells = Array.from(document.querySelectorAll('.all-transactions-eft-cell'));
+        bankColumns = Array.from(document.querySelectorAll('.all-transactions-bank-column'));
+        bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
+        fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
+        fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
+        transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
+
+        reconciliationMatchesLoaded = false;
+        reconciliationMatchesLoading = false;
+        fspMatchesLoaded.agra = false;
+        fspMatchesLoaded['7960'] = false;
+        fspMatchesLoading.agra = false;
+        fspMatchesLoading['7960'] = false;
+        statusLoadFailed.eft = false;
+        statusLoadFailed.agra = false;
+        statusLoadFailed['7960'] = false;
+        eftBankRecordsByTrust = {};
+        eftMatchStatusesByTrust = {};
+        fspRecordsBySource.agra = {};
+        fspRecordsBySource['7960'] = {};
+        fspBankRecordsBySource.agra = {};
+        fspBankRecordsBySource['7960'] = {};
+        fspMatchStatusesBySource.agra = {};
+        fspMatchStatusesBySource['7960'] = {};
+
         setColumnVisible(eftColumns, true);
-    }
-    if (bankToggle && showBankMatches) {
-        bankToggle.checked = true;
         setColumnVisible(bankColumns, true);
-    }
-    if (fspAgraToggle && showAgraFspMatches) {
-        fspAgraToggle.checked = true;
         setColumnVisible(fspColumns, true);
+        loadReconciliationMatches();
+        loadFspMatches('agra');
+        loadFspMatches('7960');
+    };
+    const applyMatchFilters = () => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('filter_match_status[]');
+        matchStatusInputs.filter((input) => input.checked).forEach((input) => {
+            url.searchParams.append('filter_match_status[]', input.value);
+        });
+        url.searchParams.set('page', '1');
+        if (workingSetStatus?.dataset.queryable === '1') {
+            window.location.assign(url.toString());
+            return;
+        }
+        window.history.replaceState({}, '', url.toString());
+        applyLocalMatchFilters();
+    };
+    applyMatchFilterButton?.addEventListener('click', applyMatchFilters);
+    clearMatchFilterButton?.addEventListener('click', () => {
+        matchStatusInputs.forEach((input) => {
+            input.checked = false;
+        });
+        applyMatchFilters();
+    });
+    initializeLinkedRecordsForCurrentPage();
+
+    if (workingSetStatus?.dataset.ready === '0' && workingSetStatus.dataset.statusUrl) {
+        const pollWorkingSet = async () => {
+            try {
+                const response = await fetch(workingSetStatus.dataset.statusUrl, {headers: {'Accept': 'application/json'}});
+                if (!response.ok) return;
+                const status = await response.json();
+                if (status.queryable && workingSetStatus.dataset.queryable !== '1') {
+                    window.location.reload();
+                    return;
+                }
+                workingSetStatus.dataset.queryable = status.queryable ? '1' : '0';
+                workingSetStatus.dataset.ready = status.ready ? '1' : '0';
+                if (status.ready) {
+                    setWorkingSetStatus('ready', `Period cache ready · ${Number(status.total_rows || status.rows_cached || 0).toLocaleString()} rows`);
+                    return;
+                }
+                if (status.state === 'failed') {
+                    setWorkingSetStatus('failed', 'Period cache unavailable; current-page filtering remains active');
+                    return;
+                }
+                setWorkingSetStatus(
+                    'warming',
+                    status.queryable
+                        ? `Partial period cache: ${Number(status.rows_cached || 0).toLocaleString()} rows available and growing`
+                        : 'Preparing first cache chunk'
+                );
+                window.setTimeout(pollWorkingSet, 2500);
+            } catch (error) {
+                window.setTimeout(pollWorkingSet, 5000);
+            }
+        };
+        window.setTimeout(pollWorkingSet, 1200);
     }
-    if (fsp7960Toggle && show7960FspMatches) {
-        fsp7960Toggle.checked = true;
-        setColumnVisible(fspColumns, true);
-    }
-    updateTableWidth();
-    loadReconciliationMatches();
-    loadFspMatches('agra');
-    loadFspMatches('7960');
 
     const totalSummary = document.getElementById('all-transactions-total-summary');
+    const simplePagination = document.getElementById('all-transactions-simple-pagination');
+    const numberedPagination = document.getElementById('all-transactions-numbered-pagination');
+    const pageJumpForm = document.getElementById('all-transactions-page-jump');
+    const pageNumberInput = document.getElementById('all-transactions-page-number');
+    const perPageSelect = document.getElementById('per-page');
+    const rangeSummary = document.getElementById('all-transactions-range-summary');
+    const transactionTable = document.getElementById('all-transactions-table');
+    const transactionTableBody = document.getElementById('all-transactions-table-body');
+    const transactionTableScroll = document.getElementById('all-transactions-table-scroll');
+    transactionTableBody?.addEventListener('click', (event) => {
+        if (event.target.closest('a, button, input, select, textarea, label, form')) return;
+        const row = event.target.closest('tr[data-transaction-row]');
+        if (!row) return;
+        const selected = row.classList.toggle('all-transactions-row-selected');
+        row.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+    let knownTotalPages = null;
+    let knownTotalRecords = null;
+    let pageRequestController = null;
+    const pageUrl = (page) => {
+        const url = new URL(window.location.href);
+        url.searchParams.set('page', String(page));
+        return url.toString();
+    };
+    const renderNumberedPagination = (currentPage, totalPages) => {
+        if (!numberedPagination || !Number.isFinite(totalPages) || totalPages < 1) return;
+
+        const current = Math.max(1, Math.min(currentPage, totalPages));
+        const pages = new Set([1, totalPages]);
+        if (totalPages <= 9) {
+            for (let page = 1; page <= totalPages; page += 1) pages.add(page);
+        } else {
+            for (let page = Math.max(1, current - 2); page <= Math.min(totalPages, current + 2); page += 1) {
+                pages.add(page);
+            }
+        }
+        const orderedPages = Array.from(pages).sort((left, right) => left - right);
+        numberedPagination.replaceChildren();
+
+        const addLink = (label, page, active = false, title = '') => {
+            const element = document.createElement(active ? 'span' : 'a');
+            element.className = active ? 'all-transactions-page-current' : 'all-transactions-page-link';
+            element.textContent = label;
+            if (title) element.title = title;
+            if (active) {
+                element.setAttribute('aria-current', 'page');
+            } else {
+                element.href = pageUrl(page);
+            }
+            numberedPagination.appendChild(element);
+        };
+
+        if (current > 1) addLink('‹', current - 1, false, 'Previous page');
+        let previousPage = null;
+        orderedPages.forEach((page) => {
+            if (previousPage !== null && page - previousPage > 1) {
+                const ellipsis = document.createElement('span');
+                ellipsis.className = 'all-transactions-page-ellipsis';
+                ellipsis.textContent = '…';
+                numberedPagination.appendChild(ellipsis);
+            }
+            addLink(String(page), page, page === current, `Page ${page}`);
+            previousPage = page;
+        });
+        if (current < totalPages) addLink('›', current + 1, false, 'Next page');
+
+        simplePagination?.setAttribute('hidden', 'hidden');
+        numberedPagination.hidden = false;
+        knownTotalPages = totalPages;
+        if (pageNumberInput) {
+            pageNumberInput.max = String(totalPages);
+            pageNumberInput.value = String(current);
+        }
+        if (pageJumpForm) pageJumpForm.style.display = totalPages > 1 ? 'flex' : 'none';
+    };
+    const renderSimplePagination = (currentPage, hasMorePages) => {
+        if (!simplePagination) return;
+        simplePagination.replaceChildren();
+        const links = document.createElement('div');
+        links.className = 'all-transactions-page-links';
+        [
+            ['‹ Previous', currentPage > 1 ? pageUrl(currentPage - 1) : null],
+            ['Next ›', hasMorePages ? pageUrl(currentPage + 1) : null],
+        ].forEach(([label, url]) => {
+            if (url === null) return;
+            const link = document.createElement('a');
+            link.className = 'all-transactions-page-link';
+            link.href = url;
+            link.textContent = label;
+            links.appendChild(link);
+        });
+        simplePagination.appendChild(links);
+        simplePagination.hidden = false;
+    };
+    const loadTransactionPage = async (targetUrl, addToHistory = true) => {
+        if (!transactionTableBody || !transactionTable) {
+            window.location.assign(targetUrl);
+            return;
+        }
+
+        pageRequestController?.abort();
+        const controller = new AbortController();
+        pageRequestController = controller;
+        const requestUrl = new URL(targetUrl, window.location.href);
+        requestUrl.searchParams.set('_table_page', '1');
+        transactionTable.setAttribute('aria-busy', 'true');
+        transactionTableBody.style.opacity = '.45';
+
+        try {
+            const response = await fetch(requestUrl.toString(), {
+                credentials: 'same-origin',
+                headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'The transaction page could not be loaded.');
+
+            transactionTableBody.innerHTML = data.rows_html || '';
+            if (rangeSummary) {
+                const from = Number(data.from || 0).toLocaleString('en-CA');
+                const to = Number(data.to || 0).toLocaleString('en-CA');
+                rangeSummary.textContent = `Showing ${from}–${to} transactions`;
+            }
+            const cleanUrl = new URL(targetUrl, window.location.href);
+            cleanUrl.searchParams.delete('_table_page');
+            if (addToHistory) history.pushState({transactionPage: true}, '', cleanUrl.toString());
+
+            if (perPageSelect) {
+                const selectedPerPage = String(data.per_page || 100);
+                Array.from(perPageSelect.options).forEach((option) => {
+                    option.selected = new URL(option.value, window.location.href).searchParams.get('per_page') === selectedPerPage;
+                });
+            }
+            if (knownTotalRecords !== null) {
+                renderNumberedPagination(
+                    Number(data.page || 1),
+                    Math.max(1, Math.ceil(knownTotalRecords / Number(data.per_page || 100)))
+                );
+            } else {
+                renderSimplePagination(Number(data.page || 1), Boolean(data.has_more_pages));
+            }
+
+            if (transactionTableScroll) transactionTableScroll.scrollTop = 0;
+            initializeLinkedRecordsForCurrentPage();
+        } catch (error) {
+            if (error.name === 'AbortError') return;
+            window.location.assign(targetUrl);
+        } finally {
+            if (pageRequestController === controller) {
+                transactionTable.removeAttribute('aria-busy');
+                transactionTableBody.style.opacity = '1';
+            }
+        }
+    };
+    document.getElementById('all-transactions-pagination')?.addEventListener('click', (event) => {
+        const link = event.target.closest('a[href]');
+        if (!link) return;
+        event.preventDefault();
+        loadTransactionPage(link.href);
+    });
+    perPageSelect?.addEventListener('change', () => loadTransactionPage(perPageSelect.value));
+    pageJumpForm?.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const page = Number.parseInt(pageNumberInput?.value || '', 10);
+        if (!Number.isFinite(page) || page < 1 || (knownTotalPages !== null && page > knownTotalPages)) {
+            pageNumberInput?.focus();
+            return;
+        }
+        loadTransactionPage(pageUrl(page));
+    });
+    window.addEventListener('popstate', () => loadTransactionPage(window.location.href, false));
     let totalPollAttempts = 0;
     const updateFilteredTotal = async () => {
         if (!totalSummary || totalPollAttempts >= 120) return;
@@ -1025,12 +1546,24 @@
                 cache: 'no-store',
             });
             const data = await response.json();
-            if (data.state === 'complete') {
-                const total = Number(data.total || 0).toLocaleString('en-CA');
-                const pages = Number(data.total_pages || 1).toLocaleString('en-CA');
-                const page = Number(data.page || 1).toLocaleString('en-CA');
-                totalSummary.textContent = ` · ${total} total · Page ${page} of ${pages}`;
-                totalSummary.title = data.cached ? 'Cached for this filter selection.' : '';
+            if (data.state === 'complete' || data.state === 'partial') {
+                const currentUrl = new URL(window.location.href);
+                const currentPerPage = Number(currentUrl.searchParams.get('per_page') || {{ $perPage }});
+                const currentPage = Math.max(1, Number(currentUrl.searchParams.get('page') || 1));
+                knownTotalRecords = Number(data.total || 0);
+                const totalPageCount = Math.max(1, Math.ceil(knownTotalRecords / currentPerPage));
+                const total = knownTotalRecords.toLocaleString('en-CA');
+                totalSummary.textContent = data.state === 'partial'
+                    ? ` · ${total} cached so far`
+                    : ` · ${total} total`;
+                totalSummary.title = data.state === 'partial'
+                    ? 'This filtered total and the available page count will grow as more period rows are cached.'
+                    : (data.cached ? 'Cached for this filter selection.' : '');
+                renderNumberedPagination(currentPage, totalPageCount);
+                if (data.state === 'partial') {
+                    totalPollAttempts = 0;
+                    window.setTimeout(updateFilteredTotal, 2500);
+                }
                 return;
             }
             if (data.state === 'failed') {
@@ -1047,6 +1580,57 @@
     if (totalSummary) {
         window.setTimeout(updateFilteredTotal, 1000);
     }
+
+    const periodSummary = document.getElementById('all-transactions-summary');
+    const loadPeriodSummary = async () => {
+        if (!periodSummary) return;
+
+        const opening = document.getElementById('all-transactions-summary-opening');
+        const period = document.getElementById('all-transactions-summary-period');
+        const periodNet = document.getElementById('all-transactions-summary-net');
+        const closing = document.getElementById('all-transactions-summary-closing');
+        const transactionCount = document.getElementById('all-transactions-summary-count');
+        const source = document.getElementById('all-transactions-summary-source');
+        const sourceBadge = document.getElementById('all-transactions-summary-source-badge');
+        const error = document.getElementById('all-transactions-summary-error');
+        const formatMoney = (value) => {
+            const amount = Number(value || 0);
+            const formatted = `$${Math.abs(amount).toLocaleString('en-CA', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+            return amount < 0 ? `(${formatted})` : formatted;
+        };
+
+        try {
+            const summaryUrl = new URL('{{ route('viefund-transactions.summary') }}', window.location.origin);
+            summaryUrl.search = window.location.search;
+            const response = await fetch(summaryUrl.toString(), {
+                headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                cache: 'no-store',
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'The period summary could not be loaded.');
+
+            opening.textContent = formatMoney(data.opening_balance);
+            period.textContent = data.period_label || 'Selected period';
+            periodNet.textContent = formatMoney(data.period_net);
+            periodNet.style.color = Number(data.period_net) < 0 ? '#b91c1c' : '#166534';
+            closing.textContent = formatMoney(data.closing_balance);
+            transactionCount.textContent = Number(data.transaction_count || 0).toLocaleString('en-CA');
+            sourceBadge.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:currentColor;"></span>';
+            sourceBadge.append(document.createTextNode(data.balance_source || 'VieFund cash ledger'));
+            sourceBadge.style.background = data.uses_snapshots ? '#dcfce7' : '#fef3c7';
+            sourceBadge.style.color = data.uses_snapshots ? '#166534' : '#92400e';
+            source.style.display = 'flex';
+        } catch (summaryError) {
+            [period, opening, periodNet, closing, transactionCount].forEach((element) => {
+                if (element) element.textContent = 'Unavailable';
+            });
+            error.textContent = summaryError.message || 'The period summary could not be loaded.';
+            error.style.display = 'block';
+        } finally {
+            periodSummary.removeAttribute('aria-busy');
+        }
+    };
+    loadPeriodSummary();
 
     const showStatus = (element, message, isError = false) => {
         element.textContent = message;
@@ -1122,10 +1706,10 @@
         try {
             const formData = new FormData(form);
             formData.set('linked_record_layout', exportMode);
-            formData.set('include_eft_records', eftToggle?.checked ? '1' : '0');
-            formData.set('include_bank_records', bankToggle?.checked ? '1' : '0');
-            formData.set('include_fsp_records', fspAgraToggle?.checked ? '1' : '0');
-            formData.set('include_7960_fsp_records', fsp7960Toggle?.checked ? '1' : '0');
+            formData.set('include_eft_records', '1');
+            formData.set('include_bank_records', '1');
+            formData.set('include_fsp_records', '1');
+            formData.set('include_7960_fsp_records', '1');
             button.value = '';
             const response = await fetch(form.action, {
                 method: 'POST',

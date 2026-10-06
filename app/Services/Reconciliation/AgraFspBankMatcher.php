@@ -122,6 +122,7 @@ class AgraFspBankMatcher
             ->where('a.counterparty', 'like', 'fundserv%')
             ->select([
                 'b.id',
+                'b.bank_statement_summary_id',
                 'b.source_file',
                 'b.account_number',
                 'b.booking_date',
@@ -164,9 +165,22 @@ class AgraFspBankMatcher
             $bank->reconciliation_status = $bank->is_exact_match
                 ? 'Exact match'
                 : ($bank->is_possible_wire_fee_match ? 'Possible wire-fee match' : 'Unresolved');
-            $bank->reconciliation_note = $bank->is_possible_wire_fee_match
-                ? 'Matched — possible missing $15 wire transfer fee.'
-                : '';
+            $difference = number_format(abs($bank->variance), 2);
+            $direction = $bank->variance > 0 ? 'higher' : 'lower';
+            $context = Carbon::parse($group->total_date)->toDateString().' '.strtoupper((string) $group->currency);
+            $itemContext = sprintf(' FSP net includes %d items.', (int) $group->item_count);
+            if ($bank->is_exact_match) {
+                $bank->reconciliation_note = 'Candidate bank transaction matches the FSP net for '.$context.'.'.$itemContext;
+            } else {
+                $bank->reconciliation_note = sprintf(
+                    'Candidate bank transaction is $%s %s than the FSP net for %s.%s%s',
+                    $difference,
+                    $direction,
+                    $context,
+                    $bank->is_possible_wire_fee_match ? ' Possible $15 wire transfer fee.' : '',
+                    $itemContext
+                );
+            }
 
             return [$key => $bank];
         });
