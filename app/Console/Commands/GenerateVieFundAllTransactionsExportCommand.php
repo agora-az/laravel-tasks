@@ -158,7 +158,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             }
             $maximumRowsPerSheet = (int) config('viefund.all_transactions_export_rows_per_sheet', 1000000);
             $splitTargetRows = (int) config('viefund.all_transactions_export_split_target_rows', 65000);
-            $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 20000);
+            $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 5000);
             $distributeSheets = (bool) $this->option('split-sheets');
             $includeEftRecords = (bool) $this->option('include-eft-records');
             $includeBankRecords = (bool) $this->option('include-bank-records');

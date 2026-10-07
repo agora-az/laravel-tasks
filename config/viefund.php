@@ -239,7 +239,7 @@ return [
 
     'all_transactions_export_batch_size' => max(
         500,
-        min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_BATCH_SIZE', 20000))
+        min(20000, (int) env('VIEFUND_ALL_TRANSACTIONS_EXPORT_BATCH_SIZE', 5000))
     ),
 
     'all_transactions_working_set' => [
