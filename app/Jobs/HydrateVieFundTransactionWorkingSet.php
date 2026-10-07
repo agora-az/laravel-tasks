@@ -94,6 +94,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'has_agra_fsp_match' => (bool) $match['has_agra_fsp_match'],
                 'has_7960_fsp_match' => (bool) $match['has_7960_fsp_match'],
                 'payload' => json_encode((array) $row, JSON_THROW_ON_ERROR),
+                'enrichment' => json_encode($match['enrichment'] ?? [], JSON_THROW_ON_ERROR),
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
@@ -108,7 +109,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                     'customer_name', 'plan_account_id', 'transaction_type', 'cash_status', 'trust_status',
                     'created_date', 'trade_date', 'processing_date', 'settlement_date', 'basis_date',
                     'currency_code', 'amount', 'match_status', 'has_eft_match', 'has_agra_fsp_match',
-                    'has_7960_fsp_match', 'payload', 'updated_at',
+                    'has_7960_fsp_match', 'payload', 'enrichment', 'updated_at',
                 ]
             ));
 

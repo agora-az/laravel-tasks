@@ -85,6 +85,53 @@ class EftBankMatchStatusService
         });
     }
 
+    public function bankEntriesForSequences(iterable $sequences): Collection
+    {
+        $requested = collect($sequences)
+            ->map(fn($sequence) => trim((string) $sequence))
+            ->filter(fn(string $sequence) => $sequence !== '' && ctype_digit($sequence))
+            ->map(fn(string $sequence) => (string) (int) $sequence)
+            ->unique()
+            ->values();
+        if ($requested->isEmpty()) {
+            return collect();
+        }
+
+        $entries = $requested
+            ->chunk(500)
+            ->flatMap(fn(Collection $chunk) => DB::table('bank_statement_entries as b')
+                ->join('bank_statement_entry_analyses as a', function ($join) {
+                    $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                        ->where('a.parser_version', self::BANK_PARSER_VERSION);
+                })
+                ->whereIn('a.settlement_number', $chunk->all())
+                ->select([
+                    'b.id',
+                    'b.value_date',
+                    'b.credit_debit_indicator',
+                    'b.amount',
+                    'b.currency',
+                    'b.account_number',
+                    'b.additional_info',
+                    'b.source_file',
+                    'a.settlement_number',
+                    'a.memo_type',
+                    'a.counterparty',
+                    'a.wire_payment_reference',
+                ])
+                ->orderBy('b.value_date')
+                ->orderBy('b.id')
+                ->get())
+            ->unique('id')
+            ->values();
+
+        $this->annotateBankEntries($entries);
+
+        return $entries->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
+            ? (string) (int) trim((string) $entry->settlement_number)
+            : trim((string) $entry->settlement_number));
+    }
+
     private function loadStatuses(Collection $sequences): void
     {
         $eftTotals = $this->eftRepository

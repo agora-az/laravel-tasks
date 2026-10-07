@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Services\Reconciliation\VieFundFundservMatcher;
 use App\Services\VieFund\VieFundExportLinkCache;
+use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Jobs\RefreshVieFundDashboardStats;
 use App\Jobs\RefreshVieFundReportInceptionDates;
 
@@ -43,6 +44,17 @@ Schedule::job(new RefreshVieFundReportInceptionDates, 'default', 'database')
 Schedule::call(fn() => app(VieFundExportLinkCache::class)->pruneExpired())
     ->name('viefund:prune-export-link-cache')
     ->dailyAt('20:30')
+    ->timezone('America/Toronto')
+    ->withoutOverlapping();
+
+Schedule::call(function (): int {
+    /** @var VieFundTransactionWorkingSetManager $workingSetManager */
+    $workingSetManager = app(VieFundTransactionWorkingSetManager::class);
+
+    return $workingSetManager->pruneExpired();
+})
+    ->name('viefund:prune-transaction-working-sets')
+    ->dailyAt('20:35')
     ->timezone('America/Toronto')
     ->withoutOverlapping();
 

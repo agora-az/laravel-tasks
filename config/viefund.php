@@ -270,7 +270,7 @@ return [
     */
 
     'all_transactions_link_cache' => [
-        'ttl_minutes' => max(5, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_TTL_MINUTES', 60)),
+        'ttl_minutes' => max(5, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_TTL_MINUTES', 240)),
         'retention_days' => max(1, (int) env('VIEFUND_ALL_TRANSACTIONS_LINK_CACHE_RETENTION_DAYS', 7)),
         'remote_batch_size' => max(
             1000,

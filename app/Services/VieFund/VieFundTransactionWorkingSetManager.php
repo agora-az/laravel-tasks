@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 
 class VieFundTransactionWorkingSetManager
 {
-    private const CACHE_VERSION = 1;
+    private const CACHE_VERSION = 2;
 
     public function ensure(array $filters): ?VieFundTransactionWorkingSet
     {
@@ -118,6 +118,25 @@ class VieFundTransactionWorkingSetManager
             'ready_at' => optional($workingSet->ready_at)->toIso8601String(),
             'last_error' => $workingSet->last_error,
         ];
+    }
+
+    public function pruneExpired(): int
+    {
+        if (!$this->available()) {
+            return 0;
+        }
+
+        return VieFundTransactionWorkingSet::query()
+            ->where(function ($query): void {
+                $query->where(function ($completed): void {
+                    $completed->whereNull('build_generation')
+                        ->where('expires_at', '<', now());
+                })->orWhere(function ($failed): void {
+                    $failed->where('state', 'failed')
+                        ->where('updated_at', '<', now()->subDay());
+                });
+            })
+            ->delete();
     }
 
     private function available(): bool

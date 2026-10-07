@@ -438,11 +438,16 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     $this->writeStatus($statusFile, [
                         'inProgress' => true,
                         'success' => null,
-                        'message' => sprintf(
-                            'Matching EFT%s records for the next %s transactions...',
-                            $includeBankRecords ? ' and bank' : '',
-                            number_format($rows->count())
-                        ),
+                        'message' => $workingSet
+                            ? sprintf(
+                                'Loading cached EFT and bank records for the next %s transactions...',
+                                number_format($rows->count())
+                            )
+                            : sprintf(
+                                'Matching EFT%s records for the next %s transactions...',
+                                $includeBankRecords ? ' and bank' : '',
+                                number_format($rows->count())
+                            ),
                         'progress_pct' => $totalTransactions > 0
                             ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                             : 3,
@@ -452,32 +457,46 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'updated_at' => now()->toIso8601String(),
                     ]);
 
-                    $trustIds = $rows
-                        ->pluck('trust_transaction_id')
-                        ->filter()
-                        ->map(fn($id) => (int) $id)
-                        ->unique()
-                        ->values()
-                        ->all();
-                    $linkedEftItems = $linkCache->eftItemsByLinkedIds($trustIds, $eftRepository);
-                    $eftBankMatchStatuses = $eftBankMatchStatusService->statusesForItems($linkedEftItems);
-                    $linkedEftItems->each(function ($item) use ($eftBankMatchStatuses) {
-                        $sequence = $item->sequence_number !== null
-                            && ctype_digit((string) $item->sequence_number)
-                                ? (string) (int) $item->sequence_number
-                                : null;
-                        $item->bank_match_status = $sequence !== null
-                            ? $eftBankMatchStatuses->get($sequence, EftBankMatchStatusService::UNKNOWN)
-                            : EftBankMatchStatusService::UNKNOWN;
-                    });
-                    $eftItemsByTrust = $linkedEftItems->groupBy(fn($item) => (string) (int) $item->linked_id);
+                    if ($workingSet) {
+                        $linkedEftItems = $rows
+                            ->flatMap(fn($row) => $this->cachedEnrichmentRecords($row, 'eft_items'))
+                            ->unique('id')
+                            ->values();
+                        $eftItemsByTrust = $linkedEftItems->groupBy(fn($item) => (string) (int) $item->linked_id);
+                        $bankEntriesBySequence = $rows
+                            ->flatMap(fn($row) => $this->cachedEnrichmentRecords($row, 'eft_bank_entries'))
+                            ->unique('id')
+                            ->groupBy(fn($entry) => ctype_digit(trim((string) ($entry->settlement_number ?? '')))
+                                ? (string) (int) trim((string) $entry->settlement_number)
+                                : trim((string) ($entry->settlement_number ?? '')));
+                    } else {
+                        $trustIds = $rows
+                            ->pluck('trust_transaction_id')
+                            ->filter()
+                            ->map(fn($id) => (int) $id)
+                            ->unique()
+                            ->values()
+                            ->all();
+                        $linkedEftItems = $linkCache->eftItemsByLinkedIds($trustIds, $eftRepository);
+                        $eftBankMatchStatuses = $eftBankMatchStatusService->statusesForItems($linkedEftItems);
+                        $linkedEftItems->each(function ($item) use ($eftBankMatchStatuses) {
+                            $sequence = $item->sequence_number !== null
+                                && ctype_digit((string) $item->sequence_number)
+                                    ? (string) (int) $item->sequence_number
+                                    : null;
+                            $item->bank_match_status = $sequence !== null
+                                ? $eftBankMatchStatuses->get($sequence, EftBankMatchStatusService::UNKNOWN)
+                                : EftBankMatchStatusService::UNKNOWN;
+                        });
+                        $eftItemsByTrust = $linkedEftItems->groupBy(fn($item) => (string) (int) $item->linked_id);
 
-                    if ($includeBankRecords) {
-                        $bankEntriesBySequence = $this->cachedBankEntriesForSequences(
-                            $linkedEftItems->pluck('sequence_number')->filter()->all(),
-                            $bankEntriesBySequenceCache
-                        );
-                        $eftBankMatchStatusService->annotateBankEntries($bankEntriesBySequence->flatten(1));
+                        if ($includeBankRecords) {
+                            $bankEntriesBySequence = $this->cachedBankEntriesForSequences(
+                                $linkedEftItems->pluck('sequence_number')->filter()->all(),
+                                $bankEntriesBySequenceCache
+                            );
+                            $eftBankMatchStatusService->annotateBankEntries($bankEntriesBySequence->flatten(1));
+                        }
                     }
                     if ($includeEftRecords && $eftRecordsSheet instanceof Sheet) {
                         $this->appendEftRecords(
@@ -530,7 +549,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'inProgress' => true,
                         'success' => null,
                         'message' => sprintf(
-                            'Matching selected FSP records for the next %s transactions...',
+                            $workingSet
+                                ? 'Loading cached FSP records for the next %s transactions...'
+                                : 'Matching selected FSP records for the next %s transactions...',
                             number_format($rows->count())
                         ),
                         'progress_pct' => $totalTransactions > 0
@@ -541,19 +562,28 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'started_at' => $startedAtIso,
                         'updated_at' => now()->toIso8601String(),
                     ]);
-                    $fspItemsByCashTransaction = $this->fspItemsByCashTransaction(
-                        $rows,
-                        $remoteService,
-                        $linkCache,
-                        $statusFspSourceTypes,
-                        $fspRecordCollapser
-                    );
-                    $fspBankEntriesByCashTransaction = $this->fspBankEntriesByCashTransaction(
-                        $fspItemsByCashTransaction,
-                        $agraFspBankMatcher,
-                        $fspBankMatchCache,
-                        $transactionBankMatchStatusService
-                    );
+                    if ($workingSet) {
+                        $fspItemsByCashTransaction = $rows->mapWithKeys(fn($row) => [
+                            (string) (int) $row->cash_transaction_id => $this->cachedEnrichmentRecords($row, 'fsp_items'),
+                        ]);
+                        $fspBankEntriesByCashTransaction = $rows->mapWithKeys(fn($row) => [
+                            (string) (int) $row->cash_transaction_id => $this->cachedEnrichmentRecords($row, 'fsp_bank_entries'),
+                        ]);
+                    } else {
+                        $fspItemsByCashTransaction = $this->fspItemsByCashTransaction(
+                            $rows,
+                            $remoteService,
+                            $linkCache,
+                            $statusFspSourceTypes,
+                            $fspRecordCollapser
+                        );
+                        $fspBankEntriesByCashTransaction = $this->fspBankEntriesByCashTransaction(
+                            $fspItemsByCashTransaction,
+                            $agraFspBankMatcher,
+                            $fspBankMatchCache,
+                            $transactionBankMatchStatusService
+                        );
+                    }
                     if ($includeAnyFspRecords) {
                         $linkedFspItems = $fspItemsByCashTransaction->flatten(1)
                             ->filter(fn($item) => in_array((string) $item->source_type, $includedFspSourceTypes, true))
@@ -1671,6 +1701,13 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         return $requested->mapWithKeys(fn(string $sequence) => [
             $sequence => collect($cache->get($sequence, collect())),
         ]);
+    }
+
+    private function cachedEnrichmentRecords(object $row, string $key): Collection
+    {
+        return collect((array) data_get($row, 'cached_enrichment.' . $key, []))
+            ->map(fn($record) => (object) $record)
+            ->values();
     }
 
     /** @return array<int, StringCell> */
