@@ -18,7 +18,6 @@ use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use OpenSpout\Common\Entity\Cell\EmptyCell;
 use OpenSpout\Common\Entity\Cell\FormulaCell;
 use OpenSpout\Common\Entity\Cell\NumericCell;
 use OpenSpout\Common\Entity\Cell\StringCell;
@@ -304,33 +303,40 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 ->setFontName('Calibri')
                 ->setFontSize(11)
                 ->setFontColor('975A16')
-                ->setBackgroundColor('FFFAF0')
+                ->setBackgroundColor('F1FAF5')
                 ->setShouldWrapText();
             $wireFeeBankAmountDetailStyle = (new Style())
                 ->setFontName('Calibri')
                 ->setFontSize(11)
                 ->setFontColor('975A16')
-                ->setBackgroundColor('FFFAF0')
+                ->setBackgroundColor('F1FAF5')
                 ->setShouldWrapText()
                 ->setCellAlignment(CellAlignment::RIGHT);
             $wireFeeCurrencyStyle = (new Style())
                 ->setFontName('Calibri')
                 ->setFontSize(11)
                 ->setFontColor('975A16')
-                ->setBackgroundColor('FFFAF0')
+                ->setBackgroundColor('F1FAF5')
                 ->setFormat(self::ACCOUNTING_CURRENCY_FORMAT);
-            $matchRowStyles = $this->matchStatusStyles(
+            $matchStatusStyles = $this->matchStatusStyles(
                 (new Style())->setFontName('Calibri')->setFontSize(11),
                 true
             );
-            $eftMatchStyles = $this->matchStatusStyles($eftDetailStyle);
-            $bankMatchStyles = $this->matchStatusStyles($bankDetailStyle);
-            $bankAmountMatchStyles = $this->matchStatusStyles($bankAmountDetailStyle);
-            $fspMatchStyles = $this->matchStatusStyles($fspDetailStyle);
-            $fspAmountMatchStyles = $this->matchStatusStyles($fspAmountDetailStyle);
-            $wireFeeMatchStyles = $this->matchStatusStyles($wireFeeBankDetailStyle);
-            $wireFeeAmountMatchStyles = $this->matchStatusStyles($wireFeeBankAmountDetailStyle);
-            $wireFeeCurrencyMatchStyles = $this->matchStatusStyles($wireFeeCurrencyStyle);
+            $matchStatusDetailStyles = $this->matchStatusStyles(
+                (new Style())
+                    ->setFontName('Calibri')
+                    ->setFontSize(11)
+                    ->setShouldWrapText(),
+                true
+            );
+            $matchStatusAmountStyles = $this->matchStatusStyles(
+                (new Style())
+                    ->setFontName('Calibri')
+                    ->setFontSize(11)
+                    ->setShouldWrapText()
+                    ->setCellAlignment(CellAlignment::RIGHT),
+                true
+            );
             $transactionHeaders = $this->transactionHeaders(
                 $includeEftRecords,
                 $includeBankRecords,
@@ -699,41 +705,34 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $transactionBankMatchStatusService->summarizeEftItems($transactionEftItems),
                         $transactionBankMatchStatusService->summarizeFspItems($transactionAllFspItems)
                     );
-                    $matchRowStyle = $this->matchStatusStyle($matchRowStyles, $matchedToBankStatus);
-                    $transactionBankDetailStyle = $this->matchStatusStyle(
-                        $isPossibleWireFeeMatch ? $wireFeeMatchStyles : $bankMatchStyles,
-                        $matchedToBankStatus
-                    );
-                    $transactionBankAmountStyle = $this->matchStatusStyle(
-                        $isPossibleWireFeeMatch ? $wireFeeAmountMatchStyles : $bankAmountMatchStyles,
-                        $matchedToBankStatus
-                    );
+                    $matchStatusStyle = $this->matchStatusStyle($matchStatusStyles, $matchedToBankStatus);
+                    $transactionBankDetailStyle = $isPossibleWireFeeMatch
+                        ? $wireFeeBankDetailStyle
+                        : $bankDetailStyle;
+                    $transactionBankAmountStyle = $isPossibleWireFeeMatch
+                        ? $wireFeeBankAmountDetailStyle
+                        : $bankAmountDetailStyle;
 
                     $coreCells = [
-                        'matched_to_bank' => new StringCell($matchedToBankStatus, $matchRowStyle),
-                        'cash_transaction_id' => new StringCell((string) ($row->transaction_id ?? ''), $matchRowStyle),
-                        'fund_transaction_id' => new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', $matchRowStyle),
-                        'trust_transaction_id' => new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', $matchRowStyle),
-                        'ledger_relationship' => new StringCell((string) ($row->ledger_relationship ?? ''), $matchRowStyle),
+                        'matched_to_bank' => new StringCell($matchedToBankStatus, $matchStatusStyle),
+                        'cash_transaction_id' => new StringCell((string) ($row->transaction_id ?? ''), null),
+                        'fund_transaction_id' => new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', null),
+                        'trust_transaction_id' => new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', null),
+                        'ledger_relationship' => new StringCell((string) ($row->ledger_relationship ?? ''), null),
                         // Source IDs can exceed Excel's 15-digit numeric precision.
-                        'source_id' => new StringCell((string) ($row->source_id ?? ''), $matchRowStyle),
-                        'customer_name' => new StringCell(trim((string) ($row->customer_name ?? '')), $matchRowStyle),
-                        'plan_account_id' => new StringCell((string) ($row->plan_account_id ?? ''), $matchRowStyle),
-                        'transaction_type' => new StringCell((string) ($row->transaction_type ?? ''), $matchRowStyle),
-                        'status' => new StringCell((string) ($row->status ?? ''), $matchRowStyle),
-                        'trust_status' => new StringCell((string) ($row->trust_status ?? ''), $matchRowStyle),
-                        'notes' => new StringCell((string) ($row->notes ?? ''), $matchRowStyle),
-                        'created_date' => new StringCell($createdDate, $matchRowStyle),
-                        'trade_date' => new StringCell($this->dateTime($row->trade_date ?? null), $matchRowStyle),
-                        'processing_date' => new StringCell($this->dateTime($row->processing_date ?? null), $matchRowStyle),
-                        'settlement_date' => new StringCell($this->dateTime($row->settlement_date ?? null), $matchRowStyle),
-                        'currency_code' => new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), $matchRowStyle),
-                        'amount' => new NumericCell(
-                            $amount,
-                            $isPossibleWireFeeMatch
-                                ? $this->matchStatusStyle($wireFeeCurrencyMatchStyles, $matchedToBankStatus)
-                                : $currencyStyle
-                        ),
+                        'source_id' => new StringCell((string) ($row->source_id ?? ''), null),
+                        'customer_name' => new StringCell(trim((string) ($row->customer_name ?? '')), null),
+                        'plan_account_id' => new StringCell((string) ($row->plan_account_id ?? ''), null),
+                        'transaction_type' => new StringCell((string) ($row->transaction_type ?? ''), null),
+                        'status' => new StringCell((string) ($row->status ?? ''), null),
+                        'trust_status' => new StringCell((string) ($row->trust_status ?? ''), null),
+                        'notes' => new StringCell((string) ($row->notes ?? ''), null),
+                        'created_date' => new StringCell($createdDate, null),
+                        'trade_date' => new StringCell($this->dateTime($row->trade_date ?? null), null),
+                        'processing_date' => new StringCell($this->dateTime($row->processing_date ?? null), null),
+                        'settlement_date' => new StringCell($this->dateTime($row->settlement_date ?? null), null),
+                        'currency_code' => new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), null),
+                        'amount' => new NumericCell($amount, $currencyStyle),
                     ];
                     $transactionCells = array_map(
                         fn(string $key) => $coreCells[$key],
@@ -743,12 +742,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $bankSummaryCells = $transactionBankEntries->isNotEmpty()
                             ? $this->bankTransactionSummaryCells(
                                 $transactionBankEntries,
-                                $transactionBankDetailStyle,
-                                $transactionBankAmountStyle
+                                $this->matchStatusStyle($matchStatusDetailStyles, $matchedToBankStatus),
+                                $this->matchStatusStyle($matchStatusAmountStyles, $matchedToBankStatus)
                             )
                             : $this->emptyDetailCells(
                                 count($this->bankTransactionSummaryHeaders()),
-                                $this->matchStatusStyle($bankMatchStyles, $matchedToBankStatus)
+                                $matchStatusStyle
                             );
                         array_splice(
                             $transactionCells,
@@ -791,30 +790,45 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         );
                     }
                     if (!$separateLinkedRecordSheets && $includeEftRecords) {
-                        $hasLaterDetails = ($includeBankRecords && $transactionBankEntries->isNotEmpty())
-                            || ($includeAnyFspRecords && $transactionFspItems->isNotEmpty());
                         if ($transactionEftItems->isNotEmpty()) {
                             array_push(
                                 $transactionCells,
                                 ...$this->eftTransactionDetailCells(
                                     $transactionEftItems,
-                                    $this->matchStatusStyle($eftMatchStyles, $matchedToBankStatus)
+                                    $eftDetailStyle
                                 )
                             );
-                        } elseif ($hasLaterDetails) {
+                        } else {
                             array_push(
                                 $transactionCells,
                                 ...$this->emptyDetailCells(
                                     count($this->eftTransactionDetailHeaders()),
-                                    $this->matchStatusStyle($eftMatchStyles, $matchedToBankStatus)
+                                    $eftDetailStyle
                                 )
                             );
                         }
                     }
-                    if (!$separateLinkedRecordSheets && $includeBankRecords && (
-                        $transactionBankEntries->isNotEmpty()
-                        || ($includeAnyFspRecords && $transactionFspItems->isNotEmpty())
-                    )) {
+                    if (!$separateLinkedRecordSheets && $includeAnyFspRecords) {
+                        if ($transactionFspItems->isNotEmpty()) {
+                            array_push(
+                                $transactionCells,
+                                ...$this->fspTransactionDetailCells(
+                                    $transactionFspItems,
+                                    $fspDetailStyle,
+                                    $fspAmountDetailStyle
+                                )
+                            );
+                        } else {
+                            array_push(
+                                $transactionCells,
+                                ...$this->emptyDetailCells(
+                                    count($this->fspTransactionDetailHeaders()),
+                                    $fspDetailStyle
+                                )
+                            );
+                        }
+                    }
+                    if (!$separateLinkedRecordSheets && $includeBankRecords) {
                         if ($bankDescriptionColumn !== null && $transactionBankEntries->isNotEmpty()) {
                             $measuredWidth = $this->bankDescriptionWidth($transactionBankEntries);
                             $currentWidth = $transactionBankDescriptionWidths[$sheetPlanIndex] ?? 36.0;
@@ -836,25 +850,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                                 $transactionCells,
                                 ...$this->emptyDetailCells(
                                     count($this->bankTransactionDetailHeaders()),
-                                    $this->matchStatusStyle($bankMatchStyles, $matchedToBankStatus)
+                                    $bankDetailStyle
                                 )
                             );
                         }
                     }
-                    if (!$separateLinkedRecordSheets && $includeAnyFspRecords && $transactionFspItems->isNotEmpty()) {
-                        array_push(
-                            $transactionCells,
-                            ...$this->fspTransactionDetailCells(
-                                $transactionFspItems,
-                                $this->matchStatusStyle($fspMatchStyles, $matchedToBankStatus),
-                                $this->matchStatusStyle($fspAmountMatchStyles, $matchedToBankStatus)
-                            )
-                        );
-                    }
-                    while (count($transactionCells) < count($transactionHeaders)) {
-                        $transactionCells[] = new EmptyCell(null, $matchRowStyle);
-                    }
-                    $writer->addRow(new Row($transactionCells, $matchRowStyle));
+                    $writer->addRow(new Row($transactionCells));
 
                     ++$sheetRowCount;
                     ++$processedTransactions;
@@ -1060,10 +1061,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 0,
                 $this->bankTransactionSummaryHeaders()
             );
-            $headers = array_merge($headers, $this->bankTransactionDetailHeaders());
         }
         if ($includeFspRecords) {
             $headers = array_merge($headers, $this->fspTransactionDetailHeaders());
+        }
+        if ($includeBankRecords) {
+            $headers = array_merge($headers, $this->bankTransactionDetailHeaders());
         }
 
         return $headers;
@@ -1118,7 +1121,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $writer->addRow(new Row(array_map(
             fn(string $header) => new StringCell(
                 $header,
-                str_starts_with($header, 'EFT ')
+                in_array($header, $this->bankTransactionSummaryHeaders(), true)
+                    ? $headerStyle
+                    : (str_starts_with($header, 'EFT ')
                     || $header === 'Linked EFT Record'
                     ? $eftHeaderStyle
                         : (str_starts_with($header, 'Bank ')
@@ -1128,7 +1133,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         ? $bankHeaderStyle
                         : (str_starts_with($header, 'FSP ') || $header === 'Linked FSP Record'
                             ? $fspHeaderStyle
-                            : $headerStyle))
+                            : $headerStyle)))
             ),
             $headers
         )));
