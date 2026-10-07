@@ -170,7 +170,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'total_rows' => $totalRows,
                 'ready_at' => now(),
                 'refreshed_at' => now(),
-                'expires_at' => now()->addMinutes(max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 240))),
+                'expires_at' => now()->addMinutes(max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 1440))),
                 'last_error' => null,
             ])->save();
         });

@@ -23,8 +23,12 @@
                 @case('trade_date')
                 @case('processing_date')
                 @case('settlement_date')
-                    @php $dateValue = $transaction->{$heading['key']} ?? null; @endphp
-                    <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $dateValue ? date('m/d/Y H:i', strtotime($dateValue)) : '–' }}</td>
+                    @php
+                        $dateValue = $transaction->{$heading['key']} ?? null;
+                        $dateTimestamp = $dateValue ? strtotime($dateValue) : false;
+                        $hasActualTime = $dateTimestamp !== false && date('H:i:s', $dateTimestamp) !== '00:00:00';
+                    @endphp
+                    <td data-date-time="{{ $dateTimestamp !== false ? date('Y-m-d H:i:s', $dateTimestamp) : '' }}" style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $dateTimestamp === false ? '–' : date($hasActualTime ? 'm/d/Y H:i:s' : 'm/d/Y', $dateTimestamp) }}</td>
                     @break
                 @case('currency_code')
                     <td style="padding:12px;font-family:monospace;white-space:nowrap;">{{ $currencyOptions[$transaction->currency_code ?? ''] ?? ($transaction->currency_code ?? '–') }}</td>

@@ -18,6 +18,7 @@ use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use OpenSpout\Common\Entity\Cell\DateTimeCell;
 use OpenSpout\Common\Entity\Cell\FormulaCell;
 use OpenSpout\Common\Entity\Cell\NumericCell;
 use OpenSpout\Common\Entity\Cell\StringCell;
@@ -252,6 +253,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 ->setFontName('Calibri')
                 ->setFontSize(11)
                 ->setFormat(self::ACCOUNTING_CURRENCY_FORMAT);
+            $dateOnlyStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFormat('mm/dd/yyyy');
+            $dateTimeStyle = (new Style())
+                ->setFontName('Calibri')
+                ->setFontSize(11)
+                ->setFormat('mm/dd/yyyy hh:mm:ss');
             $linkStyle = (new Style())
                 ->setFontName('Calibri')
                 ->setFontSize(11)
@@ -343,7 +352,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $includeAnyFspRecords,
                 $separateLinkedRecordSheets
             );
-            $visibleTransactionColumnKeys = AllTransactionColumns::visibleKeys();
+            $visibleTransactionColumnKeys = $this->transactionColumnKeys();
             $linkedColumnInsertionIndex = AllTransactionColumns::linkedColumnInsertionIndex();
             $bankDescriptionColumn = array_search('Bank Description', $transactionHeaders, true);
             $bankDescriptionColumn = $bankDescriptionColumn === false ? null : $bankDescriptionColumn + 1;
@@ -679,7 +688,6 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     }
 
                     $amount = (float) ($row->amount ?? 0);
-                    $createdDate = $this->dateTime($row->created_date ?? null);
                     $trustId = !empty($row->trust_transaction_id) ? (string) (int) $row->trust_transaction_id : '';
                     $transactionEftItems = collect($eftItemsByTrust->get($trustId, collect()))->values();
                     $transactionBankEntries = $transactionEftItems
@@ -727,10 +735,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'status' => new StringCell((string) ($row->status ?? ''), null),
                         'trust_status' => new StringCell((string) ($row->trust_status ?? ''), null),
                         'notes' => new StringCell((string) ($row->notes ?? ''), null),
-                        'created_date' => new StringCell($createdDate, null),
-                        'trade_date' => new StringCell($this->dateTime($row->trade_date ?? null), null),
-                        'processing_date' => new StringCell($this->dateTime($row->processing_date ?? null), null),
-                        'settlement_date' => new StringCell($this->dateTime($row->settlement_date ?? null), null),
+                        'created_timestamp' => $this->excelTimestampCell($row->created_date ?? null, $dateTimeStyle),
+                        'created_date' => $this->excelDateOnlyCell($row->created_date ?? null, $dateOnlyStyle),
+                        'trade_date' => $this->excelDateCell($row->trade_date ?? null, $dateOnlyStyle, $dateTimeStyle),
+                        'processing_date' => $this->excelDateCell($row->processing_date ?? null, $dateOnlyStyle, $dateTimeStyle),
+                        'settlement_date' => $this->excelDateCell($row->settlement_date ?? null, $dateOnlyStyle, $dateTimeStyle),
                         'currency_code' => new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), null),
                         'amount' => new NumericCell($amount, $currencyStyle),
                     ];
@@ -1034,7 +1043,13 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         bool $separateLinkedRecordSheets
     ): array
     {
-        $headers = array_column(AllTransactionColumns::visible(), 'label');
+        $headers = [];
+        foreach (AllTransactionColumns::visible() as $key => $definition) {
+            if ($key === 'created_date') {
+                $headers[] = 'Created Timestamp';
+            }
+            $headers[] = $definition['label'];
+        }
         if ($separateLinkedRecordSheets) {
             $linkedHeaders = [];
             if ($includeEftRecords) {
@@ -1072,6 +1087,19 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         return $headers;
     }
 
+    private function transactionColumnKeys(): array
+    {
+        $keys = [];
+        foreach (AllTransactionColumns::visibleKeys() as $key) {
+            if ($key === 'created_date') {
+                $keys[] = 'created_timestamp';
+            }
+            $keys[] = $key;
+        }
+
+        return $keys;
+    }
+
     private function prepareTransactionSheet(
         Writer $writer,
         Sheet $sheet,
@@ -1094,6 +1122,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'Txn Type' => 36,
                 'Notes' => 40,
                 'Source ID' => 24,
+                'Created Timestamp' => 22,
+                'Created Date' => 14,
                 'Linked EFT Record' => 24,
                 'Linked Bank Record' => 22,
                 'Linked FSP Record' => 22,
@@ -1283,10 +1313,10 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'file_id' => new StringCell($item->file_id !== null ? (string) (int) $item->file_id : '', null),
                 'file_name' => new StringCell((string) ($item->file_name ?? ''), null),
                 'sequence_number' => new StringCell($item->sequence_number !== null ? (string) (int) $item->sequence_number : '', null),
-                'created_at' => new StringCell($this->dateTime($item->created_at ?? null), null),
-                'effective_date' => new StringCell($this->dateTime($item->effective_date ?? null), null),
-                'trade_date' => new StringCell($this->dateTime($item->trade_date ?? null), null),
-                'settlement_date' => new StringCell($this->dateTime($item->settlement_date ?? null), null),
+                'created_at' => new StringCell($this->displayDateTime($item->created_at ?? null), null),
+                'effective_date' => new StringCell($this->displayDateTime($item->effective_date ?? null), null),
+                'trade_date' => new StringCell($this->displayDateTime($item->trade_date ?? null), null),
+                'settlement_date' => new StringCell($this->displayDateTime($item->settlement_date ?? null), null),
                 'type' => new StringCell((string) ($item->type_name ?? $item->type_id ?? ''), null),
                 'status_id' => new StringCell($item->status_id !== null ? (string) $item->status_id : '', null),
                 'holder_name' => new StringCell((string) ($item->holder_name ?? ''), null),
@@ -1340,7 +1370,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 : new StringCell('', $detailStyle);
             $cells = [
                 'id' => new StringCell((string) $entryId, $detailStyle),
-                'value_date' => new StringCell($this->dateTime($entry->value_date ?? null), $detailStyle),
+                'value_date' => new StringCell($this->displayDateTime($entry->value_date ?? null), $detailStyle),
                 'direction' => new StringCell((string) ($entry->credit_debit_indicator ?? ''), $detailStyle),
                 'amount' => new NumericCell((float) ($entry->amount ?? 0), $amountStyle),
                 'transaction_total' => new NumericCell($transactionTotal, $amountStyle),
@@ -1432,10 +1462,10 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 ?: ($item->file_id !== null ? 'EFT file #' . (int) $item->file_id : 'Unprocessed EFT item #' . (int) $item->id),
             'id' => fn($item) => (string) (int) $item->id,
             'sequence_number' => fn($item) => $item->sequence_number !== null ? (string) (int) $item->sequence_number : '',
-            'created_at' => fn($item) => $this->dateTime($item->created_at ?? null),
-            'effective_date' => fn($item) => $this->dateTime($item->effective_date ?? null),
-            'trade_date' => fn($item) => $this->dateTime($item->trade_date ?? null),
-            'settlement_date' => fn($item) => $this->dateTime($item->settlement_date ?? null),
+            'created_at' => fn($item) => $this->displayDateTime($item->created_at ?? null),
+            'effective_date' => fn($item) => $this->displayDateTime($item->effective_date ?? null),
+            'trade_date' => fn($item) => $this->displayDateTime($item->trade_date ?? null),
+            'settlement_date' => fn($item) => $this->displayDateTime($item->settlement_date ?? null),
             'type' => fn($item) => (string) ($item->type_name ?? $item->type_id ?? ''),
             'status_id' => fn($item) => $item->status_id !== null ? (string) $item->status_id : '',
             'holder_name' => fn($item) => (string) ($item->holder_name ?? ''),
@@ -1485,7 +1515,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     {
         $formatters = [
             'id' => fn($entry) => (string) (int) $entry->id,
-            'value_date' => fn($entry) => $this->dateTime($entry->value_date ?? null),
+            'value_date' => fn($entry) => $this->displayDateTime($entry->value_date ?? null),
             'direction' => fn($entry) => (string) ($entry->credit_debit_indicator ?? ''),
             'amount' => fn($entry) => $entry->amount !== null ? $this->currencyText((float) $entry->amount) : '',
             'transaction_total' => fn() => '',
@@ -1763,6 +1793,48 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     private function dateOnly(mixed $value): string
     {
         return $value ? Carbon::parse($value)->toDateString() : '';
+    }
+
+    private function displayDateTime(mixed $value): string
+    {
+        if (!$value) {
+            return '';
+        }
+
+        $date = Carbon::parse($value);
+
+        return $date->format('H:i:s') === '00:00:00'
+            ? $date->toDateString()
+            : $date->format('Y-m-d H:i:s');
+    }
+
+    private function excelDateCell(
+        mixed $value,
+        Style $dateOnlyStyle,
+        Style $dateTimeStyle
+    ): DateTimeCell|StringCell {
+        if (!$value) {
+            return new StringCell('', $dateOnlyStyle);
+        }
+
+        $date = Carbon::parse($value);
+        $style = $date->format('H:i:s') === '00:00:00' ? $dateOnlyStyle : $dateTimeStyle;
+
+        return new DateTimeCell($date, $style);
+    }
+
+    private function excelTimestampCell(mixed $value, Style $dateTimeStyle): DateTimeCell|StringCell
+    {
+        return $value
+            ? new DateTimeCell(Carbon::parse($value), $dateTimeStyle)
+            : new StringCell('', $dateTimeStyle);
+    }
+
+    private function excelDateOnlyCell(mixed $value, Style $dateOnlyStyle): DateTimeCell|StringCell
+    {
+        return $value
+            ? new DateTimeCell(Carbon::parse($value)->startOfDay(), $dateOnlyStyle)
+            : new StringCell('', $dateOnlyStyle);
     }
 
     private function cleanBankDescription(mixed $description): string
@@ -2292,11 +2364,6 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     private function stringOption(string $name): string
     {
         return trim((string) ($this->option($name) ?? ''));
-    }
-
-    private function dateTime(mixed $value): string
-    {
-        return $value ? Carbon::parse($value)->format('Y-m-d H:i:s') : '';
     }
 
     private function normalizeDateBasis(string $basis): string

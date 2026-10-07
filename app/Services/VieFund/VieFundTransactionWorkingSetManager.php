@@ -155,6 +155,6 @@ class VieFundTransactionWorkingSetManager
 
     private function ttlMinutes(): int
     {
-        return max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 240));
+        return max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 1440));
     }
 }

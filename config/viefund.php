@@ -243,7 +243,7 @@ return [
     ),
 
     'all_transactions_working_set' => [
-        'ttl_minutes' => max(15, (int) env('VIEFUND_ALL_TRANSACTIONS_WORKING_SET_TTL_MINUTES', 240)),
+        'ttl_minutes' => max(15, (int) env('VIEFUND_ALL_TRANSACTIONS_WORKING_SET_TTL_MINUTES', 1440)),
         'batch_size' => max(
             100,
             min(5000, (int) env('VIEFUND_ALL_TRANSACTIONS_WORKING_SET_BATCH_SIZE', 1000))

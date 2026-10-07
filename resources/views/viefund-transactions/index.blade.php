@@ -925,12 +925,13 @@
             column.style.display = visible ? '' : 'none';
         });
     };
-    const formatLinkedDate = (value, includeTime = false) => {
+    const formatLinkedDate = (value) => {
         if (!value) return '—';
-        const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+        const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
         if (!match) return String(value);
         const formatted = `${match[2]}/${match[3]}/${match[1]}`;
-        return includeTime && match[4] ? `${formatted} ${match[4]}:${match[5]}` : formatted;
+        const hasActualTime = match[4] && `${match[4]}:${match[5]}:${match[6] || '00'}` !== '00:00:00';
+        return hasActualTime ? `${formatted} ${match[4]}:${match[5]}:${match[6] || '00'}` : formatted;
     };
     const formatLinkedAmount = (value) => {
         if (value === null || value === undefined || value === '') return '—';
@@ -944,7 +945,7 @@
         if (['effective_date', 'create_date', 'trade_date', 'settlement_date', 'value_date', 'booking_date'].includes(field)) {
             return formatLinkedDate(record[field]);
         }
-        if (field === 'created_at') return formatLinkedDate(record[field], true);
+        if (field === 'created_at') return formatLinkedDate(record[field]);
         if (type === 'eft' && field === 'file_name') {
             return record.file_name || (record.file_id ? `EFT file #${record.file_id}` : `Unprocessed EFT item #${record.id}`);
         }
