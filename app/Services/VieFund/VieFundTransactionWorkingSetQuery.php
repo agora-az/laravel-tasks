@@ -56,6 +56,107 @@ class VieFundTransactionWorkingSetQuery
             ->get();
     }
 
+    /** @return array<string, array<string, int|float>> */
+    public function matchStatusSummary(
+        VieFundTransactionWorkingSet $workingSet,
+        ?string $search,
+        array $filters
+    ): array {
+        $statuses = ['Complete', 'Verify', 'Possible', 'Unknown'];
+        $summary = [];
+        $seen = [];
+        foreach ($statuses as $status) {
+            $summary[$status] = [
+                'viefund_count' => 0,
+                'viefund_total' => 0.0,
+                'eft_count' => 0,
+                'eft_total' => 0.0,
+                'fsp_count' => 0,
+                'fsp_total' => 0.0,
+                'bank_count' => 0,
+                'bank_total' => 0.0,
+                'variance' => 0.0,
+            ];
+            $seen[$status] = ['eft' => [], 'eft_total' => [], 'fsp' => [], 'fsp_total' => [], 'bank' => []];
+        }
+
+        $summaryFilters = array_merge($filters, ['match_statuses' => null]);
+        $lastCashTransactionId = 0;
+        do {
+            $rows = $this->baseQuery($workingSet, $search, $summaryFilters)
+                ->where('cash_transaction_id', '>', $lastCashTransactionId)
+                ->orderBy('cash_transaction_id')
+                ->limit(1000)
+                ->get(['cash_transaction_id', 'amount', 'match_status', 'enrichment']);
+
+            foreach ($rows as $row) {
+                $lastCashTransactionId = (int) $row->cash_transaction_id;
+                $status = in_array($row->match_status, $statuses, true) ? $row->match_status : 'Unknown';
+                ++$summary[$status]['viefund_count'];
+                $summary[$status]['viefund_total'] += (float) ($row->amount ?? 0);
+
+                if ($status === 'Unknown') {
+                    continue;
+                }
+
+                $enrichment = json_decode((string) ($row->enrichment ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
+                foreach ((array) ($enrichment['eft_items'] ?? []) as $record) {
+                    $this->addSummaryRecord($summary[$status], $seen[$status]['eft'], 'eft', $record, fn(): float => 0.0);
+                    $hasFileTotal = array_key_exists('file_total', $record) && $record['file_total'] !== null;
+                    $amount = (float) ($hasFileTotal ? $record['file_total'] : ($record['amount'] ?? 0));
+                    $signedAmount = (int) ($record['type_id'] ?? 0) === 10 ? $amount : -$amount;
+                    $totalKey = $hasFileTotal
+                        ? 'file:' . (string) ($record['file_id'] ?? $record['sequence_number'] ?? $record['id'] ?? '')
+                        : 'item:' . (string) ($record['id'] ?? sha1(json_encode($record, JSON_THROW_ON_ERROR)));
+                    $this->addSummaryTotal(
+                        $summary[$status],
+                        $seen[$status]['eft_total'],
+                        'eft_total',
+                        $totalKey,
+                        $signedAmount
+                    );
+                }
+                foreach ((array) ($enrichment['fsp_items'] ?? []) as $record) {
+                    $this->addSummaryRecord($summary[$status], $seen[$status]['fsp'], 'fsp', $record, fn(): float => 0.0);
+                }
+                $fspBankEntries = (array) ($enrichment['fsp_bank_entries'] ?? []);
+                foreach ($fspBankEntries as $record) {
+                    $recordKey = (string) ($record['id'] ?? sha1(json_encode($record, JSON_THROW_ON_ERROR)));
+                    $this->addSummaryTotal(
+                        $summary[$status],
+                        $seen[$status]['fsp_total'],
+                        'fsp_total',
+                        $recordKey,
+                        (float) ($record['fsp_net_total'] ?? 0)
+                    );
+                }
+                foreach (array_merge((array) ($enrichment['eft_bank_entries'] ?? []), $fspBankEntries) as $record) {
+                    $this->addSummaryRecord($summary[$status], $seen[$status]['bank'], 'bank', $record, function (array $entry): float {
+                        $amount = (float) ($entry['amount'] ?? 0);
+
+                        return strtoupper(trim((string) ($entry['credit_debit_indicator'] ?? ''))) === 'DBIT'
+                            ? -$amount
+                            : $amount;
+                    });
+                }
+            }
+        } while ($rows->count() === 1000);
+
+        foreach ($statuses as $status) {
+            $summary[$status]['variance'] = $summary[$status]['bank_total']
+                - $summary[$status]['eft_total']
+                - $summary[$status]['fsp_total'];
+            foreach (['viefund_total', 'eft_total', 'fsp_total', 'bank_total', 'variance'] as $field) {
+                $summary[$status][$field] = round((float) $summary[$status][$field], 2);
+                if (abs($summary[$status][$field]) < 0.005) {
+                    $summary[$status][$field] = 0.0;
+                }
+            }
+        }
+
+        return $summary;
+    }
+
     public function exportRowsAfter(
         VieFundTransactionWorkingSet $workingSet,
         ?string $search,
@@ -189,5 +290,41 @@ class VieFundTransactionWorkingSetQuery
         if ($value !== '') {
             $query->where($column, 'like', '%' . $value . '%');
         }
+    }
+
+    /** @param array<string, int|float> $summary @param array<string, true> $seen */
+    private function addSummaryRecord(
+        array &$summary,
+        array &$seen,
+        string $type,
+        array $record,
+        callable $amount
+    ): void {
+        $recordKey = isset($record['id'])
+            ? (string) $record['id']
+            : sha1(json_encode($record, JSON_THROW_ON_ERROR));
+        if (isset($seen[$recordKey])) {
+            return;
+        }
+
+        $seen[$recordKey] = true;
+        ++$summary[$type . '_count'];
+        $summary[$type . '_total'] += $amount($record);
+    }
+
+    /** @param array<string, int|float> $summary @param array<string, true> $seen */
+    private function addSummaryTotal(
+        array &$summary,
+        array &$seen,
+        string $field,
+        string $recordKey,
+        float $amount
+    ): void {
+        if (isset($seen[$recordKey])) {
+            return;
+        }
+
+        $seen[$recordKey] = true;
+        $summary[$field] += $amount;
     }
 }

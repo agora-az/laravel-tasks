@@ -189,6 +189,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             $dailyStats = $workingSet
                 ? $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters)
                 : $remoteService->fetchAllTransactionExportDailyStats($search ?: null, $filters);
+            $matchStatusSummary = $workingSet
+                ? $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters)
+                : [];
             $totalTransactions = (int) $dailyStats->sum(fn($row) => (int) $row->transaction_count);
             $overallSelectedNet = (float) $dailyStats->sum(fn($row) => (float) $row->net_amount);
             $firstDate = $dailyStats->isNotEmpty()
@@ -967,7 +970,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $includeBankRecords ? $bankRecordCount : null,
                 $includeAnyFspRecords ? $fspRecordCount : null,
                 $includedFspSourceTypes,
-                $linkedRecordLayout
+                $linkedRecordLayout,
+                $matchStatusSummary
             );
 
             $writer->close();
@@ -2067,12 +2071,13 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         ?int $linkedBankRecordCount,
         ?int $linkedFspRecordCount,
         array $includedFspSourceTypes,
-        string $linkedRecordLayout
+        string $linkedRecordLayout,
+        array $matchStatusSummary
     ): void {
         $sheet->setName('Summary');
         $sheet->setColumnWidth(34, 1);
         $sheet->setColumnWidth(42, 2);
-        $sheet->setColumnWidth(18, 3, 4, 5, 6, 7);
+        $sheet->setColumnWidth(18, 3, 4, 5, 6, 7, 8, 9, 10);
 
         $summaryRows = [
             ['Summary Item', 'Value'],
@@ -2130,6 +2135,53 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 ]));
             } else {
                 $writer->addRow(Row::fromValues($summaryRow, $style));
+            }
+        }
+
+        $writer->addRow(Row::fromValues([]));
+        $writer->addRow(Row::fromValues(['Match Status Summary'], $headerStyle));
+        $writer->addRow(Row::fromValues([
+            'Status', 'VieFund Transactions', 'VieFund Total', 'EFT Transactions', 'EFT Total',
+            'FSP Transactions', 'FSP Total', 'Bank Transactions', 'Bank Total', 'Variance',
+        ], $headerStyle));
+        if ($matchStatusSummary === []) {
+            $writer->addRow(Row::fromValues([
+                'Unavailable', 'A completed local period cache is required for linked-record summary totals.',
+            ]));
+        } else {
+            $palette = [
+                EftBankMatchStatusService::COMPLETE => ['background' => 'E6FFED', 'text' => '22543D'],
+                EftBankMatchStatusService::TO_BE_VERIFIED => ['background' => 'FFFDE5', 'text' => '975A16'],
+                EftBankMatchStatusService::POSSIBLE_MATCH => ['background' => 'EBF8FF', 'text' => '2A4365'],
+                EftBankMatchStatusService::UNKNOWN => ['background' => 'F7FAFC', 'text' => '4A5568'],
+            ];
+            foreach ($palette as $status => $colors) {
+                $summary = $matchStatusSummary[$status] ?? [];
+                $rowStyle = (new Style())
+                    ->setFontName('Calibri')
+                    ->setFontSize(11)
+                    ->setFontColor($colors['text'])
+                    ->setBackgroundColor($colors['background']);
+                $statusStyle = clone $rowStyle;
+                $statusStyle->setFontBold();
+                $amountStyle = clone $rowStyle;
+                $amountStyle->setFormat(self::ACCOUNTING_CURRENCY_FORMAT);
+                $linkedCells = $status === EftBankMatchStatusService::UNKNOWN
+                    ? array_fill(0, 7, new StringCell('', $rowStyle))
+                    : [
+                        new NumericCell((int) ($summary['eft_count'] ?? 0), $rowStyle),
+                        new NumericCell((float) ($summary['eft_total'] ?? 0), $amountStyle),
+                        new NumericCell((int) ($summary['fsp_count'] ?? 0), $rowStyle),
+                        new NumericCell((float) ($summary['fsp_total'] ?? 0), $amountStyle),
+                        new NumericCell((int) ($summary['bank_count'] ?? 0), $rowStyle),
+                        new NumericCell((float) ($summary['bank_total'] ?? 0), $amountStyle),
+                        new NumericCell((float) ($summary['variance'] ?? 0), $amountStyle),
+                    ];
+                $writer->addRow(new Row(array_merge([
+                    new StringCell($status, $statusStyle),
+                    new NumericCell((int) ($summary['viefund_count'] ?? 0), $rowStyle),
+                    new NumericCell((float) ($summary['viefund_total'] ?? 0), $amountStyle),
+                ], $linkedCells)));
             }
         }
 

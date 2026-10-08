@@ -728,6 +728,83 @@ class RemoteVieFundController extends Controller
         }
     }
 
+    public function allTransactionsMatchSummary(Request $request): JsonResponse
+    {
+        $filterRequest = $this->transactionFilterRequest($request, 'all');
+        $defaultFrom = Carbon::today()->subMonthNoOverflow()->startOfMonth()->toDateString();
+        $defaultTo = Carbon::today()->subMonthNoOverflow()->endOfMonth()->toDateString();
+        $dateBasis = (string) $filterRequest->query('filter_date_basis', 'settlement_date');
+        $dateBasis = array_key_exists($dateBasis, self::ALL_TRANSACTION_DATE_BASES) ? $dateBasis : 'settlement_date';
+        $currencyCode = (string) $filterRequest->query('filter_currency_code', '00');
+        $currencyCode = array_key_exists($currencyCode, self::ALL_TRANSACTION_CURRENCIES) ? $currencyCode : '00';
+        $statusIds = array_values(array_unique(array_filter(
+            array_map('intval', (array) $filterRequest->query('filter_status', [6])),
+            fn($status) => array_key_exists($status, self::ALL_TRANSACTION_STATUSES)
+        )));
+        $statusIds = $statusIds ?: [6];
+        sort($statusIds);
+        $transactionTypes = array_values(array_filter(array_map(
+            fn($type) => trim((string) $type),
+            (array) $filterRequest->query('filter_trx_type', [])
+        )));
+        sort($transactionTypes);
+        $search = trim((string) $filterRequest->query('search', ''));
+        $filters = array_filter([
+            'customer_name' => trim((string) $filterRequest->query('filter_customer_name', '')),
+            'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
+            'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
+            'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'date_from' => trim((string) $filterRequest->query('filter_date_from', $defaultFrom)),
+            'date_to' => trim((string) $filterRequest->query('filter_date_to', $defaultTo)),
+            'date_basis' => $dateBasis,
+            'currency_code' => $currencyCode,
+            'status_ids' => $statusIds,
+            'trx_type' => $transactionTypes ?: null,
+            'has_reconciliation_match' => $filterRequest->boolean('filter_has_eft_match') ?: null,
+            'has_agra_fsp_match' => $filterRequest->boolean('filter_has_agra_fsp_match') ?: null,
+            'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
+        ]);
+        $workingSet = $this->workingSetManager->findReady($filters);
+        if (!$workingSet) {
+            return response()->json([
+                'state' => 'processing',
+                'message' => 'Match summaries will be available when the period cache is ready.',
+            ], 202, $this->exportStatusNoCacheHeaders());
+        }
+
+        try {
+            $signature = sha1(json_encode([
+                'working_set_id' => $workingSet->id,
+                'generation' => $workingSet->readableGeneration(),
+                'search' => $search,
+                'filters' => $filters,
+            ], JSON_THROW_ON_ERROR));
+            $summary = Cache::remember(
+                "viefund_all_transactions_match_summary:{$signature}",
+                now()->addMinutes(5),
+                fn(): array => $this->workingSetQuery->matchStatusSummary(
+                    $workingSet,
+                    $search ?: null,
+                    $filters
+                )
+            );
+
+            return response()->json([
+                'state' => 'complete',
+                'currency' => self::ALL_TRANSACTION_CURRENCIES[$currencyCode],
+                'statuses' => collect($summary)->map(
+                    fn(array $values, string $status): array => array_merge(['status' => $status], $values)
+                )->values(),
+            ], 200, $this->exportStatusNoCacheHeaders());
+        } catch (Exception $e) {
+            Log::error('Unable to load the All Transactions match summary.', ['exception' => $e]);
+
+            return response()->json([
+                'message' => 'The match summary could not be loaded.',
+            ], 503, $this->exportStatusNoCacheHeaders());
+        }
+    }
+
     public function startAllTransactionsExport(Request $request): JsonResponse
     {
         $validated = $request->validate([

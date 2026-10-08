@@ -656,6 +656,66 @@
         font-weight:700;
         font-variant-numeric:tabular-nums;
     }
+    .all-transactions-match-summary-shell {
+        overflow-x:auto;
+        border:1px solid #cbd5e0;
+        border-radius:6px;
+        background:#fff;
+    }
+    .all-transactions-match-summary-table {
+        width:100%;
+        min-width:1120px;
+        border-collapse:collapse;
+        color:#2d3748;
+        font-family:monospace;
+        font-size:13px;
+        font-variant-numeric:tabular-nums;
+    }
+    .all-transactions-match-summary-table th,
+    .all-transactions-match-summary-table td {
+        padding:10px 12px;
+        border-bottom:1px solid #e2e8f0;
+        text-align:right;
+        white-space:nowrap;
+    }
+    .all-transactions-match-summary-table th {
+        background:#f7fafc;
+        color:#4a5568;
+        font-size:13px;
+        font-weight:700;
+    }
+    .all-transactions-match-summary-table th:first-child,
+    .all-transactions-match-summary-table td:first-child {
+        position:sticky;
+        left:0;
+        z-index:2;
+        text-align:left;
+    }
+    .all-transactions-match-summary-table th:first-child { background:#f7fafc; }
+    .all-transactions-match-summary-table tbody tr[data-status="complete"] { background:#e6ffed; }
+    .all-transactions-match-summary-table tbody tr[data-status="verify"] { background:#fffde5; }
+    .all-transactions-match-summary-table tbody tr[data-status="possible"] { background:#ebf8ff; }
+    .all-transactions-match-summary-table tbody tr[data-status="unknown"] { background:#f7fafc; }
+    .all-transactions-match-summary-table tbody tr[data-status="complete"] td:first-child { background:#e6ffed; }
+    .all-transactions-match-summary-table tbody tr[data-status="verify"] td:first-child { background:#fffde5; }
+    .all-transactions-match-summary-table tbody tr[data-status="possible"] td:first-child { background:#ebf8ff; }
+    .all-transactions-match-summary-table tbody tr[data-status="unknown"] td:first-child { background:#f7fafc; }
+    .all-transactions-match-summary-table tbody tr:last-child td { border-bottom:0; }
+    .all-transactions-match-summary-status {
+        display:inline-flex;
+        min-width:78px;
+        justify-content:center;
+        padding:4px 8px;
+        border-radius:4px;
+        font-weight:800;
+    }
+    .all-transactions-match-summary-status[data-status="complete"] { background:#c6f6d5;color:#22543d; }
+    .all-transactions-match-summary-status[data-status="verify"] { background:#fefcbf;color:#744210; }
+    .all-transactions-match-summary-status[data-status="possible"] { background:#bee3f8;color:#2a4365; }
+    .all-transactions-match-summary-status[data-status="unknown"] { background:#edf2f7;color:#4a5568; }
+    .all-transactions-match-summary-muted { color:#718096; }
+    .all-transactions-match-summary-positive { color:#166534;font-weight:700; }
+    .all-transactions-match-summary-negative { color:#b91c1c;font-weight:700; }
     @media (max-width: 1100px) {
         .all-transactions-date-filters { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
         .all-transactions-secondary-filters { grid-template-columns:1fr; }
@@ -707,6 +767,44 @@
             </div>
         </div>
         <div id="all-transactions-summary-error" role="status" style="display:none;margin-top:8px;color:#b91c1c;font-size:12px;"></div>
+    </section>
+
+    <section id="all-transactions-match-summary" aria-labelledby="all-transactions-match-summary-heading" aria-busy="true" style="margin-bottom:18px;">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+            <div>
+                <h3 id="all-transactions-match-summary-heading" style="margin:0;color:#2d3748;">Match Status Summary</h3>
+                <div style="margin-top:3px;color:#718096;font-size:12px;">Counts are unique linked records; EFT and FSP totals use their full reconciliation batches. Match checkboxes are excluded so every status remains visible. Variance is Bank - (EFT + FSP).</div>
+            </div>
+            <div id="all-transactions-match-summary-state" role="status" style="color:#4a5568;font-size:12px;font-weight:700;">Loading summaries…</div>
+        </div>
+        <div class="all-transactions-match-summary-shell">
+            <table class="all-transactions-match-summary-table">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>VieFund Txns</th>
+                        <th>VieFund Total</th>
+                        <th>EFT Txns</th>
+                        <th>EFT Total</th>
+                        <th>FSP Txns</th>
+                        <th>FSP Total</th>
+                        <th>Bank Txns</th>
+                        <th>Bank Total</th>
+                        <th>Variance</th>
+                    </tr>
+                </thead>
+                <tbody id="all-transactions-match-summary-body">
+                    @foreach(['Complete', 'Verify', 'Possible', 'Unknown'] as $status)
+                        <tr data-status="{{ strtolower($status) }}">
+                            <td><span class="all-transactions-match-summary-status" data-status="{{ strtolower($status) }}">{{ $status }}</span></td>
+                            @for($column = 0; $column < 9; ++$column)
+                                <td class="all-transactions-match-summary-muted">Loading…</td>
+                            @endfor
+                        </tr>
+                    @endforeach
+                </tbody>
+            </table>
+        </div>
     </section>
 
     <div class="card all-transactions-table-card" style="padding:0;overflow:visible;">
@@ -1308,9 +1406,14 @@
     const applyMatchFilters = () => {
         const url = new URL(window.location.href);
         url.searchParams.delete('filter_match_status[]');
-        matchStatusInputs.filter((input) => input.checked).forEach((input) => {
+        url.searchParams.delete('filter_match_status');
+        const selectedInputs = matchStatusInputs.filter((input) => input.checked);
+        selectedInputs.forEach((input) => {
             url.searchParams.append('filter_match_status[]', input.value);
         });
+        if (selectedInputs.length === 0) {
+            url.searchParams.append('filter_match_status[]', '');
+        }
         url.searchParams.set('page', '1');
         if (workingSetStatus?.dataset.queryable === '1') {
             window.location.assign(url.toString());
@@ -1632,6 +1735,87 @@
         }
     };
     loadPeriodSummary();
+
+    const matchSummary = document.getElementById('all-transactions-match-summary');
+    const loadMatchSummary = async () => {
+        if (!matchSummary) return;
+
+        const body = document.getElementById('all-transactions-match-summary-body');
+        const state = document.getElementById('all-transactions-match-summary-state');
+        const formatMoney = (value) => {
+            const amount = Number(value || 0);
+            const formatted = `$${Math.abs(amount).toLocaleString('en-CA', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
+            return amount < 0 ? `(${formatted})` : formatted;
+        };
+        const appendCell = (row, value, className = '') => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            if (className) cell.className = className;
+            row.appendChild(cell);
+
+            return cell;
+        };
+
+        try {
+            const summaryUrl = new URL('{{ route('viefund-transactions.match-summary') }}', window.location.origin);
+            summaryUrl.search = window.location.search;
+            const response = await fetch(summaryUrl.toString(), {
+                headers: {'Accept':'application/json','X-Requested-With':'XMLHttpRequest'},
+                cache: 'no-store',
+            });
+            const data = await response.json();
+            if (response.status === 202) {
+                state.textContent = data.message || 'Waiting for the period cache…';
+                window.setTimeout(loadMatchSummary, 5000);
+                return;
+            }
+            if (!response.ok) throw new Error(data.message || 'The match summary could not be loaded.');
+
+            const rows = (data.statuses || []).map((summary) => {
+                const row = document.createElement('tr');
+                row.dataset.status = String(summary.status || 'Unknown').toLowerCase();
+                const statusCell = document.createElement('td');
+                const badge = document.createElement('span');
+                badge.className = 'all-transactions-match-summary-status';
+                badge.dataset.status = String(summary.status || 'Unknown').toLowerCase();
+                badge.textContent = summary.status || 'Unknown';
+                statusCell.appendChild(badge);
+                row.appendChild(statusCell);
+
+                appendCell(row, Number(summary.viefund_count || 0).toLocaleString('en-CA'));
+                appendCell(row, formatMoney(summary.viefund_total));
+                if (summary.status === 'Unknown') {
+                    for (let column = 0; column < 7; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
+                    return row;
+                }
+
+                appendCell(row, Number(summary.eft_count || 0).toLocaleString('en-CA'));
+                appendCell(row, formatMoney(summary.eft_total));
+                appendCell(row, Number(summary.fsp_count || 0).toLocaleString('en-CA'));
+                appendCell(row, formatMoney(summary.fsp_total));
+                appendCell(row, Number(summary.bank_count || 0).toLocaleString('en-CA'));
+                appendCell(row, formatMoney(summary.bank_total));
+                const variance = Number(summary.variance || 0);
+                appendCell(
+                    row,
+                    formatMoney(variance),
+                    Math.abs(variance) < .01
+                        ? ''
+                        : (variance < 0 ? 'all-transactions-match-summary-negative' : 'all-transactions-match-summary-positive')
+                );
+
+                return row;
+            });
+            body.replaceChildren(...rows);
+            state.textContent = `${data.currency || ''} · Complete`;
+            matchSummary.removeAttribute('aria-busy');
+        } catch (summaryError) {
+            state.textContent = summaryError.message || 'Match summaries unavailable.';
+            state.style.color = '#b91c1c';
+            matchSummary.removeAttribute('aria-busy');
+        }
+    };
+    loadMatchSummary();
 
     const showStatus = (element, message, isError = false) => {
         element.textContent = message;

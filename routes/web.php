@@ -50,6 +50,7 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/viefund-transactions/fsp-matches', [RemoteVieFundController::class, 'fspMatches'])->name('viefund-transactions.fsp-matches');
     Route::get('/viefund-transactions/count', [RemoteVieFundController::class, 'allTransactionsCountStatus'])->name('viefund-transactions.count');
     Route::get('/viefund-transactions/summary', [RemoteVieFundController::class, 'allTransactionsSummary'])->name('viefund-transactions.summary');
+    Route::get('/viefund-transactions/match-summary', [RemoteVieFundController::class, 'allTransactionsMatchSummary'])->name('viefund-transactions.match-summary');
     Route::post('/viefund-transactions/export', [RemoteVieFundController::class, 'startAllTransactionsExport'])->name('viefund-transactions.export.start');
     Route::get('/viefund-transactions/export/status', [RemoteVieFundController::class, 'allTransactionsExportStatus'])->name('viefund-transactions.export.status');
     Route::get('/viefund-transactions/export/download', [RemoteVieFundController::class, 'downloadAllTransactionsExport'])->name('viefund-transactions.export.download');
