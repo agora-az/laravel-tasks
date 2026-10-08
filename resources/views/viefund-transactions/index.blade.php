@@ -45,10 +45,24 @@
     foreach($visibleTransactionColumns as $key => $definition) {
         $coreHeadings[] = array_merge($definition, ['key' => $key]);
     }
+    $matchHeadings = array_values(array_filter($coreHeadings, fn($heading) => $heading['key'] === 'matched_to_bank'));
+    $viefundHeadings = array_values(array_filter($coreHeadings, fn($heading) => $heading['key'] !== 'matched_to_bank'));
     $eftHeadings = array_values($visibleEftColumns);
     $bankSummaryHeadings = array_values($visibleBankSummaryColumns);
     $bankHeadings = array_values($visibleBankDetailColumns);
     $fspHeadings = array_values($visibleFspColumns);
+    $formatCacheEta = function (?int $seconds): ?string {
+        if ($seconds === null) return null;
+        if ($seconds < 60) return '<1m';
+        if ($seconds < 3600) return (string) ceil($seconds / 60).'m';
+        if ($seconds < 86400) return floor($seconds / 3600).'h '.ceil(($seconds % 3600) / 60).'m';
+
+        return floor($seconds / 86400).'d '.ceil(($seconds % 86400) / 3600).'h';
+    };
+    $workingSetEta = $formatCacheEta($workingSetStatus['eta_seconds'] ?? null);
+    $workingSetProgress = isset($workingSetStatus['progress_pct'])
+        ? rtrim(rtrim(number_format((float) $workingSetStatus['progress_pct'], 1), '0'), '.')
+        : null;
 @endphp
 <details class="card" style="padding:0;margin-bottom:20px;" open>
     <summary style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:#edf2f7;cursor:pointer;list-style:none;border-radius:6px;font-size:12px;font-weight:800;color:#4a5568;text-transform:uppercase;letter-spacing:.08em;">
@@ -230,6 +244,7 @@
     .all-transactions-working-set-status {
         display:inline-flex;
         align-items:center;
+        gap:7px;
         min-height:26px;
         padding:4px 9px;
         border:1px solid #f59e0b;
@@ -239,6 +254,29 @@
         font-size:11px;
         font-weight:700;
         line-height:1.35;
+        white-space:nowrap;
+    }
+    .all-transactions-working-set-status-icon {
+        display:inline-flex;
+        width:14px;
+        height:14px;
+        flex:0 0 14px;
+        align-items:center;
+        justify-content:center;
+        font-size:12px;
+        line-height:1;
+    }
+    .all-transactions-working-set-status-icon--running {
+        border:2px solid currentColor;
+        border-right-color:transparent;
+        border-radius:50%;
+        animation:all-transactions-cache-spin .8s linear infinite;
+    }
+    @keyframes all-transactions-cache-spin {
+        to { transform:rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .all-transactions-working-set-status-icon--running { animation-duration:1.8s; }
     }
     .all-transactions-working-set-status--ready {
         border-color:#10b981;
@@ -249,6 +287,82 @@
         border-color:#ef4444;
         background:#fef2f2;
         color:#991b1b;
+    }
+    .all-transactions-export-status {
+        display:none;
+        align-items:center;
+        gap:9px;
+        margin:16px 20px;
+        padding:10px 14px;
+        border:1px solid #99f6e4;
+        border-radius:5px;
+        background:#ecfdf5;
+        color:#115e59;
+        font-size:12px;
+        font-weight:600;
+    }
+    .all-transactions-export-status--busy::before {
+        width:14px;
+        height:14px;
+        flex:0 0 14px;
+        border:2px solid currentColor;
+        border-right-color:transparent;
+        border-radius:50%;
+        animation:all-transactions-cache-spin .8s linear infinite;
+        content:"";
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .all-transactions-export-status--busy::before { animation-duration:1.8s; }
+    }
+    .all-transactions-working-set-row {
+        display:flex;
+        align-items:center;
+        gap:8px;
+    }
+    .all-transactions-cache-control {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        width:30px;
+        height:30px;
+        flex:0 0 30px;
+        padding:0;
+        border:1px solid #718096;
+        border-radius:4px;
+        background:#fff;
+        color:#2d3748;
+        font-size:15px;
+        font-weight:700;
+        line-height:1;
+        cursor:pointer;
+    }
+    .all-transactions-cache-control-icon {
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        width:100%;
+        height:100%;
+        line-height:1;
+    }
+    .all-transactions-cache-control-icon--resume {
+        transform:translateY(1px);
+    }
+    .all-transactions-cache-control:hover,
+    .all-transactions-cache-control:focus-visible {
+        border-color:#2b6cb0;
+        background:#ebf8ff;
+        color:#2c5282;
+    }
+    .all-transactions-cache-control:disabled {
+        cursor:not-allowed;
+        opacity:.6;
+    }
+    .all-transactions-cache-control--complete:disabled {
+        border-color:#10b981;
+        background:#ecfdf5;
+        color:#065f46;
+        cursor:default;
+        opacity:1;
     }
     .all-transactions-info {
         position:relative;
@@ -433,7 +547,7 @@
         top:0;
         z-index:8;
         display:grid;
-        grid-template-columns:minmax(190px,.75fr) minmax(510px,1.5fr) minmax(190px,.55fr);
+        grid-template-columns:minmax(280px,1fr) max-content max-content;
         align-items:center;
         gap:24px;
         padding:16px 20px;
@@ -457,7 +571,8 @@
         font-weight:700;
     }
     .all-transactions-match-controls {
-        min-width:0;
+        width:max-content;
+        max-width:100%;
         margin:0;
         padding:0;
         border:0;
@@ -472,19 +587,17 @@
         letter-spacing:.06em;
     }
     .all-transactions-match-controls-row {
-        display:flex;
-        align-items:center;
-        gap:12px;
-        flex-wrap:wrap;
+        display:grid;
+        grid-template-columns:repeat(2,minmax(92px,max-content)) 58px;
+        grid-template-rows:repeat(2,26px);
+        align-items:stretch;
+        column-gap:10px;
+        row-gap:6px;
     }
-    .all-transactions-match-controls-row > span,
     .all-transactions-match-controls-row label {
         color:#4a5568;
         font-size:13px;
         white-space:nowrap;
-    }
-    .all-transactions-match-controls-row > span {
-        font-weight:700;
     }
     .all-transactions-match-controls-row label {
         display:flex;
@@ -497,9 +610,10 @@
         height:15px;
     }
     #all-transactions-apply-match-filter {
-        min-height:34px;
-        margin-left:4px;
-        padding:6px 14px;
+        grid-column:3;
+        grid-row:1;
+        min-height:0;
+        padding:3px 8px;
         border:1px solid #2b6cb0;
         border-radius:4px;
         background:#2b6cb0;
@@ -513,8 +627,10 @@
         background:#2c5282;
     }
     #all-transactions-clear-match-filter {
-        min-height:34px;
-        padding:6px 12px;
+        grid-column:3;
+        grid-row:2;
+        min-height:0;
+        padding:3px 8px;
         border:1px solid #a0aec0;
         border-radius:4px;
         background:#fff;
@@ -534,17 +650,25 @@
         min-height:64px;
         padding-left:22px;
         border-left:1px solid #9ae6b4;
+        align-items:flex-start;
         flex-direction:column;
         justify-content:center;
         gap:7px;
     }
     #all-transactions-excel-export {
-        width:100%;
-        min-width:175px;
-        padding:8px 30px 8px 14px;
+        width:auto;
+        min-width:0;
+        padding:8px 14px;
         font-size:13px;
         white-space:nowrap;
         cursor:pointer;
+    }
+    #all-transactions-excel-export:disabled {
+        border-color:#a0aec0;
+        background:#e2e8f0;
+        color:#718096;
+        cursor:not-allowed;
+        opacity:1;
     }
     .all-transactions-pagination {
         display:flex;
@@ -722,11 +846,13 @@
         .all-transactions-summary-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
         .all-transactions-table-toolbar { grid-template-columns:1fr; gap:16px; }
         .all-transactions-export-zone { min-height:0; padding:14px 0 0; border-top:1px solid #9ae6b4; border-left:0; }
-        #all-transactions-excel-export { width:min(100%,320px); }
+        #all-transactions-excel-export { width:auto; }
     }
     @media (max-width: 700px) {
         .all-transactions-date-filters { grid-template-columns:1fr !important; }
         .all-transactions-summary-grid { grid-template-columns:1fr; }
+        .all-transactions-match-controls { width:100%; }
+        .all-transactions-match-controls-row { grid-template-columns:repeat(2,minmax(90px,1fr)) 56px; column-gap:6px; }
     }
 </style>
 
@@ -811,20 +937,47 @@
         <div class="all-transactions-table-toolbar">
             <div class="all-transactions-toolbar-title-block">
                 @if(!empty($workingSetStatus['id']))
-                    <div id="all-transactions-working-set-status"
-                         class="all-transactions-working-set-status {{ !empty($workingSetStatus['ready']) ? 'all-transactions-working-set-status--ready' : (($workingSetStatus['state'] ?? null) === 'failed' ? 'all-transactions-working-set-status--failed' : '') }}"
-                         role="status"
-                         aria-live="polite"
-                         data-status-url="{{ route('viefund-transactions.working-set.status', $workingSetStatus['id']) }}"
-                         data-ready="{{ !empty($workingSetStatus['ready']) ? '1' : '0' }}"
-                         data-queryable="{{ !empty($workingSetStatus['queryable']) ? '1' : '0' }}">
-                        @if(!empty($workingSetStatus['ready']))
-                            Period cache ready
-                        @elseif(!empty($workingSetStatus['queryable']))
-                            Partial period cache: {{ number_format($workingSetStatus['rows_cached'] ?? 0) }} rows available and growing
-                        @else
-                            Preparing first cache chunk
-                        @endif
+                    <div class="all-transactions-working-set-row">
+                        <button id="all-transactions-cache-control"
+                                class="all-transactions-cache-control {{ !empty($workingSetStatus['ready']) ? 'all-transactions-cache-control--complete' : '' }}"
+                                type="button"
+                                data-action="{{ !empty($workingSetStatus['can_pause']) ? 'pause' : (!empty($workingSetStatus['can_resume']) ? 'resume' : '') }}"
+                                aria-label="{{ !empty($workingSetStatus['ready']) ? 'Period cache complete' : (!empty($workingSetStatus['can_pause']) ? 'Pause period cache' : (($workingSetStatus['state'] ?? null) === 'failed' ? 'Retry period cache' : 'Resume period cache')) }}"
+                                title="{{ !empty($workingSetStatus['ready']) ? 'Period cache complete' : (!empty($workingSetStatus['can_pause']) ? 'Pause period cache' : (($workingSetStatus['state'] ?? null) === 'failed' ? 'Retry period cache' : 'Resume period cache')) }}"
+                                {{ !empty($workingSetStatus['ready']) || (empty($workingSetStatus['can_pause']) && empty($workingSetStatus['can_resume'])) ? 'disabled' : '' }}>
+                            <span class="all-transactions-cache-control-icon {{ !empty($workingSetStatus['can_resume']) ? 'all-transactions-cache-control-icon--resume' : '' }}" aria-hidden="true">{{ !empty($workingSetStatus['ready']) ? '✓' : (!empty($workingSetStatus['can_pause']) ? '⏸' : '▶') }}</span>
+                        </button>
+                        <div id="all-transactions-working-set-status"
+                             class="all-transactions-working-set-status {{ !empty($workingSetStatus['ready']) ? 'all-transactions-working-set-status--ready' : (($workingSetStatus['state'] ?? null) === 'failed' || !empty($workingSetStatus['stalled']) ? 'all-transactions-working-set-status--failed' : '') }}"
+                             role="status"
+                             aria-live="polite"
+                             data-status-url="{{ route('viefund-transactions.working-set.status', $workingSetStatus['id']) }}"
+                             data-pause-url="{{ route('viefund-transactions.working-set.pause', $workingSetStatus['id']) }}"
+                             data-resume-url="{{ route('viefund-transactions.working-set.resume', $workingSetStatus['id']) }}"
+                             data-state="{{ $workingSetStatus['state'] ?? '' }}"
+                             data-ready="{{ !empty($workingSetStatus['ready']) ? '1' : '0' }}"
+                             data-queryable="{{ !empty($workingSetStatus['queryable']) ? '1' : '0' }}">
+                            <span class="all-transactions-working-set-status-icon {{ empty($workingSetStatus['ready']) && empty($workingSetStatus['stalled']) && ($workingSetStatus['queue_state'] ?? null) !== 'queued' && !in_array($workingSetStatus['state'] ?? null, ['paused', 'failed'], true) ? 'all-transactions-working-set-status-icon--running' : '' }}" aria-hidden="true">
+                                @if(!empty($workingSetStatus['ready']))✓@elseif(($workingSetStatus['state'] ?? null) === 'failed' || !empty($workingSetStatus['stalled']))!@elseif(($workingSetStatus['state'] ?? null) === 'paused')⏸@elseif(($workingSetStatus['queue_state'] ?? null) === 'queued')…@endif
+                            </span>
+                            <span class="all-transactions-working-set-status-text">
+                            @if(!empty($workingSetStatus['ready']))
+                                Cached: {{ number_format($workingSetStatus['total_rows'] ?? $workingSetStatus['rows_cached'] ?? 0) }} rows
+                            @elseif(($workingSetStatus['state'] ?? null) === 'failed')
+                                Cache failed{{ !empty($workingSetStatus['queryable']) ? ': '.number_format($workingSetStatus['rows_cached'] ?? 0).' rows available' : '' }}
+                            @elseif(($workingSetStatus['state'] ?? null) === 'paused')
+                                Paused: {{ number_format($workingSetStatus['rows_cached'] ?? 0) }}{{ isset($workingSetStatus['total_rows']) ? '/'.number_format($workingSetStatus['total_rows']).($workingSetProgress !== null ? ' · '.$workingSetProgress.'%' : '') : ' rows available' }}
+                            @elseif(!empty($workingSetStatus['stalled']))
+                                Cache stalled: no hydration job is queued
+                            @elseif(($workingSetStatus['queue_state'] ?? null) === 'queued')
+                                Cache queued{{ !empty($workingSetStatus['rows_cached']) ? ': '.number_format($workingSetStatus['rows_cached']).' rows available' : '' }} · waiting for worker
+                            @elseif(isset($workingSetStatus['total_rows']))
+                                Caching: {{ number_format($workingSetStatus['rows_cached'] ?? 0) }}/{{ number_format($workingSetStatus['total_rows']) }}{{ $workingSetProgress !== null ? ' · '.$workingSetProgress.'%' : '' }}{{ $workingSetEta ? ' · ~'.$workingSetEta : '' }}
+                            @else
+                                Caching: counting transactions
+                            @endif
+                            </span>
+                        </div>
                     </div>
                 @else
                     <div class="all-transactions-toolbar-title-kicker">VieFund Transactions</div>
@@ -834,24 +987,26 @@
             <fieldset class="all-transactions-match-controls">
                 <legend>{{ !empty($workingSetStatus['queryable']) ? 'Period Match Filter' : 'Filter Current Page' }}</legend>
                 <div class="all-transactions-match-controls-row">
-                    <span>Match</span>
                     @foreach(['Complete', 'Verify', 'Possible', 'Unknown'] as $label)
                         <label>
                             <input class="all-transactions-match-filter" type="checkbox" value="{{ $label }}" {{ in_array($label, $matchStatuses, true) ? 'checked' : '' }}>
                             {{ $label }}
                         </label>
                     @endforeach
-                    <button id="all-transactions-apply-match-filter" type="button">Apply Filter</button>
+                    <button id="all-transactions-apply-match-filter" type="button">Apply</button>
                     <button id="all-transactions-clear-match-filter" type="button">Clear</button>
                 </div>
             </fieldset>
             <div class="all-transactions-export-zone">
-                <label class="all-transactions-toolbar-section-label" for="all-transactions-excel-export">Export</label>
-                <select id="all-transactions-excel-export" aria-label="Export Excel" class="btn">
-                    <option value="">↓ Export Excel</option>
-                    <option value="single">Single Sheet</option>
-                    <option value="split">Split Sheets (Trx, EFT, Bank, FSP)</option>
-                </select>
+                <span class="all-transactions-toolbar-section-label">Export</span>
+                <button id="all-transactions-excel-export"
+                        class="btn"
+                        type="button"
+                        data-cache-ready="{{ !empty($workingSetStatus['ready']) ? '1' : '0' }}"
+                        title="{{ !empty($workingSetStatus['ready']) ? 'Export current results to a single-sheet Excel workbook' : 'Export is available when period caching completes' }}"
+                        {{ empty($workingSetStatus['ready']) ? 'disabled' : '' }}>
+                    ↓ Export Excel
+                </button>
             </div>
         </div>
 
@@ -886,34 +1041,33 @@
                 <input type="hidden" name="filter_status[]" value="{{ $statusId }}">
             @endforeach
         </form>
-        <div id="all-transactions-export-status" role="status" style="display:none;margin:16px 20px;padding:10px 14px;border:1px solid #99f6e4;border-radius:5px;background:#ecfdf5;color:#115e59;font-size:12px;font-weight:600;"></div>
+        <div id="all-transactions-export-status" class="all-transactions-export-status" role="status"></div>
 
         <div id="all-transactions-table-scroll" style="overflow:auto;max-height:72vh;position:relative;">
             <table id="all-transactions-table" style="width:max-content;max-width:none;border-collapse:collapse;table-layout:auto;">
                 <thead>
                     <tr style="background:#f7fafc;border-bottom:2px solid #cbd5e0;">
-                        @foreach($coreHeadings as $heading)
-                            <th class="{{ $heading['key'] === 'matched_to_bank' ? 'all-transactions-reconciliation-column all-transactions-reconciliation-start' : '' }}" style="padding:12px;text-align:{{ $heading['label'] === 'Amount' ? 'right' : 'left' }};font-weight:700;color:{{ $heading['key'] === 'matched_to_bank' ? '#22543d' : '#2d3748' }};white-space:nowrap;">
-                                @if(!empty($heading['sort']))
-                                    <a href="{{ $sortUrl($heading['sort']) }}" style="color:#2d3748;text-decoration:none;">{{ $heading['label'] }}{{ $sortIndicator($heading['sort']) }}</a>
-                                @else
-                                    {{ $heading['label'] }}
-                                @endif
-                            </th>
-                            @if($heading['key'] === 'matched_to_bank')
-                                @foreach($bankSummaryHeadings as $bankSummaryHeading)
-                                    <th class="all-transactions-bank-column all-transactions-reconciliation-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }} {{ $loop->last ? 'all-transactions-reconciliation-end' : '' }}" style="padding:12px;text-align:{{ $bankSummaryHeading['field'] === 'reconciliation_variance' ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $bankSummaryHeading['width'] ?? 220 }}px;">{{ $bankSummaryHeading['label'] }}</th>
+                        @foreach($columnGroupOrder as $columnGroup)
+                            @if($columnGroup === 'match')
+                                @foreach($matchHeadings as $heading)
+                                    <th class="all-transactions-reconciliation-column all-transactions-reconciliation-start" style="padding:12px;font-weight:700;color:#22543d;white-space:nowrap;">{{ $heading['label'] }}</th>
                                 @endforeach
+                                @foreach($bankSummaryHeadings as $bankSummaryHeading)
+                                    <th class="all-transactions-bank-column all-transactions-reconciliation-column {{ empty($matchHeadings) && $loop->first ? 'all-transactions-reconciliation-start' : '' }} {{ $loop->last ? 'all-transactions-reconciliation-end' : '' }}" style="padding:12px;text-align:{{ $bankSummaryHeading['field'] === 'reconciliation_variance' ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $bankSummaryHeading['width'] ?? 220 }}px;">{{ $bankSummaryHeading['label'] }}</th>
+                                @endforeach
+                            @elseif($columnGroup === 'viefund')
+                                @foreach($viefundHeadings as $heading)
+                                    <th style="padding:12px;text-align:{{ $heading['label'] === 'Amount' ? 'right' : 'left' }};font-weight:700;color:#2d3748;white-space:nowrap;">
+                                        @if(!empty($heading['sort']))<a href="{{ $sortUrl($heading['sort']) }}" style="color:#2d3748;text-decoration:none;">{{ $heading['label'] }}{{ $sortIndicator($heading['sort']) }}</a>@else{{ $heading['label'] }}@endif
+                                    </th>
+                                @endforeach
+                            @elseif($columnGroup === 'eft')
+                                @foreach($eftHeadings as $heading)<th class="all-transactions-eft-column {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','file_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
+                            @elseif($columnGroup === 'fsp')
+                                @foreach($fspHeadings as $heading)<th class="all-transactions-fsp-column {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['items_total','gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
+                            @elseif($columnGroup === 'bank')
+                                @foreach($bankHeadings as $heading)<th class="all-transactions-bank-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','transaction_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
                             @endif
-                        @endforeach
-                        @foreach($eftHeadings as $heading)
-                            <th class="all-transactions-eft-column {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','file_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
-                        @endforeach
-                        @foreach($fspHeadings as $heading)
-                            <th class="all-transactions-fsp-column {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['items_total','gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
-                        @endforeach
-                        @foreach($bankHeadings as $heading)
-                            <th class="all-transactions-bank-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','transaction_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>
                         @endforeach
                     </tr>
                 </thead>
@@ -964,6 +1118,14 @@
     const fspRecordsBySource = {agra: {}, '7960': {}};
     const fspBankRecordsBySource = {agra: {}, '7960': {}};
     const fspMatchStatusesBySource = {agra: {}, '7960': {}};
+    const parseJsonResponse = async (response, fallbackMessage) => {
+        const body = await response.text();
+        try {
+            return body === '' ? {} : JSON.parse(body);
+        } catch (_) {
+            throw new Error(`${fallbackMessage} (HTTP ${response.status}).`);
+        }
+    };
 
     const filterForm = document.querySelector('form[data-inception-dates]');
     const transactionTypeSelect = document.getElementById('all-trx-types');
@@ -1005,11 +1167,19 @@
     const applyMatchFilterButton = document.getElementById('all-transactions-apply-match-filter');
     const clearMatchFilterButton = document.getElementById('all-transactions-clear-match-filter');
     const workingSetStatus = document.getElementById('all-transactions-working-set-status');
+    const cacheControlButton = document.getElementById('all-transactions-cache-control');
+    const exportButton = document.getElementById('all-transactions-excel-export');
     const setWorkingSetStatus = (state, message) => {
         if (!workingSetStatus) return;
         workingSetStatus.classList.toggle('all-transactions-working-set-status--ready', state === 'ready');
-        workingSetStatus.classList.toggle('all-transactions-working-set-status--failed', state === 'failed');
-        workingSetStatus.textContent = message;
+        workingSetStatus.classList.toggle('all-transactions-working-set-status--failed', ['failed', 'stalled'].includes(state));
+        const icon = workingSetStatus.querySelector('.all-transactions-working-set-status-icon');
+        const text = workingSetStatus.querySelector('.all-transactions-working-set-status-text');
+        if (icon) {
+            icon.classList.toggle('all-transactions-working-set-status-icon--running', state === 'warming');
+            icon.textContent = state === 'ready' ? '✓' : (['failed', 'stalled'].includes(state) ? '!' : (state === 'paused' ? '⏸' : (state === 'queued' ? '…' : '')));
+        }
+        if (text) text.textContent = message;
     };
     let eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
     let eftCells = Array.from(document.querySelectorAll('.all-transactions-eft-cell'));
@@ -1431,38 +1601,132 @@
     });
     initializeLinkedRecordsForCurrentPage();
 
-    if (workingSetStatus?.dataset.ready === '0' && workingSetStatus.dataset.statusUrl) {
-        const pollWorkingSet = async () => {
-            try {
-                const response = await fetch(workingSetStatus.dataset.statusUrl, {headers: {'Accept': 'application/json'}});
-                if (!response.ok) return;
-                const status = await response.json();
-                if (status.queryable && workingSetStatus.dataset.queryable !== '1') {
-                    window.location.reload();
-                    return;
-                }
-                workingSetStatus.dataset.queryable = status.queryable ? '1' : '0';
-                workingSetStatus.dataset.ready = status.ready ? '1' : '0';
-                if (status.ready) {
-                    setWorkingSetStatus('ready', `Period cache ready · ${Number(status.total_rows || status.rows_cached || 0).toLocaleString()} rows`);
-                    return;
-                }
-                if (status.state === 'failed') {
-                    setWorkingSetStatus('failed', 'Period cache unavailable; current-page filtering remains active');
-                    return;
-                }
-                setWorkingSetStatus(
-                    'warming',
-                    status.queryable
-                        ? `Partial period cache: ${Number(status.rows_cached || 0).toLocaleString()} rows available and growing`
-                        : 'Preparing first cache chunk'
-                );
-                window.setTimeout(pollWorkingSet, 2500);
-            } catch (error) {
-                window.setTimeout(pollWorkingSet, 5000);
+    let workingSetPollTimer = null;
+    const formatCacheEta = (seconds) => {
+        if (seconds === null || seconds === undefined) return null;
+        const remaining = Math.max(0, Number(seconds));
+        if (remaining < 60) return '<1m';
+        if (remaining < 3600) return `${Math.ceil(remaining / 60)}m`;
+        if (remaining < 86400) return `${Math.floor(remaining / 3600)}h ${Math.ceil((remaining % 3600) / 60)}m`;
+        return `${Math.floor(remaining / 86400)}d ${Math.ceil((remaining % 86400) / 3600)}h`;
+    };
+    const cacheProgressText = (status, prefix) => {
+        const rows = Number(status.rows_cached || 0).toLocaleString();
+        if (status.total_rows === null || status.total_rows === undefined) {
+            return prefix === 'Caching' ? 'Caching: counting transactions' : `${prefix}: ${rows} rows available`;
+        }
+        const total = Number(status.total_rows || 0).toLocaleString();
+        const progress = status.progress_pct === null || status.progress_pct === undefined
+            ? ''
+            : ` · ${Number(status.progress_pct).toLocaleString(undefined, {maximumFractionDigits:1})}%`;
+        const eta = prefix === 'Caching' ? formatCacheEta(status.eta_seconds) : null;
+        return `${prefix}: ${rows}/${total}${progress}${eta ? ` · ~${eta}` : ''}`;
+    };
+    const renderWorkingSetStatus = (status) => {
+        if (!workingSetStatus) return;
+        workingSetStatus.dataset.state = status.state || '';
+        workingSetStatus.dataset.queryable = status.queryable ? '1' : '0';
+        workingSetStatus.dataset.ready = status.ready ? '1' : '0';
+        if (exportButton) {
+            exportButton.dataset.cacheReady = status.ready ? '1' : '0';
+            exportButton.title = status.ready
+                ? 'Export current results to a single-sheet Excel workbook'
+                : 'Export is available when period caching completes';
+            if (exportButton.dataset.busy !== '1') exportButton.disabled = !status.ready;
+        }
+
+        if (status.ready) {
+            setWorkingSetStatus('ready', `Cached: ${Number(status.total_rows || status.rows_cached || 0).toLocaleString()} rows`);
+        } else if (status.state === 'failed') {
+            setWorkingSetStatus(
+                'failed',
+                status.queryable
+                    ? `Cache failed: ${Number(status.rows_cached || 0).toLocaleString()} rows available`
+                    : 'Cache failed'
+            );
+        } else if (status.state === 'paused') {
+            setWorkingSetStatus('paused', cacheProgressText(status, 'Paused'));
+        } else if (status.stalled) {
+            setWorkingSetStatus('stalled', 'Cache stalled: no hydration job is queued');
+        } else if (status.queue_state === 'queued') {
+            const queuedRows = Number(status.rows_cached || 0);
+            setWorkingSetStatus(
+                'queued',
+                `Cache queued${queuedRows ? `: ${queuedRows.toLocaleString()} rows available` : ''} · waiting for worker`
+            );
+        } else {
+            setWorkingSetStatus('warming', cacheProgressText(status, 'Caching'));
+        }
+
+        if (!cacheControlButton) return;
+        const cacheControlIcon = cacheControlButton.querySelector('.all-transactions-cache-control-icon');
+        cacheControlButton.hidden = false;
+        cacheControlButton.classList.toggle('all-transactions-cache-control--complete', Boolean(status.ready));
+        cacheControlButton.dataset.action = status.can_pause ? 'pause' : (status.can_resume ? 'resume' : '');
+        const cacheControlLabel = status.can_pause
+            ? 'Pause period cache'
+            : (status.ready ? 'Period cache complete' : (status.state === 'failed' ? 'Retry period cache' : 'Resume period cache'));
+        if (cacheControlIcon) {
+            cacheControlIcon.textContent = status.ready ? '✓' : (status.can_pause ? '⏸' : '▶');
+            cacheControlIcon.classList.toggle('all-transactions-cache-control-icon--resume', Boolean(status.can_resume));
+        }
+        cacheControlButton.setAttribute('aria-label', cacheControlLabel);
+        cacheControlButton.title = cacheControlLabel;
+        cacheControlButton.disabled = status.ready || (!status.can_pause && !status.can_resume);
+    };
+    const scheduleWorkingSetPoll = (delay) => {
+        window.clearTimeout(workingSetPollTimer);
+        workingSetPollTimer = window.setTimeout(pollWorkingSet, delay);
+    };
+    const pollWorkingSet = async () => {
+        if (!workingSetStatus?.dataset.statusUrl) return;
+        try {
+            const wasQueryable = workingSetStatus.dataset.queryable === '1';
+            const response = await fetch(workingSetStatus.dataset.statusUrl, {headers: {'Accept': 'application/json'}});
+            if (!response.ok) return;
+            const status = await response.json();
+            if (status.queryable && !wasQueryable) {
+                window.location.reload();
+                return;
             }
-        };
-        window.setTimeout(pollWorkingSet, 1200);
+            renderWorkingSetStatus(status);
+            if (!status.ready && !['paused', 'failed'].includes(status.state)) {
+                scheduleWorkingSetPoll(2500);
+            }
+        } catch (error) {
+            scheduleWorkingSetPoll(5000);
+        }
+    };
+    cacheControlButton?.addEventListener('click', async () => {
+        const action = cacheControlButton.dataset.action;
+        const url = action === 'pause' ? workingSetStatus?.dataset.pauseUrl : workingSetStatus?.dataset.resumeUrl;
+        if (!url) return;
+        cacheControlButton.disabled = true;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                },
+            });
+            if (!response.ok) throw new Error('Cache control request failed.');
+            const status = await response.json();
+            renderWorkingSetStatus(status);
+            if (!status.ready && !['paused', 'failed'].includes(status.state)) {
+                scheduleWorkingSetPoll(500);
+            }
+        } catch (error) {
+            setWorkingSetStatus('failed', 'Unable to update the period cache process');
+        } finally {
+            cacheControlButton.disabled = workingSetStatus?.dataset.ready === '1'
+                || (!cacheControlButton.dataset.action);
+        }
+    });
+    if (workingSetStatus?.dataset.ready === '0'
+        && !['paused', 'failed'].includes(workingSetStatus.dataset.state)
+        && workingSetStatus.dataset.statusUrl) {
+        scheduleWorkingSetPoll(1200);
     }
 
     const totalSummary = document.getElementById('all-transactions-total-summary');
@@ -1710,7 +1974,17 @@
                 headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
                 cache: 'no-store',
             });
-            const data = await response.json();
+            const data = await parseJsonResponse(response, 'The period summary returned an invalid response');
+            if (response.status === 202) {
+                [period, opening, periodNet, closing, transactionCount].forEach((element) => {
+                    if (element) element.textContent = 'Waiting…';
+                });
+                error.textContent = data.message || 'Period summary will be available when caching completes.';
+                error.style.color = '#4a5568';
+                error.style.display = 'block';
+                window.setTimeout(loadPeriodSummary, 5000);
+                return;
+            }
             if (!response.ok) throw new Error(data.message || 'The period summary could not be loaded.');
 
             opening.textContent = formatMoney(data.opening_balance);
@@ -1724,11 +1998,13 @@
             sourceBadge.style.background = data.uses_snapshots ? '#dcfce7' : '#fef3c7';
             sourceBadge.style.color = data.uses_snapshots ? '#166534' : '#92400e';
             source.style.display = 'flex';
+            error.style.display = 'none';
         } catch (summaryError) {
             [period, opening, periodNet, closing, transactionCount].forEach((element) => {
                 if (element) element.textContent = 'Unavailable';
             });
             error.textContent = summaryError.message || 'The period summary could not be loaded.';
+            error.style.color = '#b91c1c';
             error.style.display = 'block';
         } finally {
             periodSummary.removeAttribute('aria-busy');
@@ -1763,7 +2039,7 @@
                 headers: {'Accept':'application/json','X-Requested-With':'XMLHttpRequest'},
                 cache: 'no-store',
             });
-            const data = await response.json();
+            const data = await parseJsonResponse(response, 'The match summary returned an invalid response');
             if (response.status === 202) {
                 state.textContent = data.message || 'Waiting for the period cache…';
                 window.setTimeout(loadMatchSummary, 5000);
@@ -1817,18 +2093,20 @@
     };
     loadMatchSummary();
 
-    const showStatus = (element, message, isError = false) => {
+    const showStatus = (element, message, isError = false, isBusy = false) => {
         element.textContent = message;
-        element.style.display = 'block';
+        element.style.display = 'flex';
         element.style.borderColor = isError ? '#fecaca' : '#99f6e4';
         element.style.background = isError ? '#fef2f2' : '#ecfdf5';
         element.style.color = isError ? '#991b1b' : '#115e59';
+        element.classList.toggle('all-transactions-export-status--busy', isBusy && !isError);
     };
 
     const setBusy = (button, busy) => {
-        button.disabled = busy;
+        button.dataset.busy = busy ? '1' : '0';
+        button.disabled = busy || button.dataset.cacheReady !== '1';
         button.style.opacity = busy ? '.65' : '1';
-        button.style.cursor = busy ? 'wait' : 'pointer';
+        button.style.cursor = busy ? 'wait' : (button.disabled ? 'not-allowed' : 'pointer');
     };
 
     const download = (url) => {
@@ -1855,8 +2133,30 @@
             if (data.inProgress) {
                 const reportedProgress = Number(data.progress_pct || 0);
                 lastProgress = Math.max(lastProgress, reportedProgress);
-                const progress = data.progress_pct === null ? '' : ` (${lastProgress}% complete)`;
-                showStatus(status, `${data.message || 'Generating Excel export...'}${progress}`);
+                const processed = Number(data.processed_transactions || 0);
+                const total = Number(data.total_transactions || 0);
+                const rowProgress = total > 0
+                    ? Math.min(100, (processed / total) * 100)
+                    : lastProgress;
+                const progress = data.progress_pct === null
+                    ? ''
+                    : ` · ${rowProgress.toLocaleString(undefined, {maximumFractionDigits:1})}%`;
+                let etaSeconds = data.eta_seconds;
+                if ((etaSeconds === null || etaSeconds === undefined)
+                    && processed > 0
+                    && total > processed
+                    && data.started_at) {
+                    const elapsedSeconds = Math.max(1, (Date.now() - Date.parse(data.started_at)) / 1000);
+                    etaSeconds = Math.ceil((total - processed) / (processed / elapsedSeconds));
+                }
+                const eta = formatCacheEta(etaSeconds);
+                const message = total > 0 && processed >= total
+                    ? `Finalizing workbook${progress}`
+                    : (total > 0
+                        ? `Exporting: ${processed.toLocaleString()}/${total.toLocaleString()}${progress}${eta ? ` · ~${eta}` : ''}`
+                        : `Preparing export${progress}`);
+                status.title = data.message || 'Generating Excel export...';
+                showStatus(status, message, false, true);
                 pollTimer = window.setTimeout(() => poll(button, status), 3000);
                 return;
             }
@@ -1877,31 +2177,20 @@
         }
     };
 
-    document.addEventListener('change', async (event) => {
-        const button = event.target.closest('#all-transactions-excel-export');
-        if (!button || !button.value) return;
-
-        const form = document.getElementById('all-transactions-excel-form');
-        const status = document.getElementById('all-transactions-export-status');
-        if (!form || !status) return;
-
-        const exportMode = button.value;
-        setBusy(button, true);
-        showStatus(status, 'Starting the All Transactions Excel export...');
+    const startExportWhenReady = async (formData, button, status) => {
         try {
-            const formData = new FormData(form);
-            formData.set('linked_record_layout', exportMode);
-            formData.set('include_eft_records', '1');
-            formData.set('include_bank_records', '1');
-            formData.set('include_fsp_records', '1');
-            formData.set('include_7960_fsp_records', '1');
-            button.value = '';
-            const response = await fetch(form.action, {
+            const response = await fetch(document.getElementById('all-transactions-excel-form').action, {
                 method: 'POST',
                 body: formData,
                 headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
             });
             const data = await response.json();
+            if (response.status === 409 && data.state === 'waiting_for_cache') {
+                setBusy(button, false);
+                showStatus(status, 'The period cache changed. Reloading the current status...', false, true);
+                window.setTimeout(() => window.location.reload(), 500);
+                return;
+            }
             if (!response.ok) {
                 const validationMessage = data.errors ? Object.values(data.errors).flat()[0] : null;
                 throw new Error(validationMessage || data.message || 'The Excel export could not start.');
@@ -1916,9 +2205,27 @@
             poll(button, status);
         } catch (error) {
             setBusy(button, false);
-            button.value = '';
             showStatus(status, error.message, true);
         }
+    };
+
+    document.addEventListener('click', async (event) => {
+        const button = event.target.closest('#all-transactions-excel-export');
+        if (!button || button.disabled) return;
+
+        const form = document.getElementById('all-transactions-excel-form');
+        const status = document.getElementById('all-transactions-export-status');
+        if (!form || !status) return;
+
+        setBusy(button, true);
+        showStatus(status, 'Starting the All Transactions Excel export...', false, true);
+        const formData = new FormData(form);
+        formData.set('linked_record_layout', 'single');
+        formData.set('include_eft_records', '1');
+        formData.set('include_bank_records', '1');
+        formData.set('include_fsp_records', '1');
+        formData.set('include_7960_fsp_records', '1');
+        startExportWhenReady(formData, button, status);
     });
 
     if (activeRunId) {
@@ -1926,7 +2233,7 @@
         const status = document.getElementById('all-transactions-export-status');
         if (button && status) {
             setBusy(button, true);
-            showStatus(status, 'Resuming export progress...');
+            showStatus(status, 'Resuming export progress...', false, true);
             poll(button, status);
         }
     }

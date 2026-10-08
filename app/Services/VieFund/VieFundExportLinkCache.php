@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund;
 
+use App\Services\RuntimeSettings;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +30,10 @@ class VieFundExportLinkCache
         'fund_source_cache_hits' => 0,
         'fund_source_refreshed_ids' => 0,
     ];
+
+    public function __construct(private readonly RuntimeSettings $runtimeSettings)
+    {
+    }
 
     public function eftItemsByLinkedIds(
         array $linkedIds,
@@ -109,7 +114,7 @@ class VieFundExportLinkCache
             return ['cache_keys' => 0, 'eft_items' => 0, 'fund_sources' => 0];
         }
 
-        $cutoff = now()->subDays((int) config('viefund.all_transactions_link_cache.retention_days', 7));
+        $cutoff = now()->subDays($this->runtimeSettings->get('viefund.link_cache.retention_days'));
 
         return [
             'cache_keys' => DB::table(self::CACHE_KEYS_TABLE)->where('cached_at', '<', $cutoff)->delete(),
@@ -277,16 +282,16 @@ class VieFundExportLinkCache
 
     private function freshnessCutoff(): mixed
     {
-        return now()->subMinutes((int) config('viefund.all_transactions_link_cache.ttl_minutes', 60));
+        return now()->subMinutes($this->runtimeSettings->get('viefund.link_cache.ttl_minutes'));
     }
 
     private function remoteBatchSize(): int
     {
-        return (int) config('viefund.all_transactions_link_cache.remote_batch_size', 20000);
+        return $this->runtimeSettings->get('viefund.link_cache.remote_batch_size');
     }
 
     private function localWriteBatchSize(): int
     {
-        return (int) config('viefund.all_transactions_link_cache.local_write_batch_size', 1000);
+        return $this->runtimeSettings->get('viefund.link_cache.write_batch_size');
     }
 }

@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-php artisan queue:listen --queue=default --sleep=1 --tries=1 --timeout=120 &
+DB_QUEUE_RETRY_AFTER=3700 php artisan queue:work database --queue=default --sleep=1 --tries=1 --timeout=3600 --memory=512 --no-interaction &
 queue_listener_pid=$!
 
 php artisan schedule:work &

@@ -2,16 +2,23 @@
 
 namespace App\Support;
 
+use App\Services\RuntimeSettings;
+
 final class AllTransactionColumns
 {
     private const BANK_SUMMARY_KEYS = ['reconciliation_variance', 'reconciliation_note'];
+
+    private const MATCH_DEFINITIONS = [
+        'matched_to_bank' => ['label' => 'Match', 'field' => null],
+        'reconciliation_variance' => ['label' => 'Bank Txn Variance', 'field' => 'reconciliation_variance', 'width' => 165],
+        'reconciliation_note' => ['label' => 'Variance Note', 'field' => 'reconciliation_note', 'width' => 360],
+    ];
 
     /**
      * Stable configuration keys for the All Transactions table and export.
      * The field is the SQL result/property name; null denotes a derived UI value.
      */
     private const DEFINITIONS = [
-        'matched_to_bank' => ['label' => 'Match', 'field' => null],
         'cash_transaction_id' => ['label' => 'Cash Txn ID', 'field' => 'transaction_id'],
         'fund_transaction_id' => ['label' => 'Fund Txn ID', 'field' => 'fund_transaction_id'],
         'trust_transaction_id' => ['label' => 'Trust Txn ID', 'field' => 'trust_transaction_id'],
@@ -63,8 +70,6 @@ final class AllTransactionColumns
         'wire_reference' => ['label' => 'Bank Wire Ref', 'field' => 'wire_reference', 'width' => 170],
         'description' => ['label' => 'Bank Description', 'field' => 'description', 'width' => 260],
         'source_file' => ['label' => 'Bank Source File', 'field' => 'source_file', 'width' => 220],
-        'reconciliation_variance' => ['label' => 'Bank Txn Variance', 'field' => 'reconciliation_variance', 'width' => 165],
-        'reconciliation_note' => ['label' => 'Variance Note', 'field' => 'reconciliation_note', 'width' => 360],
     ];
 
     private const FSP_DEFINITIONS = [
@@ -99,7 +104,20 @@ final class AllTransactionColumns
     /** @return array<string, array{label: string, field: ?string, sort?: string}> */
     public static function visible(): array
     {
-        return self::configuredDefinitions(self::DEFINITIONS, 'all_transactions_visible_columns');
+        return array_merge(
+            array_intersect_key(self::matchVisible(), ['matched_to_bank' => true]),
+            self::configuredDefinitions(self::DEFINITIONS, 'all_transactions_visible_columns')
+        );
+    }
+
+    public static function matchVisible(): array
+    {
+        return self::configuredDefinitions(self::MATCH_DEFINITIONS, 'all_transactions_match_visible_columns');
+    }
+
+    public static function groupOrder(): array
+    {
+        return app(RuntimeSettings::class)->get('viefund.columns.group_order');
     }
 
     public static function eftVisible(): array
@@ -114,17 +132,42 @@ final class AllTransactionColumns
 
     public static function bankSummaryVisible(): array
     {
-        return array_intersect_key(self::bankVisible(), array_flip(self::BANK_SUMMARY_KEYS));
+        return array_intersect_key(self::matchVisible(), array_flip(self::BANK_SUMMARY_KEYS));
     }
 
     public static function bankDetailVisible(): array
     {
-        return array_diff_key(self::bankVisible(), array_flip(self::BANK_SUMMARY_KEYS));
+        return self::bankVisible();
     }
 
     public static function fspVisible(): array
     {
         return self::configuredDefinitions(self::FSP_DEFINITIONS, 'all_transactions_fsp_visible_columns');
+    }
+
+    public static function availableTransactionColumns(): array
+    {
+        return self::DEFINITIONS;
+    }
+
+    public static function availableMatchColumns(): array
+    {
+        return self::MATCH_DEFINITIONS;
+    }
+
+    public static function availableEftColumns(): array
+    {
+        return self::EFT_DEFINITIONS;
+    }
+
+    public static function availableBankColumns(): array
+    {
+        return self::BANK_DEFINITIONS;
+    }
+
+    public static function availableFspColumns(): array
+    {
+        return self::FSP_DEFINITIONS;
     }
 
     public static function isVisible(string $key): bool
@@ -197,9 +240,16 @@ final class AllTransactionColumns
 
     private static function configuredDefinitions(array $definitions, string $configKey): array
     {
+        $runtimeKey = match ($configKey) {
+            'all_transactions_match_visible_columns' => 'viefund.columns.match',
+            'all_transactions_visible_columns' => 'viefund.columns.transactions',
+            'all_transactions_eft_visible_columns' => 'viefund.columns.eft',
+            'all_transactions_bank_visible_columns' => 'viefund.columns.bank',
+            'all_transactions_fsp_visible_columns' => 'viefund.columns.fsp',
+        };
         $configured = array_values(array_unique(array_map(
             'strtolower',
-            (array) config('viefund.' . $configKey, [])
+            (array) app(RuntimeSettings::class)->get($runtimeKey)
         )));
         if ($configured === []) {
             return $definitions;

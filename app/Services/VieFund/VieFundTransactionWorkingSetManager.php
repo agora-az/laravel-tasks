@@ -4,13 +4,19 @@ namespace App\Services\VieFund;
 
 use App\Jobs\HydrateVieFundTransactionWorkingSet;
 use App\Models\VieFundTransactionWorkingSet;
+use App\Services\RuntimeSettings;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Throwable;
 
 class VieFundTransactionWorkingSetManager
 {
-    private const CACHE_VERSION = 2;
+    private const CACHE_VERSION = 3;
+
+    public function __construct(private readonly RuntimeSettings $runtimeSettings)
+    {
+    }
 
     public function ensure(array $filters): ?VieFundTransactionWorkingSet
     {
@@ -39,15 +45,21 @@ class VieFundTransactionWorkingSetManager
             if ($fresh || in_array($workingSet->state, ['warming', 'refreshing'], true) && $workingSet->build_generation) {
                 return $workingSet;
             }
+            if (in_array($workingSet->state, ['paused', 'failed'], true) && $workingSet->build_generation) {
+                return $workingSet;
+            }
 
             $generation = (string) Str::uuid();
             $shouldDispatch = true;
             $workingSet->forceFill([
                 'state' => $workingSet->active_generation ? 'refreshing' : 'warming',
                 'build_generation' => $generation,
+                'hydration_cursor' => null,
                 'rows_cached' => 0,
+                'total_rows' => null,
                 'last_error' => null,
                 'started_at' => now(),
+                'paused_at' => null,
                 'expires_at' => now()->addMinutes($this->ttlMinutes()),
             ])->save();
 
@@ -57,6 +69,62 @@ class VieFundTransactionWorkingSetManager
         if ($shouldDispatch && $generation !== null) {
             HydrateVieFundTransactionWorkingSet::dispatch($workingSet->id, $generation)
                 ->onConnection('database');
+        }
+
+        return $workingSet->fresh();
+    }
+
+    public function pause(VieFundTransactionWorkingSet $workingSet): VieFundTransactionWorkingSet
+    {
+        DB::transaction(function () use ($workingSet): void {
+            $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->findOrFail($workingSet->id);
+            if (!$locked->build_generation || !in_array($locked->state, ['warming', 'refreshing'], true)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'state' => 'paused',
+                'paused_at' => now(),
+            ])->save();
+        });
+
+        return $workingSet->fresh();
+    }
+
+    public function resume(VieFundTransactionWorkingSet $workingSet): VieFundTransactionWorkingSet
+    {
+        $dispatch = DB::transaction(function () use ($workingSet): ?array {
+            $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->findOrFail($workingSet->id);
+            if (!$locked->build_generation || !in_array($locked->state, ['paused', 'failed'], true)) {
+                return null;
+            }
+
+            $pausedSince = $locked->state === 'paused' ? $locked->paused_at : $locked->updated_at;
+            $startedAt = $locked->started_at;
+            if ($startedAt && $pausedSince) {
+                $startedAt = $startedAt->copy()->addSeconds($pausedSince->diffInSeconds(now()));
+            }
+
+            $locked->forceFill([
+                'state' => $locked->active_generation ? 'refreshing' : 'warming',
+                'paused_at' => null,
+                'started_at' => $startedAt,
+                'last_error' => null,
+                'expires_at' => now()->addMinutes($this->ttlMinutes()),
+            ])->save();
+
+            return [
+                'generation' => $locked->build_generation,
+                'cursor' => $locked->hydration_cursor,
+            ];
+        });
+
+        if ($dispatch) {
+            HydrateVieFundTransactionWorkingSet::dispatch(
+                $workingSet->id,
+                $dispatch['generation'],
+                $dispatch['cursor']
+            )->onConnection('database');
         }
 
         return $workingSet->fresh();
@@ -108,16 +176,93 @@ class VieFundTransactionWorkingSetManager
             return ['state' => 'unavailable'];
         }
 
+        $queueState = $this->hydrationQueueState($workingSet);
+        if ($queueState === 'queued'
+            && $workingSet->updated_at
+            && $workingSet->updated_at->isAfter(now()->subSeconds(15))) {
+            $queueState = 'processing';
+        }
+        $rowsCached = (int) $workingSet->rows_cached;
+        $totalRows = $workingSet->total_rows !== null ? (int) $workingSet->total_rows : null;
+        $progressPct = $totalRows !== null
+            ? ($totalRows === 0 ? 100.0 : round(min(1, $rowsCached / $totalRows) * 100, 1))
+            : null;
+        $etaSeconds = null;
+        if (in_array($workingSet->state, ['warming', 'refreshing'], true)
+            && $totalRows !== null
+            && $totalRows > $rowsCached
+            && $rowsCached > 0
+            && $workingSet->started_at) {
+            $elapsedSeconds = max(1, $workingSet->started_at->diffInSeconds(now()));
+            $rowsPerSecond = $rowsCached / $elapsedSeconds;
+            $etaSeconds = $rowsPerSecond > 0
+                ? (int) ceil(($totalRows - $rowsCached) / $rowsPerSecond)
+                : null;
+        }
+
         return [
             'id' => $workingSet->id,
             'state' => $workingSet->state,
             'ready' => $workingSet->isReady(),
             'queryable' => $workingSet->hasQueryableGeneration(),
-            'rows_cached' => (int) $workingSet->rows_cached,
-            'total_rows' => $workingSet->total_rows !== null ? (int) $workingSet->total_rows : null,
+            'can_pause' => in_array($workingSet->state, ['warming', 'refreshing'], true)
+                && $workingSet->build_generation !== null,
+            'can_resume' => in_array($workingSet->state, ['paused', 'failed'], true)
+                && $workingSet->build_generation !== null,
+            'queue_state' => $queueState,
+            'stalled' => in_array($workingSet->state, ['warming', 'refreshing'], true)
+                && $workingSet->build_generation !== null
+                && $queueState === 'missing',
+            'rows_cached' => $rowsCached,
+            'total_rows' => $totalRows,
+            'progress_pct' => $progressPct,
+            'eta_seconds' => $etaSeconds,
             'ready_at' => optional($workingSet->ready_at)->toIso8601String(),
+            'paused_at' => optional($workingSet->paused_at)->toIso8601String(),
             'last_error' => $workingSet->last_error,
         ];
+    }
+
+    private function hydrationQueueState(VieFundTransactionWorkingSet $workingSet): ?string
+    {
+        if (!$workingSet->build_generation || !in_array($workingSet->state, ['warming', 'refreshing'], true)) {
+            return null;
+        }
+
+        try {
+            $connection = DB::connection(config('queue.connections.database.connection'));
+            $table = (string) config('queue.connections.database.table', 'jobs');
+            $jobs = $connection->table($table)
+                ->where('payload', 'like', '%HydrateVieFundTransactionWorkingSet%')
+                ->get(['payload', 'reserved_at']);
+            $queued = false;
+
+            foreach ($jobs as $queuedJob) {
+                $payload = json_decode((string) $queuedJob->payload, true);
+                $serialized = $payload['data']['command'] ?? null;
+                if (!is_string($serialized)) {
+                    continue;
+                }
+
+                $job = @unserialize($serialized, [
+                    'allowed_classes' => [HydrateVieFundTransactionWorkingSet::class],
+                ]);
+                if (!$job instanceof HydrateVieFundTransactionWorkingSet
+                    || $job->workingSetId !== $workingSet->id
+                    || $job->generation !== $workingSet->build_generation) {
+                    continue;
+                }
+
+                if ($queuedJob->reserved_at !== null) {
+                    return 'processing';
+                }
+                $queued = true;
+            }
+
+            return $queued ? 'queued' : 'missing';
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     public function pruneExpired(): int
@@ -155,6 +300,6 @@ class VieFundTransactionWorkingSetManager
 
     private function ttlMinutes(): int
     {
-        return max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 1440));
+        return $this->runtimeSettings->get('viefund.working_set.ttl_minutes');
     }
 }

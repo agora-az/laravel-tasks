@@ -3,13 +3,14 @@
 namespace App\Console\Commands;
 
 use App\Models\SettlementInstruction;
+use App\Services\RuntimeSettings;
 use App\Services\Reconciliation\AgraFspBankMatcher;
 use App\Services\Reconciliation\EftBankMatchStatusService;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\VieFundExportLinkCache;
 use App\Services\VieFund\VieFundRemoteService;
-use App\Services\VieFund\VieFundDailyBalanceService;
+use App\Services\VieFund\VieFundWorkingSetBalanceService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
@@ -71,7 +72,6 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
     public function handle(
         VieFundRemoteService $remoteService,
-        VieFundDailyBalanceService $dailyBalanceService,
         SqlServerEftRemoteRepository $eftRepository,
         AgraFspBankMatcher $agraFspBankMatcher,
         EftBankMatchStatusService $eftBankMatchStatusService,
@@ -79,7 +79,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         FspMatchedRecordCollapser $fspRecordCollapser,
         VieFundExportLinkCache $linkCache,
         VieFundTransactionWorkingSetManager $workingSetManager,
-        VieFundTransactionWorkingSetQuery $workingSetQuery
+        VieFundTransactionWorkingSetQuery $workingSetQuery,
+        VieFundWorkingSetBalanceService $workingSetBalanceService
     ): int
     {
         $startedAt = microtime(true);
@@ -140,25 +141,15 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'match_statuses' => $matchStatuses,
             ]);
             $workingSet = $workingSetManager->findReady($filters);
-            if (!$workingSet && $hasAgraFspMatch) {
-                $filters['agra_fsp_source_ids_json'] = $this->fspSourceIdsJson(
-                    'fundserv_agra',
-                    $dateBasis,
-                    $filters['date_from'] ?? null,
-                    $filters['date_to'] ?? null
+            if (!$workingSet) {
+                throw new \RuntimeException(
+                    'A completed local period cache is required. Wait for cache hydration and retry the export.'
                 );
             }
-            if (!$workingSet && $has7960FspMatch) {
-                $filters['fsp_7960_source_ids_json'] = $this->fspSourceIdsJson(
-                    'ltm',
-                    $dateBasis,
-                    $filters['date_from'] ?? null,
-                    $filters['date_to'] ?? null
-                );
-            }
-            $maximumRowsPerSheet = (int) config('viefund.all_transactions_export_rows_per_sheet', 1000000);
-            $splitTargetRows = (int) config('viefund.all_transactions_export_split_target_rows', 65000);
-            $databaseBatchSize = (int) config('viefund.all_transactions_export_batch_size', 5000);
+            $runtimeSettings = app(RuntimeSettings::class);
+            $maximumRowsPerSheet = $runtimeSettings->get('viefund.export.rows_per_sheet');
+            $splitTargetRows = $runtimeSettings->get('viefund.export.split_target_rows');
+            $databaseBatchSize = $runtimeSettings->get('viefund.export.batch_size');
             $distributeSheets = (bool) $this->option('split-sheets');
             $includeEftRecords = (bool) $this->option('include-eft-records');
             $includeBankRecords = (bool) $this->option('include-bank-records');
@@ -181,17 +172,16 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'success' => null,
                 'message' => 'Reviewing the matching transaction dates...',
                 'progress_pct' => 2,
+                'data_source' => 'working_set',
+                'working_set_id' => $workingSet->id,
+                'working_set_generation' => $workingSet->readableGeneration(),
                 'started_at' => $startedAtIso,
                 'updated_at' => now()->toIso8601String(),
             ]);
 
             $stageStartedAt = microtime(true);
-            $dailyStats = $workingSet
-                ? $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters)
-                : $remoteService->fetchAllTransactionExportDailyStats($search ?: null, $filters);
-            $matchStatusSummary = $workingSet
-                ? $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters)
-                : [];
+            $dailyStats = $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters);
+            $matchStatusSummary = $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters);
             $totalTransactions = (int) $dailyStats->sum(fn($row) => (int) $row->transaction_count);
             $overallSelectedNet = (float) $dailyStats->sum(fn($row) => (float) $row->net_amount);
             $firstDate = $dailyStats->isNotEmpty()
@@ -203,15 +193,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             $balanceFromDate = $filters['date_from'] ?? $firstDate;
             $balanceToDate = $filters['date_to'] ?? $lastDate;
             $balanceReport = ($balanceFromDate && $balanceToDate)
-                ? $dailyBalanceService->build(
-                    Carbon::parse($balanceFromDate)->startOfDay(),
-                    Carbon::parse($balanceToDate)->startOfDay(),
-                    $dateBasis,
-                    $currencyCode,
-                    $statusIds,
-                    null,
-                    'asc'
-                )
+                ? $workingSetBalanceService->get($workingSet)
                 : [
                     'rows' => [],
                     'opening_balance' => 0.0,
@@ -349,14 +331,23 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     ->setCellAlignment(CellAlignment::RIGHT),
                 true
             );
+            $columnGroupOrder = AllTransactionColumns::groupOrder();
             $transactionHeaders = $this->transactionHeaders(
                 $includeEftRecords,
                 $includeBankRecords,
                 $includeAnyFspRecords,
-                $separateLinkedRecordSheets
+                $separateLinkedRecordSheets,
+                $columnGroupOrder
             );
             $visibleTransactionColumnKeys = $this->transactionColumnKeys();
-            $linkedColumnInsertionIndex = AllTransactionColumns::linkedColumnInsertionIndex();
+            $matchTransactionColumnKeys = array_values(array_filter(
+                $visibleTransactionColumnKeys,
+                fn(string $key) => $key === 'matched_to_bank'
+            ));
+            $viefundTransactionColumnKeys = array_values(array_filter(
+                $visibleTransactionColumnKeys,
+                fn(string $key) => $key !== 'matched_to_bank'
+            ));
             $bankDescriptionColumn = array_search('Bank Description', $transactionHeaders, true);
             $bankDescriptionColumn = $bankDescriptionColumn === false ? null : $bankDescriptionColumn + 1;
 
@@ -434,6 +425,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'progress_pct' => $totalTransactions > 0
                         ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                         : 3,
+                    'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
                     'processed_transactions' => $processedTransactions,
                     'total_transactions' => $totalTransactions,
                     'processed_sheets' => $sheetNumber - 1,
@@ -468,19 +460,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     $this->writeStatus($statusFile, [
                         'inProgress' => true,
                         'success' => null,
-                        'message' => $workingSet
-                            ? sprintf(
-                                'Loading cached EFT and bank records for the next %s transactions...',
-                                number_format($rows->count())
-                            )
-                            : sprintf(
-                                'Matching EFT%s records for the next %s transactions...',
-                                $includeBankRecords ? ' and bank' : '',
-                                number_format($rows->count())
-                            ),
+                        'message' => sprintf(
+                            'Preparing linked records for the next %s transactions...',
+                            number_format($rows->count())
+                        ),
                         'progress_pct' => $totalTransactions > 0
                             ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                             : 3,
+                        'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
                         'processed_transactions' => $processedTransactions,
                         'total_transactions' => $totalTransactions,
                         'started_at' => $startedAtIso,
@@ -579,14 +566,13 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'inProgress' => true,
                         'success' => null,
                         'message' => sprintf(
-                            $workingSet
-                                ? 'Loading cached FSP records for the next %s transactions...'
-                                : 'Matching selected FSP records for the next %s transactions...',
+                            'Preparing linked records for the next %s transactions...',
                             number_format($rows->count())
                         ),
                         'progress_pct' => $totalTransactions > 0
                             ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                             : 3,
+                        'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
                         'processed_transactions' => $processedTransactions,
                         'total_transactions' => $totalTransactions,
                         'started_at' => $startedAtIso,
@@ -746,10 +732,19 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'currency_code' => new StringCell($this->currencyLabel((string) ($row->currency_code ?? '')), null),
                         'amount' => new NumericCell($amount, $currencyStyle),
                     ];
-                    $transactionCells = array_map(
-                        fn(string $key) => $coreCells[$key],
-                        $visibleTransactionColumnKeys
-                    );
+                    $transactionCellGroups = [
+                        'match' => array_map(
+                            fn(string $key) => $coreCells[$key],
+                            $matchTransactionColumnKeys
+                        ),
+                        'viefund' => array_map(
+                            fn(string $key) => $coreCells[$key],
+                            $viefundTransactionColumnKeys
+                        ),
+                        'eft' => [],
+                        'fsp' => [],
+                        'bank' => [],
+                    ];
                     if (!$separateLinkedRecordSheets && $includeBankRecords) {
                         $bankSummaryCells = $transactionBankEntries->isNotEmpty()
                             ? $this->bankTransactionSummaryCells(
@@ -761,21 +756,15 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                                 count($this->bankTransactionSummaryHeaders()),
                                 $matchStatusStyle
                             );
-                        array_splice(
-                            $transactionCells,
-                            AllTransactionColumns::matchSummaryInsertionIndex(),
-                            0,
-                            $bankSummaryCells
-                        );
+                        array_push($transactionCellGroups['match'], ...$bankSummaryCells);
                     }
-                    $linkedCells = [];
                     if ($includeEftRecords && $separateLinkedRecordSheets) {
                         $firstEftItem = $transactionEftItems->first();
                         $targetRow = $firstEftItem ? ($eftSheetRowByItemId[(int) $firstEftItem->id] ?? null) : null;
                         $label = $transactionEftItems->count() === 1
                             ? 'EFT item #' . (int) $firstEftItem->id
                             : ($transactionEftItems->isNotEmpty() ? number_format($transactionEftItems->count()) . ' EFT records' : '');
-                        $linkedCells[] = $this->internalHyperlinkCell('EFT', $targetRow, $label, $linkStyle);
+                        $transactionCellGroups['eft'][] = $this->internalHyperlinkCell('EFT', $targetRow, $label, $linkStyle);
                     }
                     if ($includeBankRecords && $separateLinkedRecordSheets) {
                         $firstBankEntry = $transactionBankEntries->first();
@@ -783,7 +772,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $label = $transactionBankEntries->count() === 1
                             ? 'Bank txn #' . (int) $firstBankEntry->id
                             : ($transactionBankEntries->isNotEmpty() ? number_format($transactionBankEntries->count()) . ' bank transactions' : '');
-                        $linkedCells[] = $this->internalHyperlinkCell('Bank', $targetRow, $label, $linkStyle);
+                        $transactionCellGroups['bank'][] = $this->internalHyperlinkCell('Bank', $targetRow, $label, $linkStyle);
                     }
                     if ($includeAnyFspRecords && $separateLinkedRecordSheets) {
                         $firstFspItem = $transactionFspItems->first();
@@ -791,20 +780,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $label = $transactionFspItems->count() === 1
                             ? 'FSP record #' . (int) $firstFspItem->id
                             : ($transactionFspItems->isNotEmpty() ? number_format($transactionFspItems->count()) . ' FSP records' : '');
-                        $linkedCells[] = $this->internalHyperlinkCell('FSP', $targetRow, $label, $linkStyle);
-                    }
-                    if ($linkedCells !== []) {
-                        array_splice(
-                            $transactionCells,
-                            $linkedColumnInsertionIndex,
-                            0,
-                            $linkedCells
-                        );
+                        $transactionCellGroups['fsp'][] = $this->internalHyperlinkCell('FSP', $targetRow, $label, $linkStyle);
                     }
                     if (!$separateLinkedRecordSheets && $includeEftRecords) {
                         if ($transactionEftItems->isNotEmpty()) {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['eft'],
                                 ...$this->eftTransactionDetailCells(
                                     $transactionEftItems,
                                     $eftDetailStyle
@@ -812,7 +793,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                             );
                         } else {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['eft'],
                                 ...$this->emptyDetailCells(
                                     count($this->eftTransactionDetailHeaders()),
                                     $eftDetailStyle
@@ -823,7 +804,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     if (!$separateLinkedRecordSheets && $includeAnyFspRecords) {
                         if ($transactionFspItems->isNotEmpty()) {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['fsp'],
                                 ...$this->fspTransactionDetailCells(
                                     $transactionFspItems,
                                     $fspDetailStyle,
@@ -832,7 +813,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                             );
                         } else {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['fsp'],
                                 ...$this->emptyDetailCells(
                                     count($this->fspTransactionDetailHeaders()),
                                     $fspDetailStyle
@@ -850,7 +831,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         }
                         if ($transactionBankEntries->isNotEmpty()) {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['bank'],
                                 ...$this->bankTransactionDetailCells(
                                     $transactionBankEntries,
                                     $transactionBankDetailStyle,
@@ -859,13 +840,17 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                             );
                         } else {
                             array_push(
-                                $transactionCells,
+                                $transactionCellGroups['bank'],
                                 ...$this->emptyDetailCells(
                                     count($this->bankTransactionDetailHeaders()),
                                     $bankDetailStyle
                                 )
                             );
                         }
+                    }
+                    $transactionCells = [];
+                    foreach ($columnGroupOrder as $columnGroup) {
+                        array_push($transactionCells, ...$transactionCellGroups[$columnGroup]);
                     }
                     $writer->addRow(new Row($transactionCells));
 
@@ -878,8 +863,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 if ($rows->isNotEmpty()) {
                     $lastRow = $rows->last();
                     $cursor = [
-                        'basis_date' => (string) $lastRow->basis_date,
-                        'sort_id' => (int) $lastRow->sort_id,
+                        'basis_date' => (string) $lastRow->export_cursor_basis_date,
+                        'sort_id' => (int) $lastRow->export_cursor_cash_transaction_id,
                         'transaction_id' => (string) $lastRow->transaction_id,
                         'plan_account_id' => (string) ($lastRow->plan_account_id ?? ''),
                     ];
@@ -899,6 +884,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $estimatedTransactionSheets
                     ),
                     'progress_pct' => $progress,
+                    'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
                     'processed_transactions' => $processedTransactions,
                     'total_transactions' => $totalTransactions,
                     'processed_sheets' => $sheetNumber - 1,
@@ -1044,48 +1030,52 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         bool $includeEftRecords,
         bool $includeBankRecords,
         bool $includeFspRecords,
-        bool $separateLinkedRecordSheets
+        bool $separateLinkedRecordSheets,
+        array $columnGroupOrder
     ): array
     {
-        $headers = [];
+        $headerGroups = [
+            'match' => [],
+            'viefund' => [],
+            'eft' => [],
+            'fsp' => [],
+            'bank' => [],
+        ];
         foreach (AllTransactionColumns::visible() as $key => $definition) {
             if ($key === 'created_date') {
-                $headers[] = 'Created Timestamp';
+                $headerGroups['viefund'][] = 'Created Timestamp';
             }
-            $headers[] = $definition['label'];
+            $headerGroups[$key === 'matched_to_bank' ? 'match' : 'viefund'][] = $definition['label'];
         }
         if ($separateLinkedRecordSheets) {
-            $linkedHeaders = [];
             if ($includeEftRecords) {
-                $linkedHeaders[] = 'Linked EFT Record';
+                $headerGroups['eft'][] = 'Linked EFT Record';
             }
             if ($includeBankRecords) {
-                $linkedHeaders[] = 'Linked Bank Record';
+                $headerGroups['bank'][] = 'Linked Bank Record';
             }
             if ($includeFspRecords) {
-                $linkedHeaders[] = 'Linked FSP Record';
+                $headerGroups['fsp'][] = 'Linked FSP Record';
             }
-            array_splice($headers, AllTransactionColumns::linkedColumnInsertionIndex(), 0, $linkedHeaders);
-
-            return $headers;
+        } else {
+            if ($includeEftRecords) {
+                $headerGroups['eft'] = $this->eftTransactionDetailHeaders();
+            }
+            if ($includeBankRecords) {
+                $headerGroups['match'] = array_merge(
+                    $headerGroups['match'],
+                    $this->bankTransactionSummaryHeaders()
+                );
+                $headerGroups['bank'] = $this->bankTransactionDetailHeaders();
+            }
+            if ($includeFspRecords) {
+                $headerGroups['fsp'] = $this->fspTransactionDetailHeaders();
+            }
         }
 
-        if ($includeEftRecords) {
-            $headers = array_merge($headers, $this->eftTransactionDetailHeaders());
-        }
-        if ($includeBankRecords) {
-            array_splice(
-                $headers,
-                AllTransactionColumns::matchSummaryInsertionIndex(),
-                0,
-                $this->bankTransactionSummaryHeaders()
-            );
-        }
-        if ($includeFspRecords) {
-            $headers = array_merge($headers, $this->fspTransactionDetailHeaders());
-        }
-        if ($includeBankRecords) {
-            $headers = array_merge($headers, $this->bankTransactionDetailHeaders());
+        $headers = [];
+        foreach ($columnGroupOrder as $columnGroup) {
+            array_push($headers, ...$headerGroups[$columnGroup]);
         }
 
         return $headers;
@@ -1621,7 +1611,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
         $items = $fspRecordCollapser->withFileNetTotals(
             $fspRecordCollapser->collapse($sourceIds
-                ->chunk((int) config('viefund.all_transactions_link_cache.local_query_batch_size', 5000))
+                ->chunk(app(RuntimeSettings::class)->get('viefund.link_cache.query_batch_size'))
                 ->flatMap(fn(Collection $chunk) => SettlementInstruction::query()
                     ->whereIn('source_type', $sourceTypes)
                     ->whereIn('source_id', $chunk->all())
@@ -1780,6 +1770,17 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     private function roundedTimings(array $timings): array
     {
         return array_map(fn($seconds) => round((float) $seconds, 2), $timings);
+    }
+
+    private function estimateEtaSeconds(float $startedAt, int $processed, int $total): ?int
+    {
+        if ($processed <= 0 || $total <= $processed) {
+            return null;
+        }
+
+        $rowsPerSecond = $processed / max(1, microtime(true) - $startedAt);
+
+        return $rowsPerSecond > 0 ? (int) ceil(($total - $processed) / $rowsPerSecond) : null;
     }
 
     private function joinedDetailValues(Collection $records, callable $formatter): string

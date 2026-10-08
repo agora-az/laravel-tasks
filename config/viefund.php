@@ -15,6 +15,9 @@ $parseColumnList = static function (string $environmentKey): array {
     ))));
 };
 
+$columnGroupOrder = $parseColumnList('VIEFUND_ALL_TRANSACTIONS_COLUMN_GROUP_ORDER');
+$columnGroupOrder = $columnGroupOrder ?: ['match', 'viefund', 'eft', 'fsp', 'bank'];
+
 return [
 
     /*
@@ -257,6 +260,8 @@ return [
     | the SQL result projection unless they are required internally. An empty
     | value preserves that group's full default column set.
     */
+    'all_transactions_match_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_MATCH_VISIBLE_COLUMNS'),
+    'all_transactions_column_group_order' => $columnGroupOrder,
     'all_transactions_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_VISIBLE_COLUMNS'),
     'all_transactions_eft_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_EFT_VISIBLE_COLUMNS'),
     'all_transactions_bank_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_BANK_VISIBLE_COLUMNS'),

@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
 use App\Services\VieFund\Repositories\SqlServerVieFundRemoteRepository;
+use App\Services\RuntimeSettings;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\URL;
 
@@ -15,6 +16,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->bind(VieFundRemoteRepositoryInterface::class, SqlServerVieFundRemoteRepository::class);
+        $this->app->scoped(RuntimeSettings::class);
     }
 
     /**

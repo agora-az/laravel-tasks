@@ -4,7 +4,9 @@ namespace App\Jobs;
 
 use App\Models\VieFundTransactionWorkingSet;
 use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
+use App\Services\RuntimeSettings;
 use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundWorkingSetBalanceService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -35,10 +37,14 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
 
     public function handle(
         VieFundRemoteService $remoteService,
-        AllTransactionMatchStatusResolver $matchStatusResolver
+        AllTransactionMatchStatusResolver $matchStatusResolver,
+        RuntimeSettings $runtimeSettings,
+        VieFundWorkingSetBalanceService $balanceService
     ): void {
         $workingSet = VieFundTransactionWorkingSet::query()->find($this->workingSetId);
-        if (!$workingSet || $workingSet->build_generation !== $this->generation) {
+        if (!$workingSet
+            || $workingSet->build_generation !== $this->generation
+            || !in_array($workingSet->state, ['warming', 'refreshing'], true)) {
             return;
         }
 
@@ -50,11 +56,26 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
             'status_ids' => $workingSet->status_ids,
             'output_order' => 'asc',
         ];
-        $batchSize = max(100, min(5000, (int) config('viefund.all_transactions_working_set.batch_size', 1000)));
+        if ($workingSet->total_rows === null) {
+            $totalRows = $remoteService->countAllTransactions(null, $filters);
+            $updated = VieFundTransactionWorkingSet::query()
+                ->whereKey($this->workingSetId)
+                ->where('build_generation', $this->generation)
+                ->whereIn('state', ['warming', 'refreshing'])
+                ->update(['total_rows' => $totalRows]);
+            if ($updated === 0) {
+                return;
+            }
+            self::dispatch($this->workingSetId, $this->generation, $this->cursor)
+                ->onConnection('database');
+
+            return;
+        }
+        $batchSize = $runtimeSettings->get('viefund.working_set.batch_size');
         $rows = $remoteService->fetchAllTransactionExportRowsAfter(null, $filters, $this->cursor, $batchSize);
 
         if ($rows->isEmpty()) {
-            $this->complete($workingSet);
+            $this->complete($workingSet, $balanceService);
             return;
         }
 
@@ -100,7 +121,21 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
             ];
         });
 
-        DB::transaction(function () use ($cachedRows): void {
+        $last = $rows->last();
+        $nextCursor = [
+            'basis_date' => (string) $last->basis_date,
+            'sort_id' => (int) $last->sort_id,
+            'transaction_id' => (string) $last->transaction_id,
+            'plan_account_id' => (string) $last->plan_account_id,
+        ];
+        $committed = DB::transaction(function () use ($cachedRows, $nextCursor): bool {
+            $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($this->workingSetId);
+            if (!$locked
+                || $locked->build_generation !== $this->generation
+                || !in_array($locked->state, ['warming', 'refreshing'], true)) {
+                return false;
+            }
+
             $cachedRows->chunk(500)->each(fn(Collection $chunk) => DB::table('viefund_transaction_working_set_rows')->upsert(
                 $chunk->all(),
                 ['working_set_id', 'generation', 'cash_transaction_id'],
@@ -117,19 +152,18 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 ->where('working_set_id', $this->workingSetId)
                 ->where('generation', $this->generation)
                 ->count();
-            VieFundTransactionWorkingSet::query()
-                ->whereKey($this->workingSetId)
-                ->where('build_generation', $this->generation)
-                ->update(['rows_cached' => $rowsCached]);
+            $locked->forceFill([
+                'rows_cached' => $rowsCached,
+                'hydration_cursor' => $nextCursor,
+            ])->save();
+
+            return true;
         });
 
-        $last = $rows->last();
-        $nextCursor = [
-            'basis_date' => (string) $last->basis_date,
-            'sort_id' => (int) $last->sort_id,
-            'transaction_id' => (string) $last->transaction_id,
-            'plan_account_id' => (string) $last->plan_account_id,
-        ];
+        if (!$committed) {
+            return;
+        }
+
         self::dispatch($this->workingSetId, $this->generation, $nextCursor)
             ->onConnection('database');
     }
@@ -139,6 +173,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
         VieFundTransactionWorkingSet::query()
             ->whereKey($this->workingSetId)
             ->where('build_generation', $this->generation)
+            ->whereIn('state', ['warming', 'refreshing'])
             ->update([
                 'state' => 'failed',
                 'last_error' => $exception?->getMessage() ?: 'Working-set hydration failed.',
@@ -146,11 +181,25 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
             ]);
     }
 
-    private function complete(VieFundTransactionWorkingSet $workingSet): void
+    private function complete(
+        VieFundTransactionWorkingSet $workingSet,
+        VieFundWorkingSetBalanceService $balanceService
+    ): void
     {
-        DB::transaction(function () use ($workingSet): void {
-            $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($workingSet->id);
-            if (!$locked || $locked->build_generation !== $this->generation) {
+        $current = VieFundTransactionWorkingSet::query()->find($workingSet->id);
+        if (!$current
+            || $current->build_generation !== $this->generation
+            || !in_array($current->state, ['warming', 'refreshing'], true)) {
+            return;
+        }
+
+        $balanceReport = $balanceService->build($current);
+
+        DB::transaction(function () use ($current, $balanceReport): void {
+            $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($current->id);
+            if (!$locked
+                || $locked->build_generation !== $this->generation
+                || !in_array($locked->state, ['warming', 'refreshing'], true)) {
                 return;
             }
 
@@ -166,11 +215,16 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'state' => 'ready',
                 'active_generation' => $this->generation,
                 'build_generation' => null,
+                'hydration_cursor' => null,
+                'balance_generation' => $this->generation,
+                'balance_report' => $balanceReport,
+                'balance_calculated_at' => now(),
                 'rows_cached' => $totalRows,
                 'total_rows' => $totalRows,
                 'ready_at' => now(),
                 'refreshed_at' => now(),
-                'expires_at' => now()->addMinutes(max(15, (int) config('viefund.all_transactions_working_set.ttl_minutes', 1440))),
+                'paused_at' => null,
+                'expires_at' => now()->addMinutes(app(RuntimeSettings::class)->get('viefund.working_set.ttl_minutes')),
                 'last_error' => null,
             ])->save();
         });

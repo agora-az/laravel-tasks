@@ -16,7 +16,11 @@ class VieFundTransactionWorkingSet extends Model
         'date_to' => 'date',
         'rows_cached' => 'integer',
         'total_rows' => 'integer',
+        'hydration_cursor' => 'array',
+        'balance_report' => 'array',
+        'balance_calculated_at' => 'datetime',
         'started_at' => 'datetime',
+        'paused_at' => 'datetime',
         'ready_at' => 'datetime',
         'refreshed_at' => 'datetime',
         'expires_at' => 'datetime',
@@ -33,7 +37,7 @@ class VieFundTransactionWorkingSet extends Model
             return $this->active_generation;
         }
 
-        if ($this->state === 'warming' && $this->rows_cached > 0) {
+        if (in_array($this->state, ['warming', 'paused', 'failed'], true) && $this->rows_cached > 0) {
             return $this->build_generation;
         }
 

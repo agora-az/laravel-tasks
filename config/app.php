@@ -7,6 +7,7 @@ return [
     'env' => env('APP_ENV', 'production'),
     'debug' => (bool) env('APP_DEBUG', false),
     'url' => env('APP_URL', 'http://localhost'),
+    'php_cli_path' => env('PHP_PATH'),
     'timezone' => env('APP_TIMEZONE', 'UTC'),
     // User-facing operational timestamps are shown in the client's Eastern
     // business timezone, independently of the server's storage timezone.
@@ -30,4 +31,8 @@ return [
     // Available keys: transaction_data, reconciliation, reports
     // Example: NAV_HIDE=transaction_data,settlement_instructions,eft_files,reconciliation,reports
     'nav_hide' => array_filter(array_map('trim', explode(',', env('NAV_HIDE', '')))),
+    'admin_access_emails' => array_values(array_filter(array_map(
+        static fn(string $email): string => strtolower(trim($email)),
+        explode(',', env('APP_ADMIN_ACCEESS', env('APP_ADMIN_ACCESS', '')))
+    ))),
 ];

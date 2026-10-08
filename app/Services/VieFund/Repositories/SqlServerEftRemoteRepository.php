@@ -2,6 +2,7 @@
 
 namespace App\Services\VieFund\Repositories;
 
+use App\Services\RuntimeSettings;
 use Carbon\Carbon;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -11,6 +12,10 @@ use Illuminate\Support\Facades\DB;
 class SqlServerEftRemoteRepository
 {
     private const CONNECTION = 'viefund_sqlsrv';
+
+    public function __construct(private readonly RuntimeSettings $runtimeSettings)
+    {
+    }
 
     public function itemsByLinkedIds(array $linkedIds): Collection
     {
@@ -51,7 +56,7 @@ class SqlServerEftRemoteRepository
         }
 
         return $linkedIds
-            ->chunk((int) config('viefund.all_transactions_link_cache.remote_batch_size', 20000))
+            ->chunk($this->runtimeSettings->get('viefund.link_cache.remote_batch_size'))
             ->flatMap(function (Collection $chunk): Collection {
                 return $this->connection()
                     ->query()

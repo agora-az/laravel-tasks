@@ -72,13 +72,19 @@ chmod -R 755 storage bootstrap/cache
 # Remove stale manifests
 rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
-# Run database migrations
-bash /home/site/wwwroot/artisan-safe.sh migrate --force || true
+# Run database migrations before serving code that depends on the new schema.
+if ! bash /home/site/wwwroot/artisan-safe.sh migrate --force >> "$STARTUP_LOG_PATH" 2>&1; then
+    log_startup "ERROR: Database migration failed."
+    exit 1
+fi
 
-# Cache Laravel config/routes/views
-bash /home/site/wwwroot/artisan-safe.sh config:cache || true
-bash /home/site/wwwroot/artisan-safe.sh route:cache || true
-bash /home/site/wwwroot/artisan-safe.sh view:cache || true
+# Cache Laravel config/routes/views and fail visibly if deployment is invalid.
+for cache_command in config:cache route:cache view:cache; do
+    if ! bash /home/site/wwwroot/artisan-safe.sh "$cache_command" >> "$STARTUP_LOG_PATH" 2>&1; then
+        log_startup "ERROR: php artisan $cache_command failed."
+        exit 1
+    fi
+done
 
 # Install Supervisor
 if ! install_supervisor; then

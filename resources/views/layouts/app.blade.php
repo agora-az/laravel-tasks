@@ -66,6 +66,9 @@
                     @if(!in_array('reconciliation', config('app.nav_hide')))
                     <a href="/reconciliations/matches">Matches</a>
                     @endif
+                    @if(app(\App\Support\ApplicationAdmin::class)->allows(auth()->user()))
+                    <a href="{{ route('admin.settings.index') }}">Admin</a>
+                    @endif
                     <span class="top-nav-user">{{ auth()->user()->name }}</span>
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf

@@ -15,6 +15,7 @@ use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
 use App\Http\Controllers\TransactionReconciliationController;
 use App\Http\Controllers\CustomerBalanceReconciliationController;
+use App\Http\Controllers\Admin\ApplicationSettingsController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -39,12 +40,24 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
 // Protected routes - require authentication
 Route::middleware('auth.check')->group(function () {
+    Route::middleware('application.admin')->prefix('admin')->group(function () {
+        Route::get('/settings', [ApplicationSettingsController::class, 'index'])->name('admin.settings.index');
+        Route::put('/settings', [ApplicationSettingsController::class, 'update'])->name('admin.settings.update');
+        Route::put('/settings/reset', [ApplicationSettingsController::class, 'reset'])->name('admin.settings.reset');
+    });
+
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');
     Route::get('/dashboard/stats-status', [ReconciliationController::class, 'dashboardStatsStatus'])->name('dashboard.stats-status');
     Route::get('/viefund-transactions', [RemoteVieFundController::class, 'allTransactions'])->name('viefund-transactions.index');
     Route::get('/viefund-transactions/working-set/{workingSet}', [RemoteVieFundController::class, 'allTransactionsWorkingSetStatus'])
         ->whereNumber('workingSet')
         ->name('viefund-transactions.working-set.status');
+    Route::post('/viefund-transactions/working-set/{workingSet}/pause', [RemoteVieFundController::class, 'pauseAllTransactionsWorkingSet'])
+        ->whereNumber('workingSet')
+        ->name('viefund-transactions.working-set.pause');
+    Route::post('/viefund-transactions/working-set/{workingSet}/resume', [RemoteVieFundController::class, 'resumeAllTransactionsWorkingSet'])
+        ->whereNumber('workingSet')
+        ->name('viefund-transactions.working-set.resume');
     Route::post('/viefund-transactions/filters', [RemoteVieFundController::class, 'applyAllTransactionsFilters'])->name('viefund-transactions.filters');
     Route::post('/viefund-transactions/eft-matches', [EftFileController::class, 'transactionMatches'])->name('viefund-transactions.eft-matches');
     Route::post('/viefund-transactions/fsp-matches', [RemoteVieFundController::class, 'fspMatches'])->name('viefund-transactions.fsp-matches');

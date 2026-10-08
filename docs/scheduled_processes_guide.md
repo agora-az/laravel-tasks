@@ -66,6 +66,18 @@ Some activities are intentionally initiated by a user rather than scheduled:
 
 The report screens may use locally refreshed data for speed, but the chosen reporting criteria still determine the displayed or exported result.
 
+## All Transactions period caches
+
+The **All Transactions** page builds a local period cache on demand. A cache is identified by its date basis, start date, end date, currency, and selected VieFund statuses. Changing any of those criteria creates or reuses a separate cache; it does not overwrite rows belonging to another period. Search text plus customer, plan account, transaction, source, transaction-type, and match filters are applied within the applicable period cache and do not start another hydration process.
+
+Several different period requests made close together can therefore queue several independent hydration processes. Reusing the same broad period criteria shares the existing process across users. Prefer allowing one useful period to finish before requesting several substantially different periods, especially for long date ranges.
+
+While a period is building, **Pause cache** requests a cooperative stop at a batch boundary. Rows from completed batches and the last committed source cursor are retained. If a remote batch is already being read when pause is requested, that uncommitted batch is discarded rather than partially saved. **Resume cache** continues from the last committed cursor. A failed cache can be retried in the same way. Caches created before resumable cursors were introduced may need to reread from the beginning once, but existing rows are upserted rather than duplicated.
+
+Before loading row batches, the process counts the exact transactions in the period scope. The page then shows completed rows, total rows, percentage complete, and an estimated remaining time based on the average active processing rate. Paused time is excluded from the estimate. The estimate may move as transaction enrichment becomes more or less expensive in later batches.
+
+A partial cache is never promoted as complete. If a completed generation is being refreshed, users continue to read the prior completed generation until the replacement finishes successfully.
+
 ## What to check if information appears out of date
 
 1. Confirm that the expected source file or VieFund activity existed before the scheduled time.

@@ -183,9 +183,17 @@ class VieFundTransactionWorkingSetQuery
             });
         }
 
-        return $query->get(['payload', 'match_status', 'enrichment'])->map(function ($cachedRow) {
+        return $query->get([
+            'payload',
+            'match_status',
+            'enrichment',
+            'basis_date as export_cursor_basis_date',
+            'cash_transaction_id as export_cursor_cash_transaction_id',
+        ])->map(function ($cachedRow) {
             $row = json_decode((string) $cachedRow->payload, false, 512, JSON_THROW_ON_ERROR);
             $row->cached_match_status = $cachedRow->match_status;
+            $row->export_cursor_basis_date = (string) $cachedRow->export_cursor_basis_date;
+            $row->export_cursor_cash_transaction_id = (int) $cachedRow->export_cursor_cash_transaction_id;
             $row->cached_enrichment = json_decode(
                 (string) ($cachedRow->enrichment ?? '{}'),
                 true,

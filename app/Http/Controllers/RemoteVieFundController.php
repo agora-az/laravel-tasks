@@ -26,7 +26,9 @@ use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\Process\ExecutableFinder;
 use Illuminate\View\View;
+use Throwable;
 
 class RemoteVieFundController extends Controller
 {
@@ -187,6 +189,7 @@ class RemoteVieFundController extends Controller
         $visibleBankSummaryColumns = AllTransactionColumns::bankSummaryVisible();
         $visibleBankDetailColumns = AllTransactionColumns::bankDetailVisible();
         $visibleFspColumns = AllTransactionColumns::fspVisible();
+        $columnGroupOrder = AllTransactionColumns::groupOrder();
         $workingSetStatus = $this->workingSetManager->status($workingSet);
         if ($asyncPage) {
             if ($connectionError || !$transactions) {
@@ -212,6 +215,7 @@ class RemoteVieFundController extends Controller
                     'bankSummaryHeadings',
                     'bankHeadings',
                     'fspHeadings',
+                    'columnGroupOrder',
                     'currencyOptions'
                 ))->render(),
                 'from' => $transactions->firstItem() ?? 0,
@@ -253,7 +257,8 @@ class RemoteVieFundController extends Controller
             'visibleBankColumns',
             'visibleBankSummaryColumns',
             'visibleBankDetailColumns',
-            'visibleFspColumns'
+            'visibleFspColumns',
+            'columnGroupOrder'
         ));
     }
 
@@ -261,6 +266,28 @@ class RemoteVieFundController extends Controller
     {
         return response()->json(
             $this->workingSetManager->status(\App\Models\VieFundTransactionWorkingSet::query()->find($workingSet)),
+            200,
+            $this->exportStatusNoCacheHeaders()
+        );
+    }
+
+    public function pauseAllTransactionsWorkingSet(int $workingSet): JsonResponse
+    {
+        $workingSet = \App\Models\VieFundTransactionWorkingSet::query()->findOrFail($workingSet);
+
+        return response()->json(
+            $this->workingSetManager->status($this->workingSetManager->pause($workingSet)),
+            200,
+            $this->exportStatusNoCacheHeaders()
+        );
+    }
+
+    public function resumeAllTransactionsWorkingSet(int $workingSet): JsonResponse
+    {
+        $workingSet = \App\Models\VieFundTransactionWorkingSet::query()->findOrFail($workingSet);
+
+        return response()->json(
+            $this->workingSetManager->status($this->workingSetManager->resume($workingSet)),
             200,
             $this->exportStatusNoCacheHeaders()
         );
@@ -609,7 +636,7 @@ class RemoteVieFundController extends Controller
                 'message' => 'Calculating the filtered transaction total...',
                 'updated_at' => now()->toIso8601String(),
             ], now()->addMinutes(15));
-            $phpPath = env('PHP_PATH', PHP_BINARY);
+            $phpPath = $this->consolePhpBinary();
             $logPath = storage_path('logs/viefund-all-transactions-count.log');
             $encodedPayload = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
             $command = sprintf(
@@ -678,38 +705,29 @@ class RemoteVieFundController extends Controller
 
             // Deliberately exclude search, customer, transaction type, source, and match
             // filters so this remains a stable cash-ledger summary for the selected period.
-            $signature = sha1(json_encode([
+            $workingSet = $this->workingSetManager->findReady([
                 'date_from' => $dateFrom->toDateString(),
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasis,
                 'currency_code' => $currencyCode,
                 'status_ids' => $statusIds,
-            ], JSON_THROW_ON_ERROR));
+            ]);
+            if (!$workingSet || !is_array($workingSet->balance_report)) {
+                return response()->json([
+                    'state' => 'processing',
+                    'message' => 'Period summary will be available when caching completes.',
+                ], 202, $this->exportStatusNoCacheHeaders());
+            }
 
-            $summary = Cache::remember(
-                "viefund_all_transactions_summary:{$signature}",
-                now()->addMinutes(5),
-                function () use ($dateFrom, $dateTo, $dateBasis, $currencyCode, $statusIds): array {
-                    $report = $this->dailyBalanceService->build(
-                        $dateFrom,
-                        $dateTo,
-                        $dateBasis,
-                        $currencyCode,
-                        $statusIds,
-                        null,
-                        'asc'
-                    );
-
-                    return [
-                        'opening_balance' => (float) $report['opening_balance'],
-                        'period_net' => (float) array_sum(array_column($report['rows'], 'daily_net_transactions')),
-                        'closing_balance' => (float) $report['final_balance'],
-                        'transaction_count' => (int) array_sum(array_column($report['rows'], 'transaction_count')),
-                        'balance_source' => (string) $report['balance_source'],
-                        'uses_snapshots' => (bool) $report['uses_snapshots'],
-                    ];
-                }
-            );
+            $report = $workingSet->balance_report;
+            $summary = [
+                'opening_balance' => (float) $report['opening_balance'],
+                'period_net' => (float) array_sum(array_column($report['rows'], 'daily_net_transactions')),
+                'closing_balance' => (float) $report['final_balance'],
+                'transaction_count' => (int) array_sum(array_column($report['rows'], 'transaction_count')),
+                'balance_source' => (string) $report['balance_source'],
+                'uses_snapshots' => (bool) $report['uses_snapshots'],
+            ];
             $summary['period_label'] = $dateFrom->isSameDay($dateTo)
                 ? $dateFrom->format('M j, Y')
                 : ($dateFrom->isSameMonth($dateTo) && $dateFrom->isSameYear($dateTo)
@@ -719,7 +737,7 @@ class RemoteVieFundController extends Controller
                         : $dateFrom->format('M j, Y') . ' – ' . $dateTo->format('M j, Y')));
 
             return response()->json($summary, 200, $this->exportStatusNoCacheHeaders());
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             Log::error('Unable to load the All Transactions period summary.', ['exception' => $e]);
 
             return response()->json([
@@ -796,7 +814,7 @@ class RemoteVieFundController extends Controller
                     fn(array $values, string $status): array => array_merge(['status' => $status], $values)
                 )->values(),
             ], 200, $this->exportStatusNoCacheHeaders());
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             Log::error('Unable to load the All Transactions match summary.', ['exception' => $e]);
 
             return response()->json([
@@ -835,6 +853,40 @@ class RemoteVieFundController extends Controller
             'include_7960_fsp_records' => ['sometimes', 'boolean'],
         ]);
 
+        $statusIds = array_values(array_unique(array_map('intval', (array) ($validated['filter_status'] ?? [6]))));
+        $workingSetFilters = [
+            'date_from' => (string) $validated['filter_date_from'],
+            'date_to' => (string) $validated['filter_date_to'],
+            'date_basis' => (string) $validated['filter_date_basis'],
+            'currency_code' => (string) $validated['filter_currency_code'],
+            'status_ids' => $statusIds ?: [6],
+        ];
+        $workingSet = $this->workingSetManager->findReady($workingSetFilters);
+        if (!$workingSet) {
+            $workingSet = $this->workingSetManager->ensure($workingSetFilters);
+
+            return response()->json([
+                'success' => false,
+                'state' => 'waiting_for_cache',
+                'message' => 'Export queued in this browser. It will start when the period cache is complete.',
+                'retry_after_seconds' => 3,
+                'working_set' => $this->workingSetManager->status($workingSet),
+            ], 409, $this->exportStatusNoCacheHeaders());
+        }
+
+        try {
+            $phpPath = $this->consolePhpBinary();
+        } catch (Throwable $exception) {
+            Log::error('Unable to find PHP CLI for the All Transactions export.', [
+                'exception' => $exception,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'The export process could not be started because PHP CLI is unavailable.',
+            ], 500, $this->exportStatusNoCacheHeaders());
+        }
+
         $userId = (int) auth()->id();
         $runId = (string) Str::uuid();
         $reportsDirectory = storage_path('app/reports');
@@ -870,6 +922,9 @@ class RemoteVieFundController extends Controller
             'success' => null,
             'message' => 'All Transactions export queued...',
             'progress_pct' => 0,
+            'data_source' => 'working_set',
+            'working_set_id' => $workingSet->id,
+            'working_set_generation' => $workingSet->readableGeneration(),
             'started_at' => now()->toIso8601String(),
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
@@ -881,7 +936,6 @@ class RemoteVieFundController extends Controller
             ));
         };
         $transactionTypeArgs = $repeatArgs('--transaction-type', (array) ($validated['filter_trx_type'] ?? []));
-        $statusIds = array_values(array_unique(array_map('intval', (array) ($validated['filter_status'] ?? [6]))));
         $statusArgs = $repeatArgs('--status', $statusIds ?: [6]);
         $matchStatusArgs = $repeatArgs('--match-status', (array) ($validated['filter_match_status'] ?? []));
         $splitSheetsArg = $request->boolean('split_sheets') ? '--split-sheets' : '';
@@ -895,7 +949,6 @@ class RemoteVieFundController extends Controller
         $linkedRecordLayoutArg = '--linked-record-layout=' . escapeshellarg(
             (string) ($validated['linked_record_layout'] ?? 'split')
         );
-        $phpPath = env('PHP_PATH', PHP_BINARY);
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
@@ -1007,7 +1060,7 @@ class RemoteVieFundController extends Controller
         $workerPid = (int) ($payload['worker_pid'] ?? 0);
         if ($hasLiveLock && $workerPid === 0 && !empty($payload['updated_at'])) {
             try {
-                if (Carbon::parse((string) $payload['updated_at'])->lt(now()->subMinutes(5))) {
+                if (Carbon::parse((string) $payload['updated_at'])->lt(now()->subMinute())) {
                     @unlink($lockFile);
                     $payload['inProgress'] = false;
                     $payload['success'] = false;
@@ -1451,7 +1504,7 @@ class RemoteVieFundController extends Controller
         $artisanPath = base_path('artisan');
         $lockFile    = storage_path('app/viefund-sync.lock');
         $logPath     = storage_path('logs/viefund-sync.log');
-        $phpPath     = env('PHP_PATH', '/usr/local/bin/php');
+        $phpPath     = $this->consolePhpBinary();
 
         // Create lock file so the UI shows "in progress" immediately
         file_put_contents($lockFile, date('c'));
@@ -1607,6 +1660,31 @@ class RemoteVieFundController extends Controller
     private function allTransactionsStatusFile(int $userId, string $runId): string
     {
         return storage_path("app/reports/viefund-all-transactions-{$userId}-{$runId}-status.json");
+    }
+
+    private function consolePhpBinary(): string
+    {
+        $configured = trim((string) config('app.php_cli_path', ''));
+        $fpmSibling = str_contains(basename(PHP_BINARY), 'php-fpm')
+            ? dirname(dirname(PHP_BINARY)) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'php'
+            : null;
+        $currentBinary = str_contains(basename(PHP_BINARY), 'php-fpm') ? null : PHP_BINARY;
+        $candidates = array_filter([
+            $configured,
+            $fpmSibling,
+            (new ExecutableFinder())->find('php'),
+            $currentBinary,
+            '/usr/local/bin/php',
+            '/usr/bin/php',
+        ]);
+
+        foreach (array_unique($candidates) as $candidate) {
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        throw new \RuntimeException('A PHP CLI executable could not be found. Configure PHP_PATH.');
     }
 
     private function allTransactionsRunHasLiveLock(string $lockFile, string $runId, int $userId): bool
