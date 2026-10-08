@@ -108,6 +108,7 @@ class ApplicationSettingsController extends Controller
     private function orderedColumnOptions(string $settingKey, array $selected): array
     {
         $definitions = $this->columnDefinitions($settingKey);
+        $selected = array_values(array_intersect($selected, array_keys($definitions)));
         $keys = array_values(array_unique(array_merge($selected, array_keys($definitions))));
 
         return array_map(
