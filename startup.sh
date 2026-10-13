@@ -1,9 +1,36 @@
 #!/bin/bash
 
+APP_ROOT=/home/site/wwwroot
+APP_READY_PATH="$APP_ROOT/artisan-safe.sh"
+APP_READY_TIMEOUT_SECONDS=120
 STARTUP_LOG_PATH=/home/site/wwwroot/storage/logs/startup.log
 SUPERVISOR_DEPENDENCY_PATH=/tmp/python3-pkg-resources.deb
 SUPERVISOR_DEPENDENCY_URL='https://snapshot.debian.org/archive/debian-security/20260831T000000Z/pool/updates/main/s/setuptools/python3-pkg-resources_52.0.0-4%2Bdeb11u2_all.deb'
 SUPERVISOR_DEPENDENCY_SHA256='02a86666b1e705e27eaaca2a379c1009c37a0d1f1db2f75ba4a4bde123f83d52'
+
+wait_for_app_root() {
+    local elapsed_seconds=0
+
+    while [ ! -f "$APP_READY_PATH" ]; do
+        if [ "$elapsed_seconds" -ge "$APP_READY_TIMEOUT_SECONDS" ]; then
+            printf '%s ERROR: Timed out waiting for %s.\n' \
+                "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$APP_READY_PATH" >&2
+            return 1
+        fi
+
+        if [ "$elapsed_seconds" -eq 0 ]; then
+            printf '%s Waiting for the App Service webroot at %s...\n' \
+                "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$APP_READY_PATH" >&2
+        fi
+
+        sleep 1
+        elapsed_seconds=$((elapsed_seconds + 1))
+    done
+}
+
+if ! wait_for_app_root; then
+    exit 1
+fi
 
 mkdir -p /home/site/wwwroot/storage/logs
 
