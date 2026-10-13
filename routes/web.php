@@ -33,6 +33,7 @@ Route::get('/debug-proxy', function () {
 
 // Authentication routes (no auth required)
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
+Route::get('/login/csrf-token', [AuthController::class, 'refreshCsrfToken'])->name('login.csrf-token');
 Route::post('/login', [AuthController::class, 'login']);
 
 // Logout route (no auth required - users can logout)

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\LoginAttempt;
 use App\Models\User;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -23,6 +24,15 @@ class AuthController extends Controller
         }
 
         return view('auth.login');
+    }
+
+    public function refreshCsrfToken(Request $request): JsonResponse
+    {
+        $request->session()->regenerateToken();
+
+        return response()
+            ->json(['token' => csrf_token()])
+            ->header('Cache-Control', 'no-store, no-cache, must-revalidate');
     }
 
     /**

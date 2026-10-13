@@ -81,6 +81,10 @@
             background: #2f855a;
             box-shadow: 0 6px 16px rgba(56, 161, 105, 0.3);
         }
+        .btn-login:disabled {
+            cursor: wait;
+            opacity: 0.7;
+        }
         .error-box {
             background: #fff5f5;
             border: 1px solid #fc8181;
@@ -135,7 +139,11 @@
             </div>
         @endif
 
-        <form method="POST" action="{{ route('login') }}">
+        <div id="session-refresh-error" class="error-box" hidden>
+            Sign-in could not be started. Please try again.
+        </div>
+
+        <form id="login-form" method="POST" action="{{ route('login') }}" data-csrf-url="{{ route('login.csrf-token') }}">
             @csrf
             
             <div class="form-group">
@@ -171,5 +179,45 @@
             <button type="submit" class="btn-login">Sign In</button>
         </form>
     </div>
+    <script>
+        (() => {
+            const form = document.getElementById('login-form');
+            const csrfInput = form?.querySelector('input[name="_token"]');
+            const submitButton = form?.querySelector('button[type="submit"]');
+            const refreshError = document.getElementById('session-refresh-error');
+            let refreshing = false;
+
+            form?.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                if (refreshing) return;
+
+                refreshing = true;
+                submitButton.disabled = true;
+                refreshError.hidden = true;
+
+                try {
+                    const response = await fetch(form.dataset.csrfUrl, {
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        cache: 'no-store',
+                        credentials: 'same-origin',
+                    });
+                    const payload = await response.json();
+                    if (!response.ok || typeof payload.token !== 'string' || payload.token === '') {
+                        throw new Error('Unable to refresh the sign-in session.');
+                    }
+
+                    csrfInput.value = payload.token;
+                    HTMLFormElement.prototype.submit.call(form);
+                } catch (error) {
+                    refreshing = false;
+                    submitButton.disabled = false;
+                    refreshError.hidden = false;
+                }
+            });
+        })();
+    </script>
 </body>
 </html>
