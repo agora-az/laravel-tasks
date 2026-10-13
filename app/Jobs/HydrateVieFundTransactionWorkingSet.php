@@ -67,7 +67,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 return;
             }
             self::dispatch($this->workingSetId, $this->generation, $this->cursor)
-                ->onConnection('database');
+                ->onConnection('database_viefund_cache');
 
             return;
         }
@@ -165,7 +165,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
         }
 
         self::dispatch($this->workingSetId, $this->generation, $nextCursor)
-            ->onConnection('database');
+            ->onConnection('database_viefund_cache');
     }
 
     public function failed(?Throwable $exception): void

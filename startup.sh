@@ -168,5 +168,10 @@ fi
 
 log_startup "Starting supervisord..."
 
+# Supervisor expands these environment variables while loading the worker
+# definitions. App Service settings can override either count on larger plans.
+export QUEUE_GENERAL_WORKERS="${QUEUE_GENERAL_WORKERS:-1}"
+export QUEUE_CACHE_WORKERS="${QUEUE_CACHE_WORKERS:-1}"
+
 # Start Supervisor in foreground mode
 exec supervisord -c /etc/supervisor/supervisord.conf

@@ -68,7 +68,7 @@ class VieFundTransactionWorkingSetManager
 
         if ($shouldDispatch && $generation !== null) {
             HydrateVieFundTransactionWorkingSet::dispatch($workingSet->id, $generation)
-                ->onConnection('database');
+                ->onConnection('database_viefund_cache');
         }
 
         return $workingSet->fresh();
@@ -124,7 +124,7 @@ class VieFundTransactionWorkingSetManager
                 $workingSet->id,
                 $dispatch['generation'],
                 $dispatch['cursor']
-            )->onConnection('database');
+            )->onConnection('database_viefund_cache');
         }
 
         return $workingSet->fresh();

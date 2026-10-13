@@ -237,28 +237,27 @@ class ChunkedUploadController extends Controller
                 'importType' => $importType,
             ]);
 
-            // Return response immediately so Dropzone doesn't retry
-            // Process the file after the response is sent using register_shutdown_function
+            ProcessImportJob::dispatch(
+                $finalFilePath,
+                $importType,
+                $originalFilename,
+                $import->id,
+                $tempDir
+            )
+                ->onConnection('database')
+                ->onQueue('imports');
+
+            \Log::info('ProcessImportJob queued', [
+                'import_id' => $import->id,
+                'queue' => 'imports',
+            ]);
+
+            // Return immediately so Dropzone does not retry the completed upload.
             $response = response()->json([
                 'success' => true,
                 'message' => 'File uploaded and processing started',
                 'import_id' => $import->id,
             ]);
-
-            // Use register_shutdown_function to process job after response is sent
-            // This prevents Dropzone from timing out and retrying chunks
-            register_shutdown_function(function () use ($finalFilePath, $importType, $originalFilename, $import, $tempDir) {
-                try {
-                    $job = new ProcessImportJob($finalFilePath, $importType, $originalFilename, $import->id, $tempDir);
-                    $job->handle();
-                    
-                    \Log::info('ProcessImportJob executed successfully', [
-                        'import_id' => $import->id,
-                    ]);
-                } catch (\Exception $e) {
-                    \Log::error('Error in background ProcessImportJob: ' . $e->getMessage());
-                }
-            });
 
             return $response;
         } catch (\Exception $e) {

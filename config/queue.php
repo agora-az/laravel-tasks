@@ -16,6 +16,15 @@ return [
             'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 3700),
             'after_commit' => false,
         ],
+
+        'database_viefund_cache' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => env('DB_VIEFUND_CACHE_QUEUE', 'viefund-cache'),
+            'retry_after' => (int) env('DB_VIEFUND_CACHE_QUEUE_RETRY_AFTER', 300),
+            'after_commit' => false,
+        ],
     ],
 
     'batching' => [

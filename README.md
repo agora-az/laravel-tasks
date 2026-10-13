@@ -74,13 +74,26 @@ deploying, confirm these App Service settings:
 ```dotenv
 QUEUE_CONNECTION=database
 DB_QUEUE_RETRY_AFTER=3700
+DB_VIEFUND_CACHE_QUEUE_RETRY_AFTER=300
+QUEUE_GENERAL_WORKERS=1
+QUEUE_CACHE_WORKERS=1
+CACHE_STORE=database
 APP_ADMIN_ACCEESS=authorized@example.com
 ```
 
 The App Service **Startup Command** must be:
 
 ```bash
-bash /home/site/wwwroot/startup.sh
+bash /home/site/startup.sh
+```
+
+The deployment package writes the repository copy to
+`/home/site/wwwroot/startup.sh`. After changing that file, update the persistent
+startup script through the Azure SSH console before restarting the App Service:
+
+```bash
+cp /home/site/startup.sh /home/site/startup.sh.bak
+install -m 755 /home/site/wwwroot/startup.sh /home/site/startup.sh
 ```
 
 Enable **Always On** for the App Service so Supervisor's queue worker and
@@ -105,9 +118,15 @@ php artisan queue:failed
 curl -fsS http://127.0.0.1:8080/up
 ```
 
-`laravel-queue` and `laravel-scheduler` must both report `RUNNING`. The queue
-worker uses a 3,600-second timeout and 512 MB memory limit; its database queue
-reservation is 3,700 seconds to prevent duplicate execution of long jobs.
+`laravel-queue-cache-00`, `laravel-queue-general-00`, and `laravel-scheduler`
+must report `RUNNING`. Cache hydration uses the `viefund-cache` queue with a
+300-second reservation. Imports and other background jobs use the general
+worker with a 3,700-second reservation for long-running work. Increase worker
+counts through App Service settings rather than editing Supervisor files; keep
+`QUEUE_CACHE_WORKERS=1` unless concurrent VieFund load has been benchmarked.
+
+See [Production worker scaling](docs/production-worker-scaling.md) for queue
+ownership, plan-size defaults, deployment checks, and scaling guardrails.
 
 ## Application Logins
 
