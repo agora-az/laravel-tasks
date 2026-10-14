@@ -9,6 +9,7 @@ use App\Services\Reconciliation\EftBankMatchStatusService;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\VieFundExportLinkCache;
+use App\Services\VieFund\VieFundMatchStatusSummaryAccumulator;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundWorkingSetBalanceService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
@@ -181,7 +182,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
             $stageStartedAt = microtime(true);
             $dailyStats = $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters);
-            $matchStatusSummary = $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters);
+            $summarizeDuringExport = $matchStatuses === [];
+            $matchStatusSummaryAccumulator = new VieFundMatchStatusSummaryAccumulator();
+            $matchStatusSummary = $summarizeDuringExport
+                ? null
+                : $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters);
             $totalTransactions = (int) $dailyStats->sum(fn($row) => (int) $row->transaction_count);
             $overallSelectedNet = (float) $dailyStats->sum(fn($row) => (float) $row->net_amount);
             $firstDate = $dailyStats->isNotEmpty()
@@ -407,6 +412,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             $bankEntriesBySequenceCache = collect();
             $fspBankMatchCache = collect();
             $stageTimings['planning'] += microtime(true) - $stageStartedAt;
+            $rowExportStartedAt = microtime(true);
 
             do {
                 if ($lockFile !== '') {
@@ -425,7 +431,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'progress_pct' => $totalTransactions > 0
                         ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                         : 3,
-                    'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
+                    'eta_seconds' => $this->estimateEtaSeconds($rowExportStartedAt, $processedTransactions, $totalTransactions),
                     'processed_transactions' => $processedTransactions,
                     'total_transactions' => $totalTransactions,
                     'processed_sheets' => $sheetNumber - 1,
@@ -467,7 +473,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'progress_pct' => $totalTransactions > 0
                             ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                             : 3,
-                        'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
+                        'eta_seconds' => $this->estimateEtaSeconds($rowExportStartedAt, $processedTransactions, $totalTransactions),
                         'processed_transactions' => $processedTransactions,
                         'total_transactions' => $totalTransactions,
                         'started_at' => $startedAtIso,
@@ -572,7 +578,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'progress_pct' => $totalTransactions > 0
                             ? min(98, max(3, (int) floor(($processedTransactions / $totalTransactions) * 98)))
                             : 3,
-                        'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
+                        'eta_seconds' => $this->estimateEtaSeconds($rowExportStartedAt, $processedTransactions, $totalTransactions),
                         'processed_transactions' => $processedTransactions,
                         'total_transactions' => $totalTransactions,
                         'started_at' => $startedAtIso,
@@ -655,6 +661,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
                 $stageStartedAt = microtime(true);
                 foreach ($rows as $row) {
+                    if ($summarizeDuringExport) {
+                        $matchStatusSummaryAccumulator->add($row);
+                    }
                     if (
                         $sheetRowCount >= $currentSheetPlan['expected_rows']
                         && $sheetPlanIndex < count($sheetPlans) - 1
@@ -884,7 +893,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $estimatedTransactionSheets
                     ),
                     'progress_pct' => $progress,
-                    'eta_seconds' => $this->estimateEtaSeconds($startedAt, $processedTransactions, $totalTransactions),
+                    'eta_seconds' => $this->estimateEtaSeconds($rowExportStartedAt, $processedTransactions, $totalTransactions),
                     'processed_transactions' => $processedTransactions,
                     'total_transactions' => $totalTransactions,
                     'processed_sheets' => $sheetNumber - 1,
@@ -947,6 +956,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             );
 
             $summarySheet = $writer->addNewSheetAndMakeItCurrent();
+            if ($summarizeDuringExport) {
+                $matchStatusSummary = $matchStatusSummaryAccumulator->result();
+            }
             $this->writeSummarySheet(
                 $writer, $summarySheet, $headerStyle, $currencyStyle, $sheetSummaries,
                 $filters, $search, $totalTransactions, $firstDate, $lastDate,
