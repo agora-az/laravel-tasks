@@ -24,7 +24,7 @@
         <h2 style="margin: 0;">FSP Files</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: AGRA and 7960 feeds</div>
         <div id="settlement-sync-status-wrap" class="sync-chip sync-chip-progress sync-page-notification" style="display:none;">
-            <span id="settlement-sync-status"></span>
+            <span id="settlement-sync-status" style="display:inline-flex;align-items:center;min-width:0;max-width:100%;white-space:nowrap;"></span>
             <button type="button" id="settlement-sync-status-dismiss" aria-label="Dismiss FSP sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>
@@ -59,6 +59,7 @@
     let observedInProgress = false;
     let displayObservedCompletion = false;
     let notificationDismissed = false;
+    let displayedCompletionRunId = null;
 
     const setVisible = (visible) => { wrap.style.display = visible ? 'inline-flex' : 'none'; };
     const setMessage = (message) => { text.textContent = message || ''; };
@@ -68,6 +69,64 @@
         button.disabled = busy;
         button.style.opacity = busy ? '0.65' : '';
         button.style.cursor = busy ? 'not-allowed' : '';
+    };
+    const formatEta = (seconds) => {
+        if (seconds === null || seconds === undefined) return null;
+        const remaining = Math.max(0, Number(seconds));
+        if (remaining < 60) return '<1m';
+        if (remaining < 3600) return `${Math.ceil(remaining / 60)}m`;
+        if (remaining < 86400) return `${Math.floor(remaining / 3600)}h ${Math.ceil((remaining % 3600) / 60)}m`;
+        return `${Math.floor(remaining / 86400)}d ${Math.ceil((remaining % 86400) / 3600)}h`;
+    };
+    const progressMessage = (data) => {
+        const parts = [data.current_file ? `Syncing ${data.current_file}` : 'Syncing FSP files'];
+        const processed = Number(data.processed_files);
+        const total = Number(data.total_files);
+        if (Number.isFinite(processed) && Number.isFinite(total) && total > 0) {
+            parts.push(`${processed.toLocaleString()}/${total.toLocaleString()}`);
+        }
+        if (data.progress_pct !== null && data.progress_pct !== undefined) {
+            parts.push(`${Number(data.progress_pct).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`);
+        }
+        const eta = formatEta(data.eta_seconds);
+        if (eta) parts.push(`~${eta}`);
+        if (Number(data.failed_files) > 0) parts.push(`${Number(data.failed_files).toLocaleString()} failed`);
+
+        return parts.join(' · ');
+    };
+    const renderProgress = (data) => {
+        text.textContent = '';
+
+        const label = document.createElement('span');
+        label.style.flex = '0 0 auto';
+        label.style.marginRight = '4px';
+        label.textContent = 'Syncing';
+
+        const filename = document.createElement('span');
+        filename.style.minWidth = '0';
+        filename.style.overflow = 'hidden';
+        filename.style.textOverflow = 'ellipsis';
+        filename.style.whiteSpace = 'nowrap';
+        filename.textContent = data.current_file || 'FSP files';
+
+        const metrics = [];
+        const processed = Number(data.processed_files);
+        const total = Number(data.total_files);
+        if (Number.isFinite(processed) && Number.isFinite(total) && total > 0) {
+            metrics.push(`${processed.toLocaleString()}/${total.toLocaleString()}`);
+        }
+        if (data.progress_pct !== null && data.progress_pct !== undefined) {
+            metrics.push(`${Number(data.progress_pct).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`);
+        }
+        const eta = formatEta(data.eta_seconds);
+        if (eta) metrics.push(`~${eta}`);
+        if (Number(data.failed_files) > 0) metrics.push(`${Number(data.failed_files).toLocaleString()} failed`);
+
+        const detail = document.createElement('span');
+        detail.style.flex = '0 0 auto';
+        detail.textContent = metrics.length > 0 ? ` · ${metrics.join(' · ')}` : '';
+
+        text.append(label, filename, detail);
     };
 
     if (dismiss) {
@@ -93,7 +152,7 @@
                         lastSyncDetail.textContent = trigger ? `${result} · ${trigger}` : result;
                     } else if (data.inProgress && data.started_at) {
                         lastSyncTime.textContent = 'currently running';
-                        lastSyncDetail.textContent = data.message || 'FSP sync in progress…';
+                        lastSyncDetail.textContent = progressMessage(data);
                     } else {
                         lastSyncTime.textContent = 'no completed sync recorded';
                         lastSyncDetail.innerHTML = '&nbsp;';
@@ -105,26 +164,30 @@
                         notificationDismissed = false;
                     }
                     observedInProgress = true;
-                    wrap.className = 'sync-chip sync-chip-progress';
-                    setMessage(data.message || 'FSP sync in progress...');
+                    wrap.className = 'sync-chip sync-chip-progress sync-page-notification';
+                    renderProgress(data);
                     setVisible(!notificationDismissed);
                     setBusy(true);
                     return;
                 }
 
                 setBusy(false);
-                if ((data.success === true || data.success === false) && observedInProgress) {
+                const completedRunId = data.run_id || null;
+                const shouldDisplayCompletion = observedInProgress
+                    || (data.initiatedByCurrentSession && completedRunId && displayedCompletionRunId !== completedRunId);
+                if ((data.success === true || data.success === false) && shouldDisplayCompletion) {
                     observedInProgress = false;
                     displayObservedCompletion = true;
                     notificationDismissed = false;
+                    displayedCompletionRunId = completedRunId;
                 }
 
                 if (displayObservedCompletion && !notificationDismissed && data.success === true) {
-                    wrap.className = 'sync-chip sync-chip-success';
+                    wrap.className = 'sync-chip sync-chip-success sync-page-notification';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync completed.');
                 } else if (displayObservedCompletion && !notificationDismissed && data.success === false) {
-                    wrap.className = 'sync-chip sync-chip-error';
+                    wrap.className = 'sync-chip sync-chip-error sync-page-notification';
                     setVisible(true);
                     setMessage(data.message || 'FSP sync failed.');
                 } else {
@@ -135,7 +198,7 @@
     };
 
     poll();
-    setInterval(poll, 5000);
+    setInterval(poll, 2000);
 })();
 </script>
 

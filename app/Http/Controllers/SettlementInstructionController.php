@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\Process\ExecutableFinder;
 
 class SettlementInstructionController extends Controller
 {
@@ -304,8 +305,8 @@ class SettlementInstructionController extends Controller
         $lockFile = storage_path('app/settlement-instructions-sync.lock');
         $statusFile = storage_path('app/settlement-instructions-sync-status.json');
         $logPath = storage_path('logs/settlement-instructions-sync.log');
-        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
-        $dryRun = filter_var(env('SETTLEMENT_SFTP_DRY_RUN', false), FILTER_VALIDATE_BOOLEAN);
+        $phpPath = $this->consolePhpBinary();
+        $dryRun = (bool) config('sftp.settlement.dry_run', false);
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
@@ -325,9 +326,12 @@ class SettlementInstructionController extends Controller
             'success' => null,
             'dry_run' => $dryRun,
             'message' => $dryRun ? 'FSP dry run queued...' : 'FSP sync queued...',
+            'phase' => 'queued',
+            'current_file' => null,
             'processed_files' => 0,
             'total_files' => null,
             'progress_pct' => 0,
+            'eta_seconds' => null,
             'started_at' => $startedAt,
             'updated_at' => $startedAt,
         ], JSON_PRETTY_PRINT));
@@ -376,9 +380,12 @@ class SettlementInstructionController extends Controller
             'inProgress' => $inProgress,
             'success' => null,
             'message' => $inProgress ? 'FSP sync in progress...' : 'Idle',
+            'phase' => null,
+            'current_file' => null,
             'processed_files' => null,
             'total_files' => null,
             'progress_pct' => null,
+            'eta_seconds' => null,
             'started_at' => null,
             'updated_at' => null,
             'completed_at' => null,
@@ -402,6 +409,31 @@ class SettlementInstructionController extends Controller
             && hash_equals((string) $payload['run_id'], (string) $request->session()->get('fsp_sync_run_id', ''));
 
         return response()->json($payload);
+    }
+
+    private function consolePhpBinary(): string
+    {
+        $configured = trim((string) config('app.php_cli_path', ''));
+        $fpmSibling = str_contains(basename(PHP_BINARY), 'php-fpm')
+            ? dirname(dirname(PHP_BINARY)) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'php'
+            : null;
+        $currentBinary = str_contains(basename(PHP_BINARY), 'php-fpm') ? null : PHP_BINARY;
+        $candidates = array_filter([
+            $configured,
+            $fpmSibling,
+            (new ExecutableFinder())->find('php'),
+            $currentBinary,
+            '/usr/local/bin/php',
+            '/usr/bin/php',
+        ]);
+
+        foreach (array_unique($candidates) as $candidate) {
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        throw new \RuntimeException('A PHP CLI executable could not be found. Configure PHP_PATH.');
     }
 
     private function applyFilters(Builder $query, Request $request, string $activeSourceType): void

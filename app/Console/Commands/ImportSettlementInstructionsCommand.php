@@ -15,7 +15,12 @@ class ImportSettlementInstructionsCommand extends Command
         {--path=resources/data/cibc : Directory containing settlement instruction files}
         {--pattern=FSP* : Glob pattern for files}
         {--truncate : Truncate settlement instructions table before import}
-        {--chunk=500 : Insert chunk size}';
+        {--chunk=500 : Insert chunk size}
+        {--status-file= : Optional sync progress JSON}
+        {--lock-file= : Optional parent sync lock file}
+        {--started-at= : ISO timestamp for the parent sync}
+        {--run-id= : Identifier supplied by the parent sync}
+        {--trigger=Command line : Description of what initiated the parent sync}';
 
     protected $description = 'Import FundSERV/LTM settlement instruction files into raw storage';
 
@@ -24,6 +29,11 @@ class ImportSettlementInstructionsCommand extends Command
         $directory = base_path((string) $this->option('path'));
         $pattern = (string) $this->option('pattern');
         $chunkSize = max(1, (int) $this->option('chunk'));
+        $statusFile = $this->stringOption('status-file');
+        $lockFile = $this->stringOption('lock-file');
+        $startedAt = $this->stringOption('started-at') ?? now()->toIso8601String();
+        $runId = $this->stringOption('run-id');
+        $trigger = $this->stringOption('trigger') ?? 'Command line';
 
         if (!is_dir($directory)) {
             $this->error("Directory not found: {$directory}");
@@ -48,9 +58,24 @@ class ImportSettlementInstructionsCommand extends Command
 
         $totalInserted = 0;
         $errors = 0;
+        $processedFiles = 0;
+        $totalFiles = count($files);
+        $importStartedAt = microtime(true);
 
         foreach ($files as $filePath) {
             $filename = basename($filePath);
+            $this->writeProgress(
+                $statusFile,
+                $runId,
+                $trigger,
+                $startedAt,
+                $filename,
+                $processedFiles,
+                $totalFiles,
+                $errors,
+                $importStartedAt,
+                $lockFile
+            );
             $this->line("Processing {$filename}");
 
             $import = Import::create([
@@ -84,6 +109,20 @@ class ImportSettlementInstructionsCommand extends Command
                 ]);
                 $this->error("Failed {$filename}: {$e->getMessage()}");
             }
+
+            $processedFiles++;
+            $this->writeProgress(
+                $statusFile,
+                $runId,
+                $trigger,
+                $startedAt,
+                $filename,
+                $processedFiles,
+                $totalFiles,
+                $errors,
+                $importStartedAt,
+                $lockFile
+            );
         }
 
         $this->newLine();
@@ -93,6 +132,69 @@ class ImportSettlementInstructionsCommand extends Command
         }
 
         return $errors > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    private function writeProgress(
+        ?string $statusFile,
+        ?string $runId,
+        string $trigger,
+        string $startedAt,
+        string $currentFile,
+        int $processedFiles,
+        int $totalFiles,
+        int $failedFiles,
+        float $phaseStartedAt,
+        ?string $lockFile
+    ): void {
+        if (!$statusFile) {
+            return;
+        }
+
+        $progressPct = $totalFiles > 0
+            ? min(100, (int) floor(($processedFiles / $totalFiles) * 100))
+            : 0;
+        $filesPerSecond = $processedFiles > 0
+            ? $processedFiles / max(1, microtime(true) - $phaseStartedAt)
+            : 0;
+        $etaSeconds = $filesPerSecond > 0 && $processedFiles < $totalFiles
+            ? (int) ceil(($totalFiles - $processedFiles) / $filesPerSecond)
+            : null;
+        $payload = [
+            'run_id' => $runId,
+            'trigger' => $trigger,
+            'inProgress' => true,
+            'success' => null,
+            'dry_run' => false,
+            'phase' => 'importing',
+            'message' => 'Importing FSP settlement instructions...',
+            'current_file' => $currentFile,
+            'processed_files' => $processedFiles,
+            'total_files' => $totalFiles,
+            'progress_pct' => $progressPct,
+            'eta_seconds' => $etaSeconds,
+            'successful_files' => $processedFiles - $failedFiles,
+            'failed_files' => $failedFiles,
+            'started_at' => $startedAt,
+            'updated_at' => now()->toIso8601String(),
+            'completed_at' => null,
+        ];
+        $temporaryFile = $statusFile . '.tmp';
+        $json = json_encode($payload, JSON_PRETTY_PRINT);
+
+        if ($json !== false && @file_put_contents($temporaryFile, $json, LOCK_EX) !== false) {
+            @rename($temporaryFile, $statusFile);
+        }
+
+        if ($lockFile && file_exists($lockFile)) {
+            @touch($lockFile);
+        }
+    }
+
+    private function stringOption(string $option): ?string
+    {
+        $value = trim((string) $this->option($option));
+
+        return $value === '' ? null : $value;
     }
 
     private function importSingleFile(string $filePath, int $importId, int $chunkSize): int

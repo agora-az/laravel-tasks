@@ -34,10 +34,13 @@ class SyncSettlementInstructionsCommand extends Command
 
     private string $trigger = 'Command line';
 
+    private ?string $lockFile = null;
+
     public function handle(): int
     {
         $lockFile = $this->stringOption('lock-file');
         $statusFile = $this->stringOption('status-file');
+        $this->lockFile = $lockFile;
         $this->runId = $this->stringOption('run-id');
         $this->trigger = $this->stringOption('trigger') ?? 'Command line';
 
@@ -77,25 +80,25 @@ class SyncSettlementInstructionsCommand extends Command
             $startedAt
         ));
 
-        $host = $this->connectionOption('host', 'SETTLEMENT_SFTP_HOST', 'BANK_SFTP_HOST');
-        $port = (int) ($this->connectionOption('port', 'SETTLEMENT_SFTP_PORT', 'BANK_SFTP_PORT', '22') ?? 22);
-        $username = $this->connectionOption('username', 'SETTLEMENT_SFTP_USERNAME', 'BANK_SFTP_USERNAME');
-        $password = $this->connectionOption('password', 'SETTLEMENT_SFTP_PASSWORD', 'BANK_SFTP_PASSWORD');
+        $host = $this->connectionOption('host', 'sftp.settlement.host', 'sftp.bank.host');
+        $port = (int) ($this->connectionOption('port', 'sftp.settlement.port', 'sftp.bank.port', '22') ?? 22);
+        $username = $this->connectionOption('username', 'sftp.settlement.username', 'sftp.bank.username');
+        $password = $this->connectionOption('password', 'sftp.settlement.password', 'sftp.bank.password');
         $remotePath = $this->normalizeRemotePath(
-            $this->connectionOption('remote-path', 'SETTLEMENT_SFTP_REMOTE_PATH', 'BANK_SFTP_REMOTE_PATH', '/') ?? '/'
+            $this->connectionOption('remote-path', 'sftp.settlement.remote_path', 'sftp.bank.remote_path', '/') ?? '/'
         );
         $localPath = $this->connectionOption(
             'local-path',
-            'SETTLEMENT_SFTP_LOCAL_PATH',
+            'sftp.settlement.local_path',
             null,
             'resources/data/cibc'
         ) ?? 'resources/data/cibc';
-        $pattern = $this->connectionOption('pattern', 'SETTLEMENT_SFTP_FILE_PATTERN', null, 'FSP*') ?? 'FSP*';
+        $pattern = $this->connectionOption('pattern', 'sftp.settlement.file_pattern', null, 'FSP*') ?? 'FSP*';
         $chunkSize = max(1, (int) $this->option('chunk'));
         $force = (bool) $this->option('force');
         $rebuild = (bool) $this->option('rebuild');
         $keepLocal = (bool) $this->option('keep-local');
-        $dryRun = (bool) $this->option('dry-run') || $this->booleanEnv('SETTLEMENT_SFTP_DRY_RUN', false);
+        $dryRun = (bool) $this->option('dry-run') || (bool) config('sftp.settlement.dry_run', false);
 
         if ($rebuild) {
             $force = true;
@@ -273,7 +276,28 @@ class SyncSettlementInstructionsCommand extends Command
 
         $downloaded = [];
         $failed = [];
+        $downloadStartedAt = microtime(true);
+        $downloadTotal = $toDownload->count();
+        $downloadProcessed = 0;
         foreach ($toDownload as $fileName) {
+            $this->writeStatus($statusFile, $this->statusPayload(
+                true,
+                null,
+                'Downloading FSP files from SFTP...',
+                $downloadProcessed,
+                $downloadTotal,
+                $this->progressPercentage($downloadProcessed, $downloadTotal),
+                $startedAt,
+                false,
+                [
+                    'phase' => 'downloading',
+                    'current_file' => $fileName,
+                    'eta_seconds' => $this->estimateEtaSeconds($downloadStartedAt, $downloadProcessed, $downloadTotal),
+                    'successful_files' => count($downloaded),
+                    'failed_files' => count($failed),
+                ]
+            ));
+
             $remoteFilePath = $remotePath === '/' ? "/{$fileName}" : "{$remotePath}/{$fileName}";
             $localFilePath = $localDir . DIRECTORY_SEPARATOR . $fileName;
             $temporaryFilePath = $localDir . DIRECTORY_SEPARATOR . '.download-' . $fileName . '.part';
@@ -308,10 +332,28 @@ class SyncSettlementInstructionsCommand extends Command
             @unlink($temporaryFilePath);
             if (!$downloadSucceeded) {
                 $failed[] = $fileName;
-                continue;
+            } else {
+                $downloaded[] = $fileName;
             }
 
-            $downloaded[] = $fileName;
+            $downloadProcessed++;
+            $this->writeStatus($statusFile, $this->statusPayload(
+                true,
+                null,
+                'Downloading FSP files from SFTP...',
+                $downloadProcessed,
+                $downloadTotal,
+                $this->progressPercentage($downloadProcessed, $downloadTotal),
+                $startedAt,
+                false,
+                [
+                    'phase' => 'downloading',
+                    'current_file' => $fileName,
+                    'eta_seconds' => $this->estimateEtaSeconds($downloadStartedAt, $downloadProcessed, $downloadTotal),
+                    'successful_files' => count($downloaded),
+                    'failed_files' => count($failed),
+                ]
+            ));
         }
 
         $filesToProcess = $localPending->concat($downloaded)->unique()->values();
@@ -326,6 +368,9 @@ class SyncSettlementInstructionsCommand extends Command
         }
 
         $stagedFiles = [];
+        $stagingStartedAt = microtime(true);
+        $stagingTotal = $filesToProcess->count();
+        $stagingProcessed = 0;
         foreach ($filesToProcess as $fileName) {
             if (@copy(
                 $localDir . DIRECTORY_SEPARATOR . $fileName,
@@ -335,6 +380,25 @@ class SyncSettlementInstructionsCommand extends Command
             } else {
                 $failed[] = $fileName;
             }
+
+            $stagingProcessed++;
+            $this->writeStatus($statusFile, $this->statusPayload(
+                true,
+                null,
+                'Preparing downloaded FSP files for import...',
+                $stagingProcessed,
+                $stagingTotal,
+                $this->progressPercentage($stagingProcessed, $stagingTotal),
+                $startedAt,
+                false,
+                [
+                    'phase' => 'staging',
+                    'current_file' => $fileName,
+                    'eta_seconds' => $this->estimateEtaSeconds($stagingStartedAt, $stagingProcessed, $stagingTotal),
+                    'successful_files' => count($stagedFiles),
+                    'failed_files' => count($failed),
+                ]
+            ));
         }
 
         if (empty($stagedFiles)) {
@@ -352,12 +416,23 @@ class SyncSettlementInstructionsCommand extends Command
             $startedAt
         ));
 
-        $importExit = Artisan::call('import:settlement-instructions', [
+        $importArguments = [
             '--path' => $stagingRelativeDir,
             '--pattern' => $pattern,
-            '--truncate' => $rebuild,
             '--chunk' => $chunkSize,
-        ]);
+        ];
+        if ($rebuild) {
+            $importArguments['--truncate'] = true;
+        }
+        if ($statusFile) {
+            $importArguments['--status-file'] = $statusFile;
+            $importArguments['--lock-file'] = $this->lockFile;
+            $importArguments['--started-at'] = $startedAt;
+            $importArguments['--run-id'] = $this->runId;
+            $importArguments['--trigger'] = $this->trigger;
+        }
+
+        $importExit = Artisan::call('import:settlement-instructions', $importArguments);
         $this->line(Artisan::output());
 
         if ($importExit !== self::SUCCESS) {
@@ -415,8 +490,8 @@ class SyncSettlementInstructionsCommand extends Command
 
     private function connectionOption(
         string $option,
-        string $primaryEnv,
-        ?string $fallbackEnv = null,
+        string $primaryConfig,
+        ?string $fallbackConfig = null,
         ?string $default = null
     ): ?string {
         $optionValue = $this->stringOption($option);
@@ -424,10 +499,10 @@ class SyncSettlementInstructionsCommand extends Command
             return $optionValue;
         }
 
-        foreach (array_filter([$primaryEnv, $fallbackEnv]) as $envKey) {
-            $envValue = $this->stringValue(env($envKey));
-            if ($envValue !== null) {
-                return $envValue;
+        foreach (array_filter([$primaryConfig, $fallbackConfig]) as $configKey) {
+            $configuredValue = $this->stringValue(config($configKey));
+            if ($configuredValue !== null) {
+                return $configuredValue;
             }
         }
 
@@ -448,16 +523,6 @@ class SyncSettlementInstructionsCommand extends Command
         $normalized = trim((string) $value);
 
         return $normalized === '' ? null : $normalized;
-    }
-
-    private function booleanEnv(string $key, bool $default): bool
-    {
-        $value = env($key);
-        if ($value === null || $value === '') {
-            return $default;
-        }
-
-        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
     }
 
     private function normalizeRemotePath(string $remotePath): string
@@ -506,11 +571,12 @@ class SyncSettlementInstructionsCommand extends Command
         ?int $totalFiles,
         int $progressPct,
         string $startedAt,
-        bool $dryRun = false
+        bool $dryRun = false,
+        array $details = []
     ): array {
         $now = now()->toIso8601String();
 
-        return [
+        return array_merge([
             'run_id' => $this->runId,
             'trigger' => $this->trigger,
             'inProgress' => $inProgress,
@@ -523,16 +589,41 @@ class SyncSettlementInstructionsCommand extends Command
             'started_at' => $startedAt,
             'updated_at' => $now,
             'completed_at' => $inProgress ? null : $now,
-        ];
+        ], $details);
+    }
+
+    private function progressPercentage(int $processed, int $total): int
+    {
+        return $total > 0 ? min(100, (int) floor(($processed / $total) * 100)) : 0;
+    }
+
+    private function estimateEtaSeconds(float $startedAt, int $processed, int $total): ?int
+    {
+        if ($processed <= 0 || $total <= $processed) {
+            return null;
+        }
+
+        $filesPerSecond = $processed / max(1, microtime(true) - $startedAt);
+
+        return $filesPerSecond > 0 ? (int) ceil(($total - $processed) / $filesPerSecond) : null;
     }
 
     private function writeStatus(?string $statusFile, array $payload): void
     {
         if ($statusFile) {
-            @file_put_contents($statusFile, json_encode(array_merge([
+            $temporaryFile = $statusFile . '.tmp';
+            $json = json_encode(array_merge([
                 'run_id' => $this->runId,
                 'trigger' => $this->trigger,
-            ], $payload), JSON_PRETTY_PRINT));
+            ], $payload), JSON_PRETTY_PRINT);
+
+            if ($json !== false && @file_put_contents($temporaryFile, $json, LOCK_EX) !== false) {
+                @rename($temporaryFile, $statusFile);
+            }
+        }
+
+        if ($this->lockFile && file_exists($this->lockFile)) {
+            @touch($this->lockFile);
         }
     }
 }
