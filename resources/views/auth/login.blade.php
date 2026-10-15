@@ -6,7 +6,7 @@
     <title>Login - {{ config('app.name') }}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
+        body {
             font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
             background: linear-gradient(135deg, #243a46 0%, #345262 35%, #4a6a7f 50%, #345262 65%, #243a46 100%);
             min-height: 100vh;
@@ -27,15 +27,15 @@
             text-align: center;
             margin-bottom: 40px;
         }
-        .logo-section h1 { 
-            color: #2d3748; 
-            font-size: 32px; 
+        .logo-section h1 {
+            color: #2d3748;
+            font-size: 32px;
             margin-bottom: 8px;
             font-weight: 300;
             letter-spacing: 0.5px;
         }
-        .logo-section p { 
-            color: #718096; 
+        .logo-section p {
+            color: #718096;
             font-size: 14px;
             font-weight: 300;
         }
@@ -145,10 +145,10 @@
 
         <form id="login-form" method="POST" action="{{ route('login') }}" data-csrf-url="{{ route('login.csrf-token') }}">
             @csrf
-            
+
             <div class="form-group">
                 <label for="email">Email Address</label>
-                <input 
+                <input
                     type="email"
                     id="email"
                     name="email"
@@ -164,9 +164,9 @@
 
             <div class="form-group">
                 <label for="password">Password</label>
-                <input 
-                    type="password" 
-                    id="password" 
+                <input
+                    type="password"
+                    id="password"
                     name="password"
                     autocomplete="current-password"
                     required

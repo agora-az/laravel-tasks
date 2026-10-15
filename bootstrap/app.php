@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->use([
             \App\Http\Middleware\TrustProxies::class,
         ]);
+        $middleware->appendToGroup('web', \App\Http\Middleware\RedirectToNavigationUrl::class);
         $middleware->alias([
             'auth.check' => \App\Http\Middleware\CheckAuthenticated::class,
             'application.admin' => \App\Http\Middleware\EnsureApplicationAdmin::class,

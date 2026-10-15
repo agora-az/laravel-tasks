@@ -120,10 +120,10 @@ class SyncSettlementInstructionsCommand extends Command
         $processedNames = $rebuild
             ? []
             : Import::query()
-                ->where('type', 'settlement-instructions-raw')
-                ->where('status', 'completed')
-                ->pluck('filename')
-                ->all();
+            ->where('type', 'settlement-instructions-raw')
+            ->where('status', 'completed')
+            ->pluck('filename')
+            ->all();
 
         $localCandidates = $this->localCandidates($localDir, $pattern);
         $deletedProcessedLocalCount = 0;
@@ -236,9 +236,9 @@ class SyncSettlementInstructionsCommand extends Command
         $toDownload = $force
             ? $remoteCandidates->reject(fn($name) => $localCandidates->contains($name))->values()
             : $remoteCandidates
-                ->reject(fn($name) => in_array($name, $processedNames, true))
-                ->reject(fn($name) => $localCandidates->contains($name))
-                ->values();
+            ->reject(fn($name) => in_array($name, $processedNames, true))
+            ->reject(fn($name) => $localCandidates->contains($name))
+            ->values();
 
         $totalFiles = $localPending->count() + $toDownload->count();
 

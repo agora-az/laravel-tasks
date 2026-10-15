@@ -9,9 +9,7 @@ use Symfony\Component\HttpFoundation\Response;
 
 class EnsureApplicationAdmin
 {
-    public function __construct(private readonly ApplicationAdmin $applicationAdmin)
-    {
-    }
+    public function __construct(private readonly ApplicationAdmin $applicationAdmin) {}
 
     public function handle(Request $request, Closure $next): Response
     {

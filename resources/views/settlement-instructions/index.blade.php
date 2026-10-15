@@ -24,7 +24,7 @@
         <h2 style="margin: 0;">FSP Files</h2>
         <div style="color: #718096; font-size: 13px; margin-top: 4px;">Source files: AGRA and 7960 feeds</div>
         <div id="settlement-sync-status-wrap" class="sync-chip sync-chip-progress sync-page-notification" style="display:none;">
-            <span id="settlement-sync-status" style="display:inline-flex;align-items:center;min-width:0;max-width:100%;white-space:nowrap;"></span>
+            <span id="settlement-sync-status"></span>
             <button type="button" id="settlement-sync-status-dismiss" aria-label="Dismiss FSP sync status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
         </div>
     </div>

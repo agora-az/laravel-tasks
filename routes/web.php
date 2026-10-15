@@ -10,12 +10,15 @@ use App\Http\Controllers\DailyTotalsComparisonController;
 use App\Http\Controllers\DailyTotalsDrilldownController;
 use App\Http\Controllers\BankStatementEntryController;
 use App\Http\Controllers\SettlementInstructionController;
+use App\Http\Controllers\AsmSettlementController;
 use App\Http\Controllers\EftFileController;
 use App\Http\Controllers\VieFundReportsController;
 use App\Http\Controllers\DocumentationController;
 use App\Http\Controllers\TransactionReconciliationController;
 use App\Http\Controllers\CustomerBalanceReconciliationController;
+use App\Http\Controllers\NavigationPageController;
 use App\Http\Controllers\Admin\ApplicationSettingsController;
+use App\Http\Controllers\Admin\UserImpersonationController;
 
 // Welcome page (no auth required)
 Route::get('/', function () {
@@ -41,6 +44,9 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
 // Protected routes - require authentication
 Route::middleware('auth.check')->group(function () {
+    Route::post('/impersonation', [UserImpersonationController::class, 'update'])
+        ->name('impersonation.update');
+
     Route::middleware('application.admin')->prefix('admin')->group(function () {
         Route::get('/settings', [ApplicationSettingsController::class, 'index'])->name('admin.settings.index');
         Route::put('/settings', [ApplicationSettingsController::class, 'update'])->name('admin.settings.update');
@@ -62,6 +68,7 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/viefund-transactions/filters', [RemoteVieFundController::class, 'applyAllTransactionsFilters'])->name('viefund-transactions.filters');
     Route::post('/viefund-transactions/eft-matches', [EftFileController::class, 'transactionMatches'])->name('viefund-transactions.eft-matches');
     Route::post('/viefund-transactions/fsp-matches', [RemoteVieFundController::class, 'fspMatches'])->name('viefund-transactions.fsp-matches');
+    Route::post('/viefund-transactions/asm-matches', [RemoteVieFundController::class, 'asmMatches'])->name('viefund-transactions.asm-matches');
     Route::get('/viefund-transactions/count', [RemoteVieFundController::class, 'allTransactionsCountStatus'])->name('viefund-transactions.count');
     Route::get('/viefund-transactions/summary', [RemoteVieFundController::class, 'allTransactionsSummary'])->name('viefund-transactions.summary');
     Route::get('/viefund-transactions/match-summary', [RemoteVieFundController::class, 'allTransactionsMatchSummary'])->name('viefund-transactions.match-summary');
@@ -110,18 +117,34 @@ Route::middleware('auth.check')->group(function () {
     Route::get('/reports/viefund-customer-balances/download-latest', [VieFundReportsController::class, 'downloadLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.download-latest');
     Route::post('/reports/viefund-customer-balances/dismiss-latest', [VieFundReportsController::class, 'dismissLatestCustomerBalancesReport'])->name('reports.viefund-customer-balances.dismiss-latest');
 
+    Route::prefix('reconciliation')->group(function () {
+        Route::get('/viefund-daily-net-running-balance', [TransactionReconciliationController::class, 'index'])
+            ->name('reconciliations.transactions');
+        Route::get('/viefund-customer-balances', [CustomerBalanceReconciliationController::class, 'index'])
+            ->name('reconciliations.customer-balances');
+        Route::get('/bank-eft', [DailyTotalsComparisonController::class, 'index'])
+            ->name('reconciliations.daily-totals');
+        Route::get('/bank-fsp-{source}', [DailyTotalsComparisonController::class, 'fspIndex'])
+            ->whereIn('source', ['agra', '7960'])
+            ->name('reconciliations.bank-fsp.source');
+    });
+
     Route::prefix('reconciliations')->group(function () {
         Route::get('/', [ReconciliationController::class, 'index'])->name('reconciliations.index');
-        Route::get('/transactions', [TransactionReconciliationController::class, 'index'])->name('reconciliations.transactions');
-        Route::get('/customer-balances', [CustomerBalanceReconciliationController::class, 'index'])->name('reconciliations.customer-balances');
-        Route::get('/daily-totals', [DailyTotalsComparisonController::class, 'index'])->name('reconciliations.daily-totals');
+        Route::get('/transactions', fn() => redirect()->route('reconciliations.transactions', request()->query(), 301));
+        Route::get('/customer-balances', fn() => redirect()->route('reconciliations.customer-balances', request()->query(), 301));
+        Route::get('/daily-totals', fn() => redirect()->route('reconciliations.daily-totals', request()->query(), 301));
         Route::get('/bank-fsp', [DailyTotalsComparisonController::class, 'fspIndex'])->name('reconciliations.bank-fsp');
         Route::get('/bank-fsp/{source}/{date}/compare', [DailyTotalsDrilldownController::class, 'fspComparison'])
             ->whereIn('source', ['agra', '7960'])
             ->name('reconciliations.bank-fsp.compare');
-        Route::get('/bank-fsp/{source}', [DailyTotalsComparisonController::class, 'fspIndex'])
-            ->whereIn('source', ['agra', '7960'])
-            ->name('reconciliations.bank-fsp.source');
+        Route::get('/bank-fsp/{source}', function (string $source) {
+            return redirect()->route(
+                'reconciliations.bank-fsp.source',
+                ['source' => $source] + request()->query(),
+                301
+            );
+        })->whereIn('source', ['agra', '7960']);
         Route::post('/daily-totals/sync', [DailyTotalsComparisonController::class, 'sync'])->name('reconciliations.daily-totals.sync');
         Route::get('/daily-totals/sync-status', [DailyTotalsComparisonController::class, 'syncStatus'])->name('reconciliations.daily-totals.sync-status');
         Route::get('/daily-totals/{date}/bank', [DailyTotalsDrilldownController::class, 'bankDay'])->name('reconciliations.daily-totals.bank-day');
@@ -186,6 +209,11 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/settlement-instructions/sync', [SettlementInstructionController::class, 'sync'])->name('settlement-instructions.sync');
     Route::get('/settlement-instructions/sync-status', [SettlementInstructionController::class, 'syncStatus'])->name('settlement-instructions.sync-status');
 
+    Route::get('/asm-files', [AsmSettlementController::class, 'index'])->name('asm-settlements.index');
+    Route::post('/asm-files/sync', [AsmSettlementController::class, 'sync'])->name('asm-settlements.sync');
+    Route::post('/asm-files/map-viefund', [AsmSettlementController::class, 'mapToVieFund'])->name('asm-settlements.map-viefund');
+    Route::get('/asm-files/sync-status', [AsmSettlementController::class, 'syncStatus'])->name('asm-settlements.sync-status');
+
     Route::get('/eft-files', [EftFileController::class, 'index'])->name('eft-files.index');
     Route::get('/eft-files/export', [EftFileController::class, 'export'])->name('eft-files.export');
     Route::post('/eft-files/sync', [EftFileController::class, 'sync'])->name('eft-files.sync');
@@ -197,4 +225,14 @@ Route::middleware('auth.check')->group(function () {
 
     // Chunked upload route for large files
     Route::post('/api/upload-chunk', [ChunkedUploadController::class, 'uploadChunk'])->name('api.upload.chunk');
+
+    Route::get('/{navigationGroup}/{navigationPage}', [NavigationPageController::class, 'grouped'])
+        ->where([
+            'navigationGroup' => '[a-z0-9]+(?:-[a-z0-9]+)*',
+            'navigationPage' => '[a-z0-9]+(?:-[a-z0-9]+)*',
+        ])
+        ->name('navigation.grouped');
+    Route::get('/{navigationPage}', [NavigationPageController::class, 'standalone'])
+        ->where('navigationPage', '[a-z0-9]+(?:-[a-z0-9]+)*')
+        ->name('navigation.standalone');
 });

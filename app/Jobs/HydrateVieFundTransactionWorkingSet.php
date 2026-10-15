@@ -42,9 +42,11 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
         VieFundWorkingSetBalanceService $balanceService
     ): void {
         $workingSet = VieFundTransactionWorkingSet::query()->find($this->workingSetId);
-        if (!$workingSet
+        if (
+            !$workingSet
             || $workingSet->build_generation !== $this->generation
-            || !in_array($workingSet->state, ['warming', 'refreshing'], true)) {
+            || !in_array($workingSet->state, ['warming', 'refreshing'], true)
+        ) {
             return;
         }
 
@@ -88,6 +90,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'has_eft_match' => false,
                 'has_agra_fsp_match' => false,
                 'has_7960_fsp_match' => false,
+                'has_asm_match' => false,
             ]);
 
             return [
@@ -114,6 +117,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'has_eft_match' => (bool) $match['has_eft_match'],
                 'has_agra_fsp_match' => (bool) $match['has_agra_fsp_match'],
                 'has_7960_fsp_match' => (bool) $match['has_7960_fsp_match'],
+                'has_asm_match' => (bool) $match['has_asm_match'],
                 'payload' => json_encode((array) $row, JSON_THROW_ON_ERROR),
                 'enrichment' => json_encode($match['enrichment'] ?? [], JSON_THROW_ON_ERROR),
                 'created_at' => $now,
@@ -130,9 +134,11 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
         ];
         $committed = DB::transaction(function () use ($cachedRows, $nextCursor): bool {
             $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($this->workingSetId);
-            if (!$locked
+            if (
+                !$locked
                 || $locked->build_generation !== $this->generation
-                || !in_array($locked->state, ['warming', 'refreshing'], true)) {
+                || !in_array($locked->state, ['warming', 'refreshing'], true)
+            ) {
                 return false;
             }
 
@@ -140,11 +146,30 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 $chunk->all(),
                 ['working_set_id', 'generation', 'cash_transaction_id'],
                 [
-                    'trust_transaction_id', 'fund_transaction_id', 'transaction_id', 'source_id',
-                    'customer_name', 'plan_account_id', 'transaction_type', 'cash_status', 'trust_status',
-                    'created_date', 'trade_date', 'processing_date', 'settlement_date', 'basis_date',
-                    'currency_code', 'amount', 'match_status', 'has_eft_match', 'has_agra_fsp_match',
-                    'has_7960_fsp_match', 'payload', 'enrichment', 'updated_at',
+                    'trust_transaction_id',
+                    'fund_transaction_id',
+                    'transaction_id',
+                    'source_id',
+                    'customer_name',
+                    'plan_account_id',
+                    'transaction_type',
+                    'cash_status',
+                    'trust_status',
+                    'created_date',
+                    'trade_date',
+                    'processing_date',
+                    'settlement_date',
+                    'basis_date',
+                    'currency_code',
+                    'amount',
+                    'match_status',
+                    'has_eft_match',
+                    'has_agra_fsp_match',
+                    'has_7960_fsp_match',
+                    'has_asm_match',
+                    'payload',
+                    'enrichment',
+                    'updated_at',
                 ]
             ));
 
@@ -184,12 +209,13 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
     private function complete(
         VieFundTransactionWorkingSet $workingSet,
         VieFundWorkingSetBalanceService $balanceService
-    ): void
-    {
+    ): void {
         $current = VieFundTransactionWorkingSet::query()->find($workingSet->id);
-        if (!$current
+        if (
+            !$current
             || $current->build_generation !== $this->generation
-            || !in_array($current->state, ['warming', 'refreshing'], true)) {
+            || !in_array($current->state, ['warming', 'refreshing'], true)
+        ) {
             return;
         }
 
@@ -197,9 +223,11 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
 
         DB::transaction(function () use ($current, $balanceReport): void {
             $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($current->id);
-            if (!$locked
+            if (
+                !$locked
                 || $locked->build_generation !== $this->generation
-                || !in_array($locked->state, ['warming', 'refreshing'], true)) {
+                || !in_array($locked->state, ['warming', 'refreshing'], true)
+            ) {
                 return;
             }
 

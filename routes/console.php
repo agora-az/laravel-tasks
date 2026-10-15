@@ -97,6 +97,13 @@ Schedule::command('settlement:sync-instructions --trigger="Scheduled sync" --loc
     ->withoutOverlapping()
     ->runInBackground();
 
+Schedule::command('asm:sync-settlements --trigger="Scheduled sync" --lock-file=' . storage_path('app/asm-settlements-sync.lock') . ' --status-file=' . storage_path('app/asm-settlements-sync-status.json'))
+    ->dailyAt('21:50')
+    ->timezone('America/Toronto')
+    ->onOneServer()
+    ->withoutOverlapping()
+    ->runInBackground();
+
 Schedule::command('bank:sync-entries --parser=v2 --trigger="Scheduled sync" --lock-file=' . storage_path('app/bank-entries-sync.lock') . ' --status-file=' . storage_path('app/bank-entries-sync-status.json'))
     ->dailyAt('21:55')
     ->timezone('America/Toronto')

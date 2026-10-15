@@ -31,9 +31,7 @@ class VieFundExportLinkCache
         'fund_source_refreshed_ids' => 0,
     ];
 
-    public function __construct(private readonly RuntimeSettings $runtimeSettings)
-    {
-    }
+    public function __construct(private readonly RuntimeSettings $runtimeSettings) {}
 
     public function eftItemsByLinkedIds(
         array $linkedIds,

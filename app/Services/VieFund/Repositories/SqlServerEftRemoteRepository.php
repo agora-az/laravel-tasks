@@ -13,9 +13,7 @@ class SqlServerEftRemoteRepository
 {
     private const CONNECTION = 'viefund_sqlsrv';
 
-    public function __construct(private readonly RuntimeSettings $runtimeSettings)
-    {
-    }
+    public function __construct(private readonly RuntimeSettings $runtimeSettings) {}
 
     public function itemsByLinkedIds(array $linkedIds): Collection
     {
@@ -575,7 +573,7 @@ class SqlServerEftRemoteRepository
         if (($filters['amount_contains'] ?? '') !== '') {
             $query->whereRaw(
                 'CAST(ABS(COALESCE(i.mAmount, 0)) AS VARCHAR(50)) LIKE ?',
-                ['%'.$filters['amount_contains'].'%']
+                ['%' . $filters['amount_contains'] . '%']
             );
         }
 
@@ -643,5 +641,4 @@ class SqlServerEftRemoteRepository
     {
         return (env('VIEFUND_DB_SCHEMA', 'dbo') ?: 'dbo') . '.' . $table;
     }
-
 }

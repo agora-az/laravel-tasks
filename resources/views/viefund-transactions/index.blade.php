@@ -23,6 +23,7 @@
         || $hasEftMatch
         || $hasAgraFspMatch
         || $has7960FspMatch
+        || $hasAsmMatch
         || !empty($matchStatuses)
         || $currencyCode !== '00'
         || $statusIds !== [6];
@@ -51,6 +52,7 @@
     $bankSummaryHeadings = array_values($visibleBankSummaryColumns);
     $bankHeadings = array_values($visibleBankDetailColumns);
     $fspHeadings = array_values($visibleFspColumns);
+    $asmHeadings = array_values($visibleAsmColumns);
     $formatCacheEta = function (?int $seconds): ?string {
         if ($seconds === null) return null;
         if ($seconds < 60) return '<1m';
@@ -167,7 +169,11 @@
                     <input type="checkbox" name="filter_has_7960_fsp_match" value="1" {{ $has7960FspMatch ? 'checked' : '' }}>
                     FSP (7960) matches only
                 </label>
-                <div class="all-transactions-filter-help">FSP matches use the file Source ID = VieFund fund transaction SourceID.</div>
+                <label class="all-transactions-match-option">
+                    <input type="checkbox" name="filter_has_asm_match" value="1" {{ $hasAsmMatch ? 'checked' : '' }}>
+                    ASM matches only
+                </label>
+                <div class="all-transactions-filter-help">FSP uses fund Source ID. ASM uses AGRA account, settlement date, currency, and signed amount against confirmed VieFund cash transactions.</div>
             </fieldset>
         </div>
 
@@ -459,6 +465,13 @@
     #all-transactions-table td.all-transactions-fsp-column {
         background:#faf6fd;
     }
+    #all-transactions-table th.all-transactions-asm-column {
+        background:#fce7d6;
+        color:#8a3f16;
+    }
+    #all-transactions-table td.all-transactions-asm-column {
+        background:#fff8f1;
+    }
     #all-transactions-table .all-transactions-eft-group-start {
         border-left:3px solid #4299e1;
     }
@@ -467,6 +480,9 @@
     }
     #all-transactions-table .all-transactions-fsp-group-start {
         border-left:3px solid #805ad5;
+    }
+    #all-transactions-table .all-transactions-asm-group-start {
+        border-left:3px solid #dd6b20;
     }
     #all-transactions-table tbody td {
         vertical-align:top;
@@ -494,6 +510,13 @@
     }
     #all-transactions-table .all-transactions-match-status-cell[data-match-status="verify"] {
         box-shadow:inset 5px 0 #d69e2e;
+    }
+    #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="asm-only"] {
+        background:#feebc8 !important;
+        color:#9c4221 !important;
+    }
+    #all-transactions-table .all-transactions-match-status-cell[data-match-status="asm-only"] {
+        box-shadow:inset 5px 0 #dd6b20;
     }
     #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="unknown"],
     #all-transactions-table td.all-transactions-reconciliation-column[data-match-status="loading"] {
@@ -819,10 +842,12 @@
     .all-transactions-match-summary-table tbody tr[data-status="complete"] { background:#e6ffed; }
     .all-transactions-match-summary-table tbody tr[data-status="verify"] { background:#fffde5; }
     .all-transactions-match-summary-table tbody tr[data-status="possible"] { background:#ebf8ff; }
+    .all-transactions-match-summary-table tbody tr[data-status="asm only"] { background:#fff8f1; }
     .all-transactions-match-summary-table tbody tr[data-status="unknown"] { background:#f7fafc; }
     .all-transactions-match-summary-table tbody tr[data-status="complete"] td:first-child { background:#e6ffed; }
     .all-transactions-match-summary-table tbody tr[data-status="verify"] td:first-child { background:#fffde5; }
     .all-transactions-match-summary-table tbody tr[data-status="possible"] td:first-child { background:#ebf8ff; }
+    .all-transactions-match-summary-table tbody tr[data-status="asm only"] td:first-child { background:#fff8f1; }
     .all-transactions-match-summary-table tbody tr[data-status="unknown"] td:first-child { background:#f7fafc; }
     .all-transactions-match-summary-table tbody tr:last-child td { border-bottom:0; }
     .all-transactions-match-summary-status {
@@ -836,6 +861,7 @@
     .all-transactions-match-summary-status[data-status="complete"] { background:#c6f6d5;color:#22543d; }
     .all-transactions-match-summary-status[data-status="verify"] { background:#fefcbf;color:#744210; }
     .all-transactions-match-summary-status[data-status="possible"] { background:#bee3f8;color:#2a4365; }
+    .all-transactions-match-summary-status[data-status="asm only"] { background:#fce7d6;color:#8a3f16; }
     .all-transactions-match-summary-status[data-status="unknown"] { background:#edf2f7;color:#4a5568; }
     .all-transactions-match-summary-muted { color:#718096; }
     .all-transactions-match-summary-positive { color:#166534;font-weight:700; }
@@ -914,16 +940,18 @@
                         <th>EFT Total</th>
                         <th>FSP Txns</th>
                         <th>FSP Total</th>
+                        <th>ASM Txns</th>
+                        <th>ASM Total</th>
                         <th>Bank Txns</th>
                         <th>Bank Total</th>
                         <th>Variance</th>
                     </tr>
                 </thead>
                 <tbody id="all-transactions-match-summary-body">
-                    @foreach(['Complete', 'Verify', 'Possible', 'Unknown'] as $status)
+                    @foreach(\App\Services\VieFund\VieFundMatchStatusSummaryAccumulator::STATUSES as $status)
                         <tr data-status="{{ strtolower($status) }}">
                             <td><span class="all-transactions-match-summary-status" data-status="{{ strtolower($status) }}">{{ $status }}</span></td>
-                            @for($column = 0; $column < 9; ++$column)
+                            @for($column = 0; $column < 11; ++$column)
                                 <td class="all-transactions-match-summary-muted">Loading…</td>
                             @endfor
                         </tr>
@@ -987,7 +1015,7 @@
             <fieldset class="all-transactions-match-controls">
                 <legend>{{ !empty($workingSetStatus['queryable']) ? 'Period Match Filter' : 'Filter Current Page' }}</legend>
                 <div class="all-transactions-match-controls-row">
-                    @foreach(['Complete', 'Verify', 'Possible', 'Unknown'] as $label)
+                    @foreach(\App\Services\VieFund\VieFundMatchStatusSummaryAccumulator::STATUSES as $label)
                         <label>
                             <input class="all-transactions-match-filter" type="checkbox" value="{{ $label }}" {{ in_array($label, $matchStatuses, true) ? 'checked' : '' }}>
                             {{ $label }}
@@ -1031,6 +1059,9 @@
             @if($has7960FspMatch)
                 <input type="hidden" name="filter_has_7960_fsp_match" value="1">
             @endif
+            @if($hasAsmMatch)
+                <input type="hidden" name="filter_has_asm_match" value="1">
+            @endif
             @foreach((array) ($filters['trx_type'] ?? []) as $type)
                 <input type="hidden" name="filter_trx_type[]" value="{{ $type }}">
             @endforeach
@@ -1065,6 +1096,8 @@
                                 @foreach($eftHeadings as $heading)<th class="all-transactions-eft-column {{ $loop->first ? 'all-transactions-eft-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','file_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
                             @elseif($columnGroup === 'fsp')
                                 @foreach($fspHeadings as $heading)<th class="all-transactions-fsp-column {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['items_total','gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
+                            @elseif($columnGroup === 'asm')
+                                @foreach($asmHeadings as $heading)<th class="all-transactions-asm-column {{ $loop->first ? 'all-transactions-asm-group-start' : '' }}" style="padding:12px;text-align:{{ $heading['field'] === 'settlement_amount' ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
                             @elseif($columnGroup === 'bank')
                                 @foreach($bankHeadings as $heading)<th class="all-transactions-bank-column {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" style="padding:12px;text-align:{{ in_array($heading['field'], ['amount','transaction_total'], true) ? 'right' : 'left' }};font-weight:700;white-space:nowrap;max-width:{{ $heading['width'] ?? 220 }}px;">{{ $heading['label'] }}</th>@endforeach
                             @endif
@@ -1112,9 +1145,12 @@
     let tablePageGeneration = 0;
     const fspMatchesLoaded = {agra: false, '7960': false};
     const fspMatchesLoading = {agra: false, '7960': false};
-    const statusLoadFailed = {eft: false, agra: false, '7960': false};
+    let asmMatchesLoaded = false;
+    let asmMatchesLoading = false;
+    const statusLoadFailed = {eft: false, agra: false, '7960': false, asm: false};
     let eftBankRecordsByTrust = {};
     let eftMatchStatusesByTrust = {};
+    let asmRecordsByCash = {};
     const fspRecordsBySource = {agra: {}, '7960': {}};
     const fspBankRecordsBySource = {agra: {}, '7960': {}};
     const fspMatchStatusesBySource = {agra: {}, '7960': {}};
@@ -1187,6 +1223,8 @@
     let bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
     let fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
     let fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
+    let asmColumns = Array.from(document.querySelectorAll('.all-transactions-asm-column'));
+    let asmCells = Array.from(document.querySelectorAll('.all-transactions-asm-cell'));
     let transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
     const setColumnVisible = (columns, visible) => {
         columns.forEach((column) => {
@@ -1219,6 +1257,7 @@
         }
         if (type === 'bank' && field === 'id') return `Bank txn #${record.id}`;
         if (type === 'fsp' && field === 'id') return `FSP item #${record.id}`;
+        if (type === 'asm' && field === 'match_status') return record.match_status === 'exact_cash_match' ? 'Exact' : String(record.match_status || '—');
         const value = record[field];
         return value === null || value === undefined || value === '' ? '—' : String(value);
     };
@@ -1269,6 +1308,7 @@
             row.title = value === '—' ? '' : value;
             const isFspFileLink = type === 'fsp' && field === 'source_file';
             const isFspItemLink = type === 'fsp' && field === 'settlement_amount';
+            const isAsmLink = type === 'asm' && ['payment_id', 'settlement_amount', 'source_file'].includes(field);
             const isBankFileLink = type === 'bank' && field === 'source_file';
             const isBankAccountLink = type === 'bank' && field === 'account_number';
             const isLink = (type === 'eft' && ['file_name', 'holder_name'].includes(field))
@@ -1276,7 +1316,8 @@
                 || isBankFileLink
                 || isBankAccountLink
                 || isFspFileLink
-                || isFspItemLink;
+                || isFspItemLink
+                || isAsmLink;
             const linkUrl = type === 'eft' && field === 'holder_name'
                 ? record.linked_item_url
                 : (isBankAccountLink
@@ -1334,6 +1375,17 @@
             const records = [...fspRecords, ...eftRecords].filter((record, index, all) =>
                 all.findIndex((candidate) => Number(candidate.id) === Number(record.id)) === index
             );
+            const hasAsmMatch = (asmRecordsByCash[cell.dataset.cashId] || []).length > 0;
+            if (records.length === 0 && hasAsmMatch && ['reconciliation_variance', 'reconciliation_note'].includes(cell.dataset.recordField)) {
+                const text = document.createElement('span');
+                text.textContent = cell.dataset.recordField === 'reconciliation_variance'
+                    ? 'N/A'
+                    : 'ASM match only, no bank match';
+                text.title = text.textContent;
+                text.style.fontWeight = '700';
+                cell.replaceChildren(text);
+                return;
+            }
             renderLinkedRecords(cell, records, 'bank');
         });
     };
@@ -1345,6 +1397,11 @@
             renderLinkedRecords(cell, records, 'fsp');
         });
     };
+    const renderAsmRecords = (recordsByCash) => {
+        asmCells.forEach((cell) => {
+            renderLinkedRecords(cell, recordsByCash[cell.dataset.cashId] || [], 'asm');
+        });
+    };
     const summarizeMatchStatuses = (statuses) => {
         const values = statuses.filter(Boolean);
         if (values.length === 0) return null;
@@ -1353,12 +1410,18 @@
         if (values.includes('Possible')) return 'Possible';
         return 'Unknown';
     };
+    const normalizeMatchStatusKey = (status) => String(status || '')
+        .toLowerCase()
+        .replace(/[-_\s]+/g, ' ')
+        .trim();
     const applyLocalMatchFilters = () => {
         const selected = matchStatusInputs
             .filter((input) => input.checked)
-            .map((input) => input.value.toLowerCase());
+            .map((input) => normalizeMatchStatusKey(input.value));
         document.querySelectorAll('#all-transactions-table-body tr[data-transaction-row]').forEach((row) => {
-            const status = row.querySelector('.all-transactions-match-status-cell')?.dataset.matchStatus || 'loading';
+            const status = normalizeMatchStatusKey(
+                row.querySelector('.all-transactions-match-status-cell')?.dataset.matchStatus || 'loading'
+            );
             row.hidden = selected.length > 0 && !selected.includes(status);
         });
     };
@@ -1370,20 +1433,22 @@
                 ? 'possible'
                 : (normalized === 'verify'
                     ? 'verify'
-                    : (normalized === 'unable to load' ? 'error' : (normalized === 'loading…' ? 'loading' : 'unknown'))));
+                    : (normalized === 'asm only'
+                        ? 'asm-only'
+                        : (normalized === 'unable to load' ? 'error' : (normalized === 'loading…' ? 'loading' : 'unknown')))));
         cell.closest('tr')?.querySelectorAll('.all-transactions-reconciliation-column').forEach((column) => {
             column.dataset.matchStatus = appearance;
         });
     };
     const renderTransactionMatchStatuses = () => {
-        const ready = reconciliationMatchesLoaded && fspMatchesLoaded.agra && fspMatchesLoaded['7960'];
+        const ready = reconciliationMatchesLoaded && fspMatchesLoaded.agra && fspMatchesLoaded['7960'] && asmMatchesLoaded;
         transactionStatusCells.forEach((cell) => {
             if (!ready) {
                 cell.textContent = 'Loading…';
                 setTransactionMatchStatusAppearance(cell, 'Loading…');
                 return;
             }
-            if (statusLoadFailed.eft || statusLoadFailed.agra || statusLoadFailed['7960']) {
+            if (statusLoadFailed.eft || statusLoadFailed.agra || statusLoadFailed['7960'] || statusLoadFailed.asm) {
                 cell.textContent = 'Unable to load';
                 setTransactionMatchStatusAppearance(cell, 'Unable to load');
                 return;
@@ -1396,16 +1461,20 @@
                 .filter((source) => cashId !== '' && Object.prototype.hasOwnProperty.call(fspMatchStatusesBySource[source], cashId))
                 .map((source) => fspMatchStatusesBySource[source][cashId]);
             const hasFsp = fspStatuses.length > 0;
-            const status = hasEft && hasFsp
+            const bankStatus = hasEft && hasFsp
                 ? 'Verify'
                 : (hasEft
                     ? eftMatchStatusesByTrust[trustId]
                     : (summarizeMatchStatuses(fspStatuses) || 'Unknown'));
+            const hasAsm = cashId !== '' && (asmRecordsByCash[cashId] || []).length > 0;
+            const status = bankStatus === 'Unknown' && hasAsm ? 'ASM Only' : bankStatus;
 
             cell.textContent = status;
             cell.title = hasEft && hasFsp
                 ? 'This transaction has both EFT and FSP supporting records and should be reviewed.'
-                : '';
+                : (status === 'ASM Only'
+                    ? 'ASM match only, no bank match.'
+                    : (hasAsm ? 'This transaction also has an exact ASM match.' : ''));
             setTransactionMatchStatusAppearance(cell, status);
         });
         applyLocalMatchFilters();
@@ -1538,6 +1607,64 @@
             if (generation === tablePageGeneration) fspMatchesLoading[source] = false;
         }
     };
+    const loadAsmMatches = async () => {
+        if (asmMatchesLoaded || asmMatchesLoading) return;
+        const generation = tablePageGeneration;
+        const cashTransactionIds = [...new Set(
+            [...asmCells, ...bankCells, ...transactionStatusCells]
+                .map((cell) => cell.dataset.cashId)
+                .filter(Boolean)
+        )];
+        asmCells.forEach((cell) => {
+            const status = document.createElement('span');
+            const hasCash = Boolean(cell.dataset.cashId);
+            const isGroupStart = cell.classList.contains('all-transactions-asm-group-start');
+            status.className = hasCash && isGroupStart ? 'all-transactions-eft-loading' : '';
+            status.textContent = hasCash ? (isGroupStart ? 'Loading…' : '…') : '—';
+            cell.replaceChildren(status);
+        });
+        if (cashTransactionIds.length === 0) {
+            asmMatchesLoaded = true;
+            renderTransactionMatchStatuses();
+            return;
+        }
+
+        asmMatchesLoading = true;
+        try {
+            const response = await fetch('{{ route('viefund-transactions.asm-matches') }}', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                },
+                body: JSON.stringify({cash_transaction_ids: cashTransactionIds.map(Number)}),
+            });
+            const data = await response.json();
+            if (generation !== tablePageGeneration) return;
+            if (!response.ok) throw new Error(data.message || 'ASM matches could not be loaded.');
+            asmRecordsByCash = data.asm_records || {};
+            asmMatchesLoaded = true;
+            renderAsmRecords(asmRecordsByCash);
+            renderBankRecords();
+            renderTransactionMatchStatuses();
+        } catch (error) {
+            if (generation !== tablePageGeneration) return;
+            statusLoadFailed.asm = true;
+            asmCells.forEach((cell) => {
+                const message = document.createElement('span');
+                message.textContent = 'Unable to load';
+                message.title = error.message;
+                message.style.color = '#c53030';
+                cell.replaceChildren(message);
+            });
+            renderTransactionMatchStatuses();
+        } finally {
+            if (generation === tablePageGeneration) asmMatchesLoading = false;
+        }
+    };
     const initializeLinkedRecordsForCurrentPage = () => {
         tablePageGeneration += 1;
         eftColumns = Array.from(document.querySelectorAll('.all-transactions-eft-column'));
@@ -1546,6 +1673,8 @@
         bankCells = Array.from(document.querySelectorAll('.all-transactions-bank-cell'));
         fspColumns = Array.from(document.querySelectorAll('.all-transactions-fsp-column'));
         fspCells = Array.from(document.querySelectorAll('.all-transactions-fsp-cell'));
+        asmColumns = Array.from(document.querySelectorAll('.all-transactions-asm-column'));
+        asmCells = Array.from(document.querySelectorAll('.all-transactions-asm-cell'));
         transactionStatusCells = Array.from(document.querySelectorAll('.all-transactions-match-status-cell'));
 
         reconciliationMatchesLoaded = false;
@@ -1554,11 +1683,15 @@
         fspMatchesLoaded['7960'] = false;
         fspMatchesLoading.agra = false;
         fspMatchesLoading['7960'] = false;
+        asmMatchesLoaded = false;
+        asmMatchesLoading = false;
         statusLoadFailed.eft = false;
         statusLoadFailed.agra = false;
         statusLoadFailed['7960'] = false;
+        statusLoadFailed.asm = false;
         eftBankRecordsByTrust = {};
         eftMatchStatusesByTrust = {};
+        asmRecordsByCash = {};
         fspRecordsBySource.agra = {};
         fspRecordsBySource['7960'] = {};
         fspBankRecordsBySource.agra = {};
@@ -1569,9 +1702,11 @@
         setColumnVisible(eftColumns, true);
         setColumnVisible(bankColumns, true);
         setColumnVisible(fspColumns, true);
+        setColumnVisible(asmColumns, true);
         loadReconciliationMatches();
         loadFspMatches('agra');
         loadFspMatches('7960');
+        loadAsmMatches();
     };
     const applyMatchFilters = () => {
         const url = new URL(window.location.href);
@@ -2060,8 +2195,19 @@
 
                 appendCell(row, Number(summary.viefund_count || 0).toLocaleString('en-CA'));
                 appendCell(row, formatMoney(summary.viefund_total));
+                if (summary.status === 'ASM Only') {
+                    for (let column = 0; column < 4; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
+                    appendCell(row, Number(summary.asm_count || 0).toLocaleString('en-CA'));
+                    appendCell(row, formatMoney(summary.asm_total));
+                    for (let column = 0; column < 2; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
+                    appendCell(row, 'N/A', 'all-transactions-match-summary-muted');
+                    return row;
+                }
                 if (summary.status === 'Unknown') {
-                    for (let column = 0; column < 7; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
+                    for (let column = 0; column < 4; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
+                    appendCell(row, Number(summary.asm_count || 0).toLocaleString('en-CA'));
+                    appendCell(row, formatMoney(summary.asm_total));
+                    for (let column = 0; column < 3; column += 1) appendCell(row, '—', 'all-transactions-match-summary-muted');
                     return row;
                 }
 
@@ -2069,6 +2215,8 @@
                 appendCell(row, formatMoney(summary.eft_total));
                 appendCell(row, Number(summary.fsp_count || 0).toLocaleString('en-CA'));
                 appendCell(row, formatMoney(summary.fsp_total));
+                appendCell(row, Number(summary.asm_count || 0).toLocaleString('en-CA'));
+                appendCell(row, formatMoney(summary.asm_total));
                 appendCell(row, Number(summary.bank_count || 0).toLocaleString('en-CA'));
                 appendCell(row, formatMoney(summary.bank_total));
                 const variance = Number(summary.variance || 0);
@@ -2225,6 +2373,7 @@
         formData.set('include_bank_records', '1');
         formData.set('include_fsp_records', '1');
         formData.set('include_7960_fsp_records', '1');
+        formData.set('include_asm_records', '1');
         startExportWhenReady(formData, button, status);
     });
 

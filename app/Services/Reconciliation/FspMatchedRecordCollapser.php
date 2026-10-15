@@ -102,7 +102,9 @@ class FspMatchedRecordCollapser
         $collapsed = [];
         foreach ($groups as $versionGroups) {
             $versions = array_values($versionGroups);
-            usort($versions, fn(array $left, array $right): int =>
+            usort(
+                $versions,
+                fn(array $left, array $right): int =>
                 (int) data_get($left['representative'], 'id') <=> (int) data_get($right['representative'], 'id')
             );
             $versionCount = count($versions);
@@ -119,7 +121,7 @@ class FspMatchedRecordCollapser
                             'Distinct revision %d of %d%s; retained because business fields differ.',
                             $index + 1,
                             $versionCount,
-                            $status !== '' ? ' (order status '.$status.')' : ''
+                            $status !== '' ? ' (order status ' . $status . ')' : ''
                         )
                         : sprintf(
                             'Distinct related record %d of %d for this Source ID; retained because business fields differ.',
@@ -138,9 +140,9 @@ class FspMatchedRecordCollapser
                     $notes[] = sprintf(
                         'Collapsed %d identical deliveries%s%s.',
                         $version['count'],
-                        $retainedFile !== '' ? '; retained '.$retainedFile : '',
+                        $retainedFile !== '' ? '; retained ' . $retainedFile : '',
                         $duplicateFiles !== []
-                            ? '; duplicate '.(count($duplicateFiles) === 1 ? 'file' : 'files').': '.implode(', ', $duplicateFiles)
+                            ? '; duplicate ' . (count($duplicateFiles) === 1 ? 'file' : 'files') . ': ' . implode(', ', $duplicateFiles)
                             : ''
                     );
                 }
@@ -184,10 +186,10 @@ class FspMatchedRecordCollapser
             )
             ->groupBy('settlement_instruction_summary_id', 'currency')
             ->get()
-            ->keyBy(fn($total) => $total->settlement_instruction_summary_id.'|'.$total->currency);
+            ->keyBy(fn($total) => $total->settlement_instruction_summary_id . '|' . $total->currency);
 
         return $items->each(function ($item) use ($totals): void {
-            $key = data_get($item, 'settlement_instruction_summary_id').'|'.data_get($item, 'currency');
+            $key = data_get($item, 'settlement_instruction_summary_id') . '|' . data_get($item, 'currency');
             $total = $totals->get($key);
 
             data_set($item, 'items_total', $total !== null ? (float) $total->items_total : null);
@@ -200,8 +202,8 @@ class FspMatchedRecordCollapser
         $sourceId = trim((string) data_get($item, 'source_id'));
 
         return $sourceId !== ''
-            ? $sourceType.'|'.$sourceId
-            : $sourceType.'|record:'.(int) data_get($item, 'id');
+            ? $sourceType . '|' . $sourceId
+            : $sourceType . '|record:' . (int) data_get($item, 'id');
     }
 
     private function semanticFingerprint(mixed $item): string

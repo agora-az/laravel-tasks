@@ -12,6 +12,7 @@ class RuntimeSettings
         'viefund' => 'viefund.columns.transactions',
         'eft' => 'viefund.columns.eft',
         'fsp' => 'viefund.columns.fsp',
+        'asm' => 'viefund.columns.asm',
         'bank' => 'viefund.columns.bank',
     ];
 
@@ -107,7 +108,7 @@ class RuntimeSettings
             ),
             'viefund.columns.group_order' => [
                 'label' => 'Column group order',
-                'description' => 'Table and workbook order for the five column groups.',
+                'description' => 'Table and workbook order for the six column groups.',
                 'config' => 'viefund.all_transactions_column_group_order',
                 'type' => 'group_order',
                 'group' => 'VieFund All Transactions - Column Settings',
@@ -132,6 +133,11 @@ class RuntimeSettings
                 'FSP',
                 'Visible FSP column keys, in display and export order.',
                 'viefund.all_transactions_fsp_visible_columns'
+            ),
+            'viefund.columns.asm' => $this->columnsDefinition(
+                'ASM',
+                'Visible ASM column keys, in display and export order.',
+                'viefund.all_transactions_asm_visible_columns'
             ),
             'viefund.columns.bank' => $this->columnsDefinition(
                 'Bank',
@@ -224,7 +230,23 @@ class RuntimeSettings
         $allowed = $definition['options'];
         $configured = array_values(array_intersect($values, $allowed));
 
-        return array_values(array_merge($configured, array_diff($allowed, $configured)));
+        foreach ($allowed as $allowedIndex => $missingGroup) {
+            if (in_array($missingGroup, $configured, true)) {
+                continue;
+            }
+
+            $insertAt = count($configured);
+            foreach (array_slice($allowed, $allowedIndex + 1) as $followingGroup) {
+                $followingIndex = array_search($followingGroup, $configured, true);
+                if ($followingIndex !== false) {
+                    $insertAt = $followingIndex;
+                    break;
+                }
+            }
+            array_splice($configured, $insertAt, 0, [$missingGroup]);
+        }
+
+        return $configured;
     }
 
     private function integerDefinition(

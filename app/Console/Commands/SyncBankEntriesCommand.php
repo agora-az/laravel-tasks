@@ -76,18 +76,18 @@ class SyncBankEntriesCommand extends Command
             'updated_at' => now()->toIso8601String(),
         ]);
 
-        $host = $this->resolveOption('host', 'BANK_SFTP_HOST');
-        $port = (int) $this->resolveOption('port', 'BANK_SFTP_PORT', '22');
-        $username = $this->resolveOption('username', 'BANK_SFTP_USERNAME');
-        $password = $this->resolveOption('password', 'BANK_SFTP_PASSWORD');
-        $remotePath = $this->normalizeRemotePath($this->resolveOption('remote-path', 'BANK_SFTP_REMOTE_PATH', '/'));
-        $localPath = $this->resolveOption('local-path', 'BANK_SFTP_LOCAL_PATH', 'resources/data/cibc');
-        $pattern = $this->resolveOption('pattern', 'BANK_SFTP_FILE_PATTERN', '*.xml');
+        $host = $this->resolveOption('host', 'sftp.bank.host');
+        $port = (int) $this->resolveOption('port', 'sftp.bank.port', '22');
+        $username = $this->resolveOption('username', 'sftp.bank.username');
+        $password = $this->resolveOption('password', 'sftp.bank.password');
+        $remotePath = $this->normalizeRemotePath($this->resolveOption('remote-path', 'sftp.bank.remote_path', '/'));
+        $localPath = $this->resolveOption('local-path', 'sftp.bank.local_path', 'resources/data/cibc');
+        $pattern = $this->resolveOption('pattern', 'sftp.bank.file_pattern', '*.xml');
         $parserVersion = $this->resolveStringOptionValue($this->option('parser')) ?? 'v2';
         $force = (bool) $this->option('force');
         $rebuild = (bool) $this->option('rebuild');
         $keepLocal = (bool) $this->option('keep-local');
-        $dryRun = (bool) $this->option('dry-run') || $this->resolveBooleanEnv('BANK_SFTP_DRY_RUN', false);
+        $dryRun = (bool) $this->option('dry-run') || (bool) config('sftp.bank.dry_run', false);
 
         if ($rebuild) {
             $force = true;
@@ -498,7 +498,7 @@ class SyncBankEntriesCommand extends Command
         ], $payload), JSON_PRETTY_PRINT));
     }
 
-    private function resolveOption(string $option, string $envKey, ?string $default = null): ?string
+    private function resolveOption(string $option, string $configKey, ?string $default = null): ?string
     {
         $value = $this->option($option);
         $value = $this->resolveStringOptionValue($value);
@@ -506,10 +506,9 @@ class SyncBankEntriesCommand extends Command
             return (string) $value;
         }
 
-        $envValue = env($envKey);
-        $envValue = $this->resolveStringOptionValue($envValue);
-        if ($envValue !== null && $envValue !== '') {
-            return (string) $envValue;
+        $configuredValue = $this->resolveStringOptionValue(config($configKey));
+        if ($configuredValue !== null && $configuredValue !== '') {
+            return $configuredValue;
         }
 
         return $default;
@@ -527,29 +526,6 @@ class SyncBankEntriesCommand extends Command
         }
 
         return (string) $value;
-    }
-
-    private function resolveBooleanEnv(string $envKey, bool $default = false): bool
-    {
-        $envValue = env($envKey);
-        if ($envValue === null || $envValue === '') {
-            return $default;
-        }
-
-        if (is_bool($envValue)) {
-            return $envValue;
-        }
-
-        if (is_int($envValue)) {
-            return $envValue !== 0;
-        }
-
-        if (is_string($envValue)) {
-            $normalized = strtolower(trim($envValue));
-            return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
-        }
-
-        return $default;
     }
 
     private function normalizeRemotePath(string $remotePath): string

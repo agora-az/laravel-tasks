@@ -25,6 +25,10 @@
                 @foreach($fspHeadings as $heading)
                     <td class="all-transactions-fsp-column all-transactions-fsp-cell {{ $loop->first ? 'all-transactions-fsp-group-start' : '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="padding:12px;font-family:monospace;max-width:{{ $heading['width'] ?? 220 }}px;overflow:hidden;text-align:{{ in_array($heading['field'], ['items_total','gross_amount','net_amount','settlement_amount'], true) ? 'right' : 'left' }};"><span>—</span></td>
                 @endforeach
+            @elseif($columnGroup === 'asm')
+                @foreach($asmHeadings as $heading)
+                    <td class="all-transactions-asm-column all-transactions-asm-cell {{ $loop->first ? 'all-transactions-asm-group-start' : '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="padding:12px;font-family:monospace;max-width:{{ $heading['width'] ?? 220 }}px;overflow:hidden;text-align:{{ $heading['field'] === 'settlement_amount' ? 'right' : 'left' }};"><span>—</span></td>
+                @endforeach
             @elseif($columnGroup === 'bank')
                 @foreach($bankHeadings as $heading)
                     <td class="all-transactions-bank-column all-transactions-bank-cell {{ $loop->first ? 'all-transactions-bank-group-start' : '' }}" data-trust-id="{{ $transaction->trust_transaction_id ?: '' }}" data-cash-id="{{ $transaction->cash_transaction_id ?: '' }}" data-record-field="{{ $heading['field'] }}" style="padding:12px;font-family:monospace;max-width:{{ $heading['width'] ?? 220 }}px;overflow:hidden;text-align:{{ in_array($heading['field'], ['amount','transaction_total'], true) ? 'right' : 'left' }};"><span>—</span></td>
@@ -33,5 +37,5 @@
         @endforeach
     </tr>
 @empty
-    <tr><td colspan="{{ count($coreHeadings) + count($eftHeadings) + count($bankSummaryHeadings) + count($bankHeadings) + count($fspHeadings) }}" style="padding:48px;text-align:center;color:#718096;">No VieFund cash-ledger transactions were found.</td></tr>
+    <tr><td colspan="{{ count($coreHeadings) + count($eftHeadings) + count($bankSummaryHeadings) + count($bankHeadings) + count($fspHeadings) + count($asmHeadings) }}" style="padding:48px;text-align:center;color:#718096;">No VieFund cash-ledger transactions were found.</td></tr>
 @endforelse

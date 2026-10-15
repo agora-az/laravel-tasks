@@ -17,6 +17,7 @@ use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\Process\ExecutableFinder;
 
 class BankStatementEntryController extends Controller
 {
@@ -345,8 +346,8 @@ class BankStatementEntryController extends Controller
         $lockFile = storage_path('app/bank-entries-sync.lock');
         $statusFile = storage_path('app/bank-entries-sync-status.json');
         $logPath = storage_path('logs/bank-entries-sync.log');
-        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
-        $dryRun = $this->resolveBooleanEnv('BANK_SFTP_DRY_RUN', false);
+        $phpPath = $this->consolePhpBinary();
+        $dryRun = (bool) config('sftp.bank.dry_run', false);
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
@@ -477,6 +478,31 @@ class BankStatementEntryController extends Controller
         }
 
         return $default;
+    }
+
+    private function consolePhpBinary(): string
+    {
+        $configured = trim((string) config('app.php_cli_path', ''));
+        $fpmSibling = str_contains(basename(PHP_BINARY), 'php-fpm')
+            ? dirname(dirname(PHP_BINARY)) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'php'
+            : null;
+        $currentBinary = str_contains(basename(PHP_BINARY), 'php-fpm') ? null : PHP_BINARY;
+        $candidates = array_filter([
+            $configured,
+            $fpmSibling,
+            (new ExecutableFinder())->find('php'),
+            $currentBinary,
+            '/usr/local/bin/php',
+            '/usr/bin/php',
+        ]);
+
+        foreach (array_unique($candidates) as $candidate) {
+            if (is_file($candidate) && is_executable($candidate)) {
+                return $candidate;
+            }
+        }
+
+        throw new \RuntimeException('A PHP CLI executable could not be found. Configure PHP_PATH.');
     }
 
     private function baseEntriesQuery(): Builder

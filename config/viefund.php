@@ -16,7 +16,7 @@ $parseColumnList = static function (string $environmentKey): array {
 };
 
 $columnGroupOrder = $parseColumnList('VIEFUND_ALL_TRANSACTIONS_COLUMN_GROUP_ORDER');
-$columnGroupOrder = $columnGroupOrder ?: ['match', 'viefund', 'eft', 'fsp', 'bank'];
+$columnGroupOrder = $columnGroupOrder ?: ['match', 'viefund', 'eft', 'fsp', 'asm', 'bank'];
 
 return [
 
@@ -266,6 +266,7 @@ return [
     'all_transactions_eft_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_EFT_VISIBLE_COLUMNS'),
     'all_transactions_bank_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_BANK_VISIBLE_COLUMNS'),
     'all_transactions_fsp_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_FSP_VISIBLE_COLUMNS'),
+    'all_transactions_asm_visible_columns' => $parseColumnList('VIEFUND_ALL_TRANSACTIONS_ASM_VISIBLE_COLUMNS'),
 
     /*
     | Cache export-only VieFund relationship lookups in the local database.

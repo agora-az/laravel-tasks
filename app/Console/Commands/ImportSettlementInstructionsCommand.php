@@ -285,8 +285,8 @@ class ImportSettlementInstructionsCommand extends Command
             $settlementDate = $this->parseDate($this->xpathString($con, './f:SettlDate'));
             $transactionType = $this->nullIfEmpty(
                 $this->xpathString($con, './f:TrxnTyp')
-                ?? $this->xpathString($con, './f:SwitchIn/f:TrxnTyp')
-                ?? $this->xpathString($con, './f:SwitchOut/f:TrxnTyp')
+                    ?? $this->xpathString($con, './f:SwitchIn/f:TrxnTyp')
+                    ?? $this->xpathString($con, './f:SwitchOut/f:TrxnTyp')
             );
             $grossAmount = $this->parseAmount($this->xpathString($fundNode, './f:GrossAmt'));
             $netAmount = $this->parseAmount($this->xpathString($fundNode, './f:NetAmt'));

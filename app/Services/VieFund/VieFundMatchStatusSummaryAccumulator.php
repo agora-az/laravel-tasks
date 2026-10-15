@@ -2,9 +2,17 @@
 
 namespace App\Services\VieFund;
 
+use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
+
 final class VieFundMatchStatusSummaryAccumulator
 {
-    public const STATUSES = ['Complete', 'Verify', 'Possible', 'Unknown'];
+    public const STATUSES = [
+        'Complete',
+        'Verify',
+        'Possible',
+        AllTransactionMatchStatusResolver::ASM_ONLY,
+        'Unknown',
+    ];
 
     private array $summary = [];
 
@@ -20,11 +28,20 @@ final class VieFundMatchStatusSummaryAccumulator
                 'eft_total' => 0.0,
                 'fsp_count' => 0,
                 'fsp_total' => 0.0,
+                'asm_count' => 0,
+                'asm_total' => 0.0,
                 'bank_count' => 0,
                 'bank_total' => 0.0,
                 'variance' => 0.0,
             ];
-            $this->seen[$status] = ['eft' => [], 'eft_total' => [], 'fsp' => [], 'fsp_total' => [], 'bank' => []];
+            $this->seen[$status] = [
+                'eft' => [],
+                'eft_total' => [],
+                'fsp' => [],
+                'fsp_total' => [],
+                'asm' => [],
+                'bank' => [],
+            ];
         }
     }
 
@@ -43,10 +60,6 @@ final class VieFundMatchStatusSummaryAccumulator
         ++$this->summary[$status]['viefund_count'];
         $this->summary[$status]['viefund_total'] += (float) ($row->amount ?? 0);
 
-        if ($status === 'Unknown') {
-            return;
-        }
-
         $enrichment = $row->cached_enrichment ?? null;
         if (!is_array($enrichment)) {
             $enrichment = json_decode(
@@ -55,6 +68,18 @@ final class VieFundMatchStatusSummaryAccumulator
                 512,
                 JSON_THROW_ON_ERROR
             );
+        }
+        foreach ((array) ($enrichment['asm_items'] ?? []) as $record) {
+            $this->addSummaryRecord(
+                $status,
+                'asm',
+                $record,
+                fn(array $item): float => (float) ($item['settlement_amount'] ?? 0)
+            );
+        }
+
+        if ($status === 'Unknown') {
+            return;
         }
 
         foreach ((array) ($enrichment['eft_items'] ?? []) as $record) {
@@ -98,7 +123,7 @@ final class VieFundMatchStatusSummaryAccumulator
             $summary[$status]['variance'] = $summary[$status]['bank_total']
                 - $summary[$status]['eft_total']
                 - $summary[$status]['fsp_total'];
-            foreach (['viefund_total', 'eft_total', 'fsp_total', 'bank_total', 'variance'] as $field) {
+            foreach (['viefund_total', 'eft_total', 'fsp_total', 'asm_total', 'bank_total', 'variance'] as $field) {
                 $summary[$status][$field] = round((float) $summary[$status][$field], 2);
                 if (abs($summary[$status][$field]) < 0.005) {
                     $summary[$status][$field] = 0.0;

@@ -3,8 +3,6 @@
 @section('title', 'VieFund Customer Balances')
 
 @section('content')
-@include('reconciliations.partials.source-tabs', ['activeReconciliation' => 'customer-balances'])
-
 @php
     $openedBeforeInput = '';
     if (!empty($filters['opened_before'])) {

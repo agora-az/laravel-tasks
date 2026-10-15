@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Services\NavigationMenu;
 use App\Services\RuntimeSettings;
 use App\Support\AllTransactionColumns;
 use Illuminate\Http\RedirectResponse;
@@ -10,10 +11,11 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use InvalidArgumentException;
 
 class ApplicationSettingsController extends Controller
 {
-    public function index(RuntimeSettings $settings): View
+    public function index(RuntimeSettings $settings, NavigationMenu $navigation): View
     {
         $items = [];
         foreach ($settings->definitions() as $key => $definition) {
@@ -40,10 +42,20 @@ class ApplicationSettingsController extends Controller
             }
         }
 
-        return view('admin.settings.index', ['groups' => $items]);
+        return view('admin.settings.index', [
+            'groups' => $items,
+            'navigationEntries' => $navigation->current(),
+            'navigationDefaults' => $navigation->defaults(),
+            'navigationOverridden' => $navigation->hasOverride(),
+            'navigationPages' => $navigation->pages(),
+        ]);
     }
 
-    public function update(Request $request, RuntimeSettings $settings): RedirectResponse
+    public function update(
+        Request $request,
+        RuntimeSettings $settings,
+        NavigationMenu $navigation
+    ): RedirectResponse
     {
         $submitted = (array) $request->input('settings', []);
         $values = [];
@@ -65,13 +77,13 @@ class ApplicationSettingsController extends Controller
                 $value = array_values(array_unique(array_map('strval', (array) $value)));
                 $allowed = $definition['options'];
                 if (count($value) !== count($allowed) || array_diff($allowed, $value) !== []) {
-                    $errors[$key] = 'Column groups must include Match, VieFund, EFT, FSP, and Bank exactly once.';
+                    $errors[$key] = 'Column groups must include Match, VieFund, EFT, FSP, ASM, and Bank exactly once.';
                     continue;
                 }
             } else {
                 $allowed = array_keys($this->columnDefinitions($key));
                 $value = array_values(array_unique(array_map('strval', (array) $value)));
-                if ($value === []) {
+                if ($value === [] && $key !== 'viefund.columns.asm') {
                     $errors[$key] = "Select at least one {$definition['label']}.";
                     continue;
                 }
@@ -83,23 +95,41 @@ class ApplicationSettingsController extends Controller
 
             $values[$key] = $value;
         }
+        try {
+            $navigationEntries = $navigation->normalizeSubmitted(
+                (array) $request->input('navigation.entries', [])
+            );
+        } catch (InvalidArgumentException $e) {
+            $errors['navigation'] = $e->getMessage();
+            $navigationEntries = [];
+        }
 
         if ($errors !== []) {
             throw ValidationException::withMessages($errors);
         }
 
-        DB::transaction(function () use ($settings, $values, $request): void {
+        DB::transaction(function () use ($settings, $navigation, $navigationEntries, $values, $request): void {
             foreach ($values as $key => $value) {
                 $settings->set($key, $value, (int) $request->user()->id);
             }
+            $navigation->save($navigationEntries, (int) $request->user()->id);
         });
 
         return back()->with('success', 'Runtime settings updated. New requests and jobs will use these values.');
     }
 
-    public function reset(Request $request, RuntimeSettings $settings): RedirectResponse
+    public function reset(
+        Request $request,
+        RuntimeSettings $settings,
+        NavigationMenu $navigation
+    ): RedirectResponse
     {
         $key = (string) $request->input('setting_key');
+        if ($key === NavigationMenu::SETTING_KEY) {
+            $navigation->forget();
+
+            return back()->with('success', 'Navigation now uses its deployed default.');
+        }
         $settings->forget($key);
 
         return back()->with('success', 'The setting now uses its deployed environment default.');
@@ -129,6 +159,7 @@ class ApplicationSettingsController extends Controller
             'viefund.columns.eft' => AllTransactionColumns::availableEftColumns(),
             'viefund.columns.bank' => AllTransactionColumns::availableBankColumns(),
             'viefund.columns.fsp' => AllTransactionColumns::availableFspColumns(),
+            'viefund.columns.asm' => AllTransactionColumns::availableAsmColumns(),
             default => [],
         };
     }

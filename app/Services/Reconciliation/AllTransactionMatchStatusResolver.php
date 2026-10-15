@@ -10,6 +10,8 @@ use Illuminate\Support\Collection;
 
 class AllTransactionMatchStatusResolver
 {
+    public const ASM_ONLY = 'ASM Only';
+
     public function __construct(
         private readonly VieFundExportLinkCache $linkCache,
         private readonly SqlServerEftRemoteRepository $eftRepository,
@@ -17,7 +19,8 @@ class AllTransactionMatchStatusResolver
         private readonly EftBankMatchStatusService $eftBankMatchStatusService,
         private readonly FspMatchedRecordCollapser $fspRecordCollapser,
         private readonly AgraFspBankMatcher $agraFspBankMatcher,
-        private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService
+        private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService,
+        private readonly AsmVieFundMatcher $asmVieFundMatcher
     ) {}
 
     /** @return Collection<string, array<string, mixed>> */
@@ -44,6 +47,7 @@ class AllTransactionMatchStatusResolver
         );
 
         $cashIds = $rows->pluck('cash_transaction_id')->filter()->map(fn($id) => (int) $id)->unique()->values();
+        $asmItemsByCash = $this->asmVieFundMatcher->recordsForCashTransactionIds($cashIds);
         $sourceMappings = $this->linkCache->fundSourceIdsForCashTransactions($cashIds->all(), $this->remoteService);
         $sourceIds = $sourceMappings->pluck('source_id')->map(fn($id) => trim((string) $id))->filter()->unique()->values();
         $fspItems = $sourceIds->isEmpty()
@@ -84,7 +88,8 @@ class AllTransactionMatchStatusResolver
             $eftBankEntriesBySequence,
             $sourceIdsByCash,
             $fspItemsBySourceId,
-            $bankMatchesBySourceType
+            $bankMatchesBySourceType,
+            $asmItemsByCash
         ): array {
             $cashId = (string) (int) $row->cash_transaction_id;
             $trustId = (string) (int) ($row->trust_transaction_id ?? 0);
@@ -105,6 +110,8 @@ class AllTransactionMatchStatusResolver
                 ->unique(fn($item) => (int) $item->id)
                 ->values();
             $fspStatus = $this->transactionBankMatchStatusService->summarizeFspItems($fspItems);
+            $asmItems = collect($asmItemsByCash->get($cashId, collect()))->values();
+            $bankMatchStatus = $this->transactionBankMatchStatusService->combine($eftStatus, $fspStatus);
             $fspBankEntries = $fspItems
                 ->map(function (SettlementInstruction $item) use ($bankMatchesBySourceType) {
                     if (
@@ -125,18 +132,27 @@ class AllTransactionMatchStatusResolver
                 ->values();
 
             return [$cashId => [
-                'match_status' => $this->transactionBankMatchStatusService->combine($eftStatus, $fspStatus),
+                'match_status' => self::withAsmEvidence($bankMatchStatus, $asmItems->isNotEmpty()),
                 'has_eft_match' => $eftStatus !== null,
                 'has_agra_fsp_match' => $fspItems->contains(fn($item) => $item->source_type === 'fundserv_agra'),
                 'has_7960_fsp_match' => $fspItems->contains(fn($item) => $item->source_type === 'ltm'),
+                'has_asm_match' => $asmItems->isNotEmpty(),
                 'enrichment' => [
                     'eft_items' => $this->snapshotRecords($transactionEftItems),
                     'eft_bank_entries' => $this->snapshotRecords($eftBankEntries),
                     'fsp_items' => $this->snapshotRecords($fspItems),
                     'fsp_bank_entries' => $this->snapshotRecords($fspBankEntries),
+                    'asm_items' => $asmItems->all(),
                 ],
             ]];
         });
+    }
+
+    public static function withAsmEvidence(string $bankMatchStatus, bool $hasAsmMatch): string
+    {
+        return $bankMatchStatus === EftBankMatchStatusService::UNKNOWN && $hasAsmMatch
+            ? self::ASM_ONLY
+            : $bankMatchStatus;
     }
 
     private function snapshotRecords(Collection $records): array

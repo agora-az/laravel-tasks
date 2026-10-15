@@ -4,10 +4,10 @@
 
 Production uses two independent database-queue worker pools:
 
-| Queue | Connection | Workloads | Default workers |
-| --- | --- | --- | ---: |
-| `viefund-cache` | `database_viefund_cache` | All Transactions working-set hydration | 1 |
-| `imports,default` | `database` | File imports, dashboard refreshes, report metadata, matching | 1 |
+| Queue             | Connection               | Workloads                                                    | Default workers |
+| ----------------- | ------------------------ | ------------------------------------------------------------ | --------------: |
+| `viefund-cache`   | `database_viefund_cache` | All Transactions working-set hydration                       |               1 |
+| `imports,default` | `database`               | File imports, dashboard refreshes, report metadata, matching |               1 |
 
 Hydration jobs for one working-set generation form a cursor-based serial chain.
 Keep one cache worker unless concurrent remote VieFund queries have been tested.
@@ -30,11 +30,11 @@ to work across multiple App Service instances.
 
 ## Starting points by plan
 
-| App Service plan | General workers | Cache workers | Notes |
-| --- | ---: | ---: | --- |
-| P1V3, 2 vCPU / 8 GB | 1 | 1 | Uses both cores while limiting VieFund concurrency |
-| P2V3, 4 vCPU / 16 GB | 2 | 1 | Add a general worker first |
-| P3V3, 8 vCPU / 32 GB | 4 | 1 | Benchmark before adding a second cache worker |
+| App Service plan     | General workers | Cache workers | Notes                                              |
+| -------------------- | --------------: | ------------: | -------------------------------------------------- |
+| P1V3, 2 vCPU / 8 GB  |               1 |             1 | Uses both cores while limiting VieFund concurrency |
+| P2V3, 4 vCPU / 16 GB |               2 |             1 | Add a general worker first                         |
+| P3V3, 8 vCPU / 32 GB |               4 |             1 | Benchmark before adding a second cache worker      |
 
 Worker counts apply per App Service instance. Scaling out multiplies the total
 worker count, so review remote SQL Server and MySQL load before adding instances.

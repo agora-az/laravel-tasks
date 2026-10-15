@@ -6,9 +6,7 @@ use App\Models\VieFundTransactionWorkingSet;
 
 class VieFundWorkingSetBalanceService
 {
-    public function __construct(private readonly VieFundDailyBalanceService $dailyBalanceService)
-    {
-    }
+    public function __construct(private readonly VieFundDailyBalanceService $dailyBalanceService) {}
 
     public function get(VieFundTransactionWorkingSet $workingSet): array
     {

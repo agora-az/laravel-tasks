@@ -3,8 +3,6 @@
 @section('title', 'Reconciliation - Bank / EFT')
 
 @section('content')
-@include('reconciliations.partials.source-tabs', ['activeReconciliation' => 'eft'])
-
 <div style="margin:20px 0;">
     <h2 style="margin:0;">Bank / EFT Reconciliation</h2>
     <div style="color:#718096;font-size:13px;margin-top:4px;">Bank activity by statement date and account, matched to VieFund EFT files by settlement / sequence number</div>

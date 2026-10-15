@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\SettlementInstruction;
 use App\Services\RuntimeSettings;
 use App\Services\Reconciliation\AgraFspBankMatcher;
+use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
 use App\Services\Reconciliation\EftBankMatchStatusService;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
@@ -57,10 +58,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         {--has-eft-match : Include only transactions linked to an EFT item}
         {--has-agra-fsp-match : Include only transactions whose fund SourceID is present in an AGRA FSP item}
         {--has-7960-fsp-match : Include only transactions whose fund SourceID is present in a 7960 FSP item}
+        {--has-asm-match : Include only transactions linked to an exact ASM cash match}
         {--include-eft-records : Add unique linked EFT records and transaction-sheet links}
         {--include-bank-records : Add unique linked bank records and transaction-sheet links}
         {--include-fsp-records : Include matched AGRA FSP details in transaction columns or a separate sheet}
         {--include-7960-fsp-records : Include matched 7960 FSP details in transaction columns or a separate sheet}
+        {--include-asm-records : Include matched ASM details in transaction columns}
         {--linked-record-layout=split : Write linked records into the transaction sheet or separate EFT, Bank, and FSP sheets}
         {--split-sheets : Distribute transactions into date-based sheets near the configured target size}
         {--output-base= : Storage-relative output path without an extension}
@@ -82,8 +85,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         VieFundTransactionWorkingSetManager $workingSetManager,
         VieFundTransactionWorkingSetQuery $workingSetQuery,
         VieFundWorkingSetBalanceService $workingSetBalanceService
-    ): int
-    {
+    ): int {
         $startedAt = microtime(true);
         $startedAtIso = now()->toIso8601String();
         $statusFile = $this->stringOption('status-file');
@@ -119,11 +121,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             )));
             $statusIds = $statusIds ?: [6];
             $matchStatuses = array_values(array_intersect(
-                ['Complete', 'Verify', 'Possible', 'Unknown'],
+                VieFundMatchStatusSummaryAccumulator::STATUSES,
                 (array) $this->option('match-status')
             ));
             $hasAgraFspMatch = (bool) $this->option('has-agra-fsp-match');
             $has7960FspMatch = (bool) $this->option('has-7960-fsp-match');
+            $hasAsmMatch = (bool) $this->option('has-asm-match');
             $filters = array_filter([
                 'customer_name' => $this->stringOption('customer-name'),
                 'plan_account_id' => $this->stringOption('plan-account-id'),
@@ -139,6 +142,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'has_reconciliation_match' => (bool) $this->option('has-eft-match'),
                 'has_agra_fsp_match' => $hasAgraFspMatch,
                 'has_7960_fsp_match' => $has7960FspMatch,
+                'has_asm_match' => $hasAsmMatch,
                 'match_statuses' => $matchStatuses,
             ]);
             $workingSet = $workingSetManager->findReady($filters);
@@ -158,6 +162,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             $separateLinkedRecordSheets = $linkedRecordLayout === 'split';
             $includeFspRecords = (bool) $this->option('include-fsp-records');
             $include7960FspRecords = (bool) $this->option('include-7960-fsp-records');
+            $includeAsmRecords = (bool) $this->option('include-asm-records');
             $includeAnyFspRecords = $includeFspRecords || $include7960FspRecords;
             $includedFspSourceTypes = array_values(array_filter([
                 $includeFspRecords ? 'fundserv_agra' : null,
@@ -341,6 +346,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $includeEftRecords,
                 $includeBankRecords,
                 $includeAnyFspRecords,
+                $includeAsmRecords,
                 $separateLinkedRecordSheets,
                 $columnGroupOrder
             );
@@ -461,6 +467,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $bankEntriesBySequence = collect();
                 $fspItemsByCashTransaction = collect();
                 $fspBankEntriesByCashTransaction = collect();
+                $asmItemsByCashTransaction = collect();
                 if ($rows->isNotEmpty()) {
                     $stageStartedAt = microtime(true);
                     $this->writeStatus($statusFile, [
@@ -505,8 +512,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         $linkedEftItems->each(function ($item) use ($eftBankMatchStatuses) {
                             $sequence = $item->sequence_number !== null
                                 && ctype_digit((string) $item->sequence_number)
-                                    ? (string) (int) $item->sequence_number
-                                    : null;
+                                ? (string) (int) $item->sequence_number
+                                : null;
                             $item->bank_match_status = $sequence !== null
                                 ? $eftBankMatchStatuses->get($sequence, EftBankMatchStatusService::UNKNOWN)
                                 : EftBankMatchStatusService::UNKNOWN;
@@ -585,6 +592,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'updated_at' => now()->toIso8601String(),
                     ]);
                     if ($workingSet) {
+                        $asmItemsByCashTransaction = $rows->mapWithKeys(fn($row) => [
+                            (string) (int) $row->cash_transaction_id => $this->cachedEnrichmentRecords($row, 'asm_items'),
+                        ]);
                         $fspItemsByCashTransaction = $rows->mapWithKeys(fn($row) => [
                             (string) (int) $row->cash_transaction_id => $this->cachedEnrichmentRecords($row, 'fsp_items'),
                         ]);
@@ -670,9 +680,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     ) {
                         $this->finalizeTransactionSheet($sheet, $sheetRowCount, $transactionHeaders);
                         $sheetSummary = $this->sheetSummary(
-                            $sheetNumber, $currentSheetPlan['name'], $sheetRowCount,
-                            $currentSheetPlan['from_date'], $currentSheetPlan['to_date'],
-                            $sheetOpeningBalance, $sheetNet, $currentSheetPlan['cash_ledger_net']
+                            $sheetNumber,
+                            $currentSheetPlan['name'],
+                            $sheetRowCount,
+                            $currentSheetPlan['from_date'],
+                            $currentSheetPlan['to_date'],
+                            $sheetOpeningBalance,
+                            $sheetNet,
+                            $currentSheetPlan['cash_ledger_net']
                         );
                         $sheetSummaries[] = $sheetSummary;
                         ++$sheetNumber;
@@ -701,17 +716,25 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     $transactionFspItems = $transactionAllFspItems
                         ->filter(fn($item) => in_array((string) $item->source_type, $includedFspSourceTypes, true))
                         ->values();
+                    $transactionAsmItems = collect($asmItemsByCashTransaction->get(
+                        (string) (int) $row->cash_transaction_id,
+                        collect()
+                    ))->values();
                     $transactionBankEntries = collect($fspBankEntriesByCashTransaction->get((string) (int) $row->cash_transaction_id, collect()))
                         ->concat($transactionBankEntries)
                         ->unique('id')
                         ->values();
                     $isPossibleWireFeeMatch = $transactionBankEntries
                         ->contains(fn($entry) => (bool) ($entry->is_possible_wire_fee_match ?? false));
-                    $matchedToBankStatus = $transactionBankMatchStatusService->combine(
+                    $bankMatchStatus = $transactionBankMatchStatusService->combine(
                         $transactionBankMatchStatusService->summarizeEftItems($transactionEftItems),
                         $transactionBankMatchStatusService->summarizeFspItems($transactionAllFspItems)
                     );
-                    $matchStatusStyle = $this->matchStatusStyle($matchStatusStyles, $matchedToBankStatus);
+                    $matchStatus = AllTransactionMatchStatusResolver::withAsmEvidence(
+                        $bankMatchStatus,
+                        $transactionAsmItems->isNotEmpty()
+                    );
+                    $matchStatusStyle = $this->matchStatusStyle($matchStatusStyles, $matchStatus);
                     $transactionBankDetailStyle = $isPossibleWireFeeMatch
                         ? $wireFeeBankDetailStyle
                         : $bankDetailStyle;
@@ -720,7 +743,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         : $bankAmountDetailStyle;
 
                     $coreCells = [
-                        'matched_to_bank' => new StringCell($matchedToBankStatus, $matchStatusStyle),
+                        'matched_to_bank' => new StringCell($matchStatus, $matchStatusStyle),
                         'cash_transaction_id' => new StringCell((string) ($row->transaction_id ?? ''), null),
                         'fund_transaction_id' => new StringCell(!empty($row->fund_transaction_id) ? 'F-' . $row->fund_transaction_id : '', null),
                         'trust_transaction_id' => new StringCell(!empty($row->trust_transaction_id) ? 'T-' . $row->trust_transaction_id : '', null),
@@ -752,19 +775,24 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         ),
                         'eft' => [],
                         'fsp' => [],
+                        'asm' => [],
                         'bank' => [],
                     ];
                     if (!$separateLinkedRecordSheets && $includeBankRecords) {
-                        $bankSummaryCells = $transactionBankEntries->isNotEmpty()
+                        $bankSummaryCells = $matchStatus === AllTransactionMatchStatusResolver::ASM_ONLY
+                            ? $this->asmOnlyBankSummaryCells(
+                                $this->matchStatusStyle($matchStatusDetailStyles, $matchStatus)
+                            )
+                            : ($transactionBankEntries->isNotEmpty()
                             ? $this->bankTransactionSummaryCells(
                                 $transactionBankEntries,
-                                $this->matchStatusStyle($matchStatusDetailStyles, $matchedToBankStatus),
-                                $this->matchStatusStyle($matchStatusAmountStyles, $matchedToBankStatus)
+                                $this->matchStatusStyle($matchStatusDetailStyles, $matchStatus),
+                                $this->matchStatusStyle($matchStatusAmountStyles, $matchStatus)
                             )
                             : $this->emptyDetailCells(
                                 count($this->bankTransactionSummaryHeaders()),
                                 $matchStatusStyle
-                            );
+                            ));
                         array_push($transactionCellGroups['match'], ...$bankSummaryCells);
                     }
                     if ($includeEftRecords && $separateLinkedRecordSheets) {
@@ -828,6 +856,26 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                                     $fspDetailStyle
                                 )
                             );
+                        }
+                        if ($includeAsmRecords) {
+                            if ($transactionAsmItems->isNotEmpty()) {
+                                array_push(
+                                    $transactionCellGroups['asm'],
+                                    ...$this->asmTransactionDetailCells(
+                                        $transactionAsmItems,
+                                        $fspDetailStyle,
+                                        $fspAmountDetailStyle
+                                    )
+                                );
+                            } else {
+                                array_push(
+                                    $transactionCellGroups['asm'],
+                                    ...$this->emptyDetailCells(
+                                        count($this->asmTransactionDetailHeaders()),
+                                        $fspDetailStyle
+                                    )
+                                );
+                            }
                         }
                     }
                     if (!$separateLinkedRecordSheets && $includeBankRecords) {
@@ -922,9 +970,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
             $this->finalizeTransactionSheet($sheet, $sheetRowCount, $transactionHeaders);
             $sheetSummaries[] = $this->sheetSummary(
-                $sheetNumber, $currentSheetPlan['name'], $sheetRowCount,
-                $currentSheetPlan['from_date'], $currentSheetPlan['to_date'],
-                $sheetOpeningBalance, $sheetNet, $currentSheetPlan['cash_ledger_net']
+                $sheetNumber,
+                $currentSheetPlan['name'],
+                $sheetRowCount,
+                $currentSheetPlan['from_date'],
+                $currentSheetPlan['to_date'],
+                $sheetOpeningBalance,
+                $sheetNet,
+                $currentSheetPlan['cash_ledger_net']
             );
             if ($eftRecordsSheet instanceof Sheet) {
                 $this->finalizeLinkedRecordsSheet($eftRecordsSheet, count($this->eftRecordHeaders()), $eftRecordCount);
@@ -960,10 +1013,21 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $matchStatusSummary = $matchStatusSummaryAccumulator->result();
             }
             $this->writeSummarySheet(
-                $writer, $summarySheet, $headerStyle, $currencyStyle, $sheetSummaries,
-                $filters, $search, $totalTransactions, $firstDate, $lastDate,
-                $overallOpeningBalance, $overallSelectedNet, $cashLedgerPeriodNet,
-                (float) $balanceReport['final_balance'], (string) $balanceReport['balance_source'],
+                $writer,
+                $summarySheet,
+                $headerStyle,
+                $currencyStyle,
+                $sheetSummaries,
+                $filters,
+                $search,
+                $totalTransactions,
+                $firstDate,
+                $lastDate,
+                $overallOpeningBalance,
+                $overallSelectedNet,
+                $cashLedgerPeriodNet,
+                (float) $balanceReport['final_balance'],
+                (string) $balanceReport['balance_source'],
                 $includeEftRecords ? $eftRecordCount : null,
                 $includeBankRecords ? $bankRecordCount : null,
                 $includeAnyFspRecords ? $fspRecordCount : null,
@@ -1042,15 +1106,16 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         bool $includeEftRecords,
         bool $includeBankRecords,
         bool $includeFspRecords,
+        bool $includeAsmRecords,
         bool $separateLinkedRecordSheets,
         array $columnGroupOrder
-    ): array
-    {
+    ): array {
         $headerGroups = [
             'match' => [],
             'viefund' => [],
             'eft' => [],
             'fsp' => [],
+            'asm' => [],
             'bank' => [],
         ];
         foreach (AllTransactionColumns::visible() as $key => $definition) {
@@ -1058,6 +1123,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 $headerGroups['viefund'][] = 'Created Timestamp';
             }
             $headerGroups[$key === 'matched_to_bank' ? 'match' : 'viefund'][] = $definition['label'];
+        }
+        if ($includeAsmRecords) {
+            $headerGroups['asm'] = $this->asmTransactionDetailHeaders();
         }
         if ($separateLinkedRecordSheets) {
             if ($includeEftRecords) {
@@ -1115,8 +1183,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         Style $bankHeaderStyle,
         Style $fspHeaderStyle,
         array $headers
-    ): void
-    {
+    ): void {
         $sheet->setName($sheetName);
         $sheet->setSheetView((new SheetView())->setFreezeRow(2));
         foreach ($headers as $index => $header) {
@@ -1160,16 +1227,18 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 in_array($header, $this->bankTransactionSummaryHeaders(), true)
                     ? $headerStyle
                     : (str_starts_with($header, 'EFT ')
-                    || $header === 'Linked EFT Record'
-                    ? $eftHeaderStyle
+                        || $header === 'Linked EFT Record'
+                        ? $eftHeaderStyle
                         : (str_starts_with($header, 'Bank ')
                             || str_starts_with($header, 'FSP Bank ')
                             || $header === 'Variance Note'
                             || $header === 'Linked Bank Record'
-                        ? $bankHeaderStyle
-                        : (str_starts_with($header, 'FSP ') || $header === 'Linked FSP Record'
-                            ? $fspHeaderStyle
-                            : $headerStyle)))
+                            ? $bankHeaderStyle
+                            : (str_starts_with($header, 'FSP ')
+                                || str_starts_with($header, 'ASM ')
+                                || $header === 'Linked FSP Record'
+                                ? $fspHeaderStyle
+                                : $headerStyle)))
             ),
             $headers
         )));
@@ -1218,6 +1287,11 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     private function fspTransactionDetailHeaders(): array
     {
         return array_column(AllTransactionColumns::fspVisible(), 'label');
+    }
+
+    private function asmTransactionDetailHeaders(): array
+    {
+        return array_column(AllTransactionColumns::asmVisible(), 'label');
     }
 
     private function fspRecordHeaders(): array
@@ -1512,13 +1586,24 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
     }
 
     /** @return array<int, StringCell> */
+    private function asmOnlyBankSummaryCells(Style $style): array
+    {
+        return array_values(array_map(
+            fn(string $key) => new StringCell(
+                $key === 'reconciliation_variance' ? 'N/A' : 'ASM match only, no bank match',
+                $style
+            ),
+            array_keys(AllTransactionColumns::bankSummaryVisible())
+        ));
+    }
+
+    /** @return array<int, StringCell> */
     private function bankTransactionCells(
         Collection $entries,
         array $definitions,
         Style $style,
         Style $amountStyle
-    ): array
-    {
+    ): array {
         $formatters = [
             'id' => fn($entry) => (string) (int) $entry->id,
             'value_date' => fn($entry) => $this->displayDateTime($entry->value_date ?? null),
@@ -1596,14 +1681,44 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         ));
     }
 
+    /** @return array<int, StringCell> */
+    private function asmTransactionDetailCells(Collection $items, Style $style, Style $amountStyle): array
+    {
+        $formatters = [
+            'match_status' => fn($item) => ($item->match_status ?? '') === 'exact_cash_match'
+                ? 'Exact'
+                : (string) ($item->match_status ?? ''),
+            'payment_id' => fn($item) => (string) ($item->payment_id ?? ''),
+            'payment_type' => fn($item) => (string) ($item->payment_type ?? ''),
+            'payment_type_description' => fn($item) => (string) ($item->payment_type_description ?? ''),
+            'settlement_date' => fn($item) => $this->dateOnly($item->settlement_date ?? null),
+            'currency' => fn($item) => (string) ($item->currency ?? ''),
+            'settlement_amount' => fn($item) => isset($item->settlement_amount)
+                ? $this->currencyText((float) $item->settlement_amount)
+                : '',
+            'agra_role' => fn($item) => (string) ($item->agra_role ?? ''),
+            'agra_account' => fn($item) => (string) ($item->agra_account ?? ''),
+            'source_file' => fn($item) => (string) ($item->source_file ?? ''),
+        ];
+        $formatters = $this->orderedVisibleValues($formatters, AllTransactionColumns::asmVisible());
+
+        return array_values(array_map(
+            fn(callable $formatter, string $key) => new StringCell(
+                $this->joinedDetailValues($items, $formatter),
+                $key === 'settlement_amount' ? $amountStyle : $style
+            ),
+            $formatters,
+            array_keys($formatters)
+        ));
+    }
+
     private function fspItemsByCashTransaction(
         Collection $rows,
         VieFundRemoteService $remoteService,
         VieFundExportLinkCache $linkCache,
         array $sourceTypes,
         FspMatchedRecordCollapser $fspRecordCollapser
-    ): Collection
-    {
+    ): Collection {
         $sourceIdsByCashTransaction = $linkCache
             ->fundSourceIdsForCashTransactions(
                 $rows->pluck('cash_transaction_id')->filter()->map(fn($id) => (int) $id)->unique()->values()->all(),
@@ -1744,6 +1859,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             EftBankMatchStatusService::COMPLETE => ['background' => 'C6F6D5', 'text' => '22543D'],
             EftBankMatchStatusService::TO_BE_VERIFIED => ['background' => 'FEFCBF', 'text' => '975A16'],
             EftBankMatchStatusService::POSSIBLE_MATCH => ['background' => 'BEE3F8', 'text' => '2A4365'],
+            AllTransactionMatchStatusResolver::ASM_ONLY => ['background' => 'FEEBC8', 'text' => '9C4221'],
             EftBankMatchStatusService::UNKNOWN => ['background' => 'EDF2F7', 'text' => '4A5568'],
         ];
 
@@ -2023,7 +2139,10 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         ]));
         $writer->addRow(Row::fromValues([]));
         $writer->addRow(Row::fromValues([
-            'Report Date', 'Transactions', 'Daily Net Amount', 'Current Daily Balance',
+            'Report Date',
+            'Transactions',
+            'Daily Net Amount',
+            'Current Daily Balance',
         ], $headerStyle));
 
         foreach ($rows as $row) {
@@ -2154,12 +2273,21 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $writer->addRow(Row::fromValues([]));
         $writer->addRow(Row::fromValues(['Match Status Summary'], $headerStyle));
         $writer->addRow(Row::fromValues([
-            'Status', 'VieFund Transactions', 'VieFund Total', 'EFT Transactions', 'EFT Total',
-            'FSP Transactions', 'FSP Total', 'Bank Transactions', 'Bank Total', 'Variance',
+            'Status',
+            'VieFund Transactions',
+            'VieFund Total',
+            'EFT Transactions',
+            'EFT Total',
+            'FSP Transactions',
+            'FSP Total',
+            'Bank Transactions',
+            'Bank Total',
+            'Variance',
         ], $headerStyle));
         if ($matchStatusSummary === []) {
             $writer->addRow(Row::fromValues([
-                'Unavailable', 'A completed local period cache is required for linked-record summary totals.',
+                'Unavailable',
+                'A completed local period cache is required for linked-record summary totals.',
             ]));
         } else {
             $palette = [
@@ -2200,8 +2328,13 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
         $writer->addRow(Row::fromValues([]));
         $writer->addRow(Row::fromValues([
-            'Sheet', 'Date Range', 'Transactions', 'Opening Balance',
-            'Exported Cash Ledger Total', 'Cash Ledger Net', 'Closing Balance',
+            'Sheet',
+            'Date Range',
+            'Transactions',
+            'Opening Balance',
+            'Exported Cash Ledger Total',
+            'Cash Ledger Net',
+            'Closing Balance',
         ], $headerStyle));
 
         foreach ($sheetSummaries as $summary) {
@@ -2443,8 +2576,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         string $dateBasis,
         ?string $dateFrom,
         ?string $dateTo
-    ): string
-    {
+    ): string {
         $query = SettlementInstruction::query()
             ->where('source_type', $sourceType)
             ->whereNotNull('source_id')
@@ -2515,5 +2647,4 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ? $fromDate
             : $fromDate . ' through ' . $toDate;
     }
-
 }

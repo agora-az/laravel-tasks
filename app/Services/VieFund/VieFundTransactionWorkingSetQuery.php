@@ -173,6 +173,9 @@ class VieFundTransactionWorkingSetQuery
         if (!empty($filters['has_7960_fsp_match'])) {
             $query->where('has_7960_fsp_match', true);
         }
+        if (!empty($filters['has_asm_match'])) {
+            $query->where('has_asm_match', true);
+        }
         if (!empty($filters['match_statuses'])) {
             $query->whereIn('match_status', (array) $filters['match_statuses']);
         }
@@ -223,5 +226,4 @@ class VieFundTransactionWorkingSetQuery
             $query->where($column, 'like', '%' . $value . '%');
         }
     }
-
 }

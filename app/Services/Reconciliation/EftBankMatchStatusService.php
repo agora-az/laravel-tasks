@@ -183,7 +183,7 @@ class EftBankMatchStatusService
                 'note' => $this->varianceNote(
                     $variance,
                     'EFT total',
-                    'sequence '.$sequence,
+                    'sequence ' . $sequence,
                     (string) $bankTotal->currency,
                     (int) $bankTotal->transaction_count
                 ),
@@ -198,7 +198,7 @@ class EftBankMatchStatusService
         string $currency,
         int $transactionCount
     ): string {
-        $context = trim($reference.' '.$currency);
+        $context = trim($reference . ' ' . $currency);
         $transactionContext = $transactionCount > 1
             ? sprintf(' Candidate bank total combines %d transactions.', $transactionCount)
             : '';

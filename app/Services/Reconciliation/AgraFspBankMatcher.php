@@ -167,10 +167,10 @@ class AgraFspBankMatcher
                 : ($bank->is_possible_wire_fee_match ? 'Possible wire-fee match' : 'Unresolved');
             $difference = number_format(abs($bank->variance), 2);
             $direction = $bank->variance > 0 ? 'higher' : 'lower';
-            $context = Carbon::parse($group->total_date)->toDateString().' '.strtoupper((string) $group->currency);
+            $context = Carbon::parse($group->total_date)->toDateString() . ' ' . strtoupper((string) $group->currency);
             $itemContext = sprintf(' FSP net includes %d items.', (int) $group->item_count);
             if ($bank->is_exact_match) {
-                $bank->reconciliation_note = 'Candidate bank transaction matches the FSP net for '.$context.'.'.$itemContext;
+                $bank->reconciliation_note = 'Candidate bank transaction matches the FSP net for ' . $context . '.' . $itemContext;
             } else {
                 $bank->reconciliation_note = sprintf(
                     'Candidate bank transaction is $%s %s than the FSP net for %s.%s%s',
@@ -188,7 +188,7 @@ class AgraFspBankMatcher
 
     public function key(mixed $date, mixed $currency): string
     {
-        return Carbon::parse($date)->toDateString().'|'.strtoupper(trim((string) $currency));
+        return Carbon::parse($date)->toDateString() . '|' . strtoupper(trim((string) $currency));
     }
 
     private function signedBankAmount(object $entry): float

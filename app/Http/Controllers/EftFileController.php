@@ -34,11 +34,24 @@ class EftFileController extends Controller
     {
         $filters = $this->filters($request);
         $fileSort = $this->sort($request, 'file_sort', [
-            'created_at', 'effective_date', 'type', 'status', 'total_amount', 'item_count', 'sequence',
-            'bank_count_variance', 'bank_amount_variance',
+            'created_at',
+            'effective_date',
+            'type',
+            'status',
+            'total_amount',
+            'item_count',
+            'sequence',
+            'bank_count_variance',
+            'bank_amount_variance',
         ], 'created_at');
         $itemSort = $this->sort($request, 'item_sort', [
-            'created_at', 'effective_date', 'type', 'status', 'amount', 'holder', 'file',
+            'created_at',
+            'effective_date',
+            'type',
+            'status',
+            'amount',
+            'holder',
+            'file',
         ], 'created_at');
         $fileSortDir = $this->direction($request, 'file_sort_dir');
         $itemSortDir = $this->direction($request, 'item_sort_dir');
@@ -121,33 +134,33 @@ class EftFileController extends Controller
             $bankEntriesBySequence = $sequences->isEmpty()
                 ? collect()
                 : DB::table('bank_statement_entries as b')
-                    ->join('bank_statement_entry_analyses as a', function ($join) {
-                        $join->on('a.bank_statement_entry_id', '=', 'b.id')
-                            ->where('a.parser_version', self::BANK_PARSER_VERSION);
-                    })
-                    ->whereIn('a.settlement_number', $sequences->all())
-                    ->select([
-                        'b.id',
-                        'b.bank_statement_summary_id',
-                        'b.source_file',
-                        'b.account_number',
-                        'b.booking_date',
-                        'b.value_date',
-                        'b.credit_debit_indicator',
-                        'b.currency',
-                        'b.amount',
-                        'b.additional_info',
-                        'a.memo_type',
-                        'a.settlement_number',
-                        'a.wire_payment_reference',
-                        'a.counterparty',
-                    ])
-                    ->orderBy('b.value_date')
-                    ->orderBy('b.id')
-                    ->get()
-                    ->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
-                        ? (string) (int) trim((string) $entry->settlement_number)
-                        : trim((string) $entry->settlement_number));
+                ->join('bank_statement_entry_analyses as a', function ($join) {
+                    $join->on('a.bank_statement_entry_id', '=', 'b.id')
+                        ->where('a.parser_version', self::BANK_PARSER_VERSION);
+                })
+                ->whereIn('a.settlement_number', $sequences->all())
+                ->select([
+                    'b.id',
+                    'b.bank_statement_summary_id',
+                    'b.source_file',
+                    'b.account_number',
+                    'b.booking_date',
+                    'b.value_date',
+                    'b.credit_debit_indicator',
+                    'b.currency',
+                    'b.amount',
+                    'b.additional_info',
+                    'a.memo_type',
+                    'a.settlement_number',
+                    'a.wire_payment_reference',
+                    'a.counterparty',
+                ])
+                ->orderBy('b.value_date')
+                ->orderBy('b.id')
+                ->get()
+                ->groupBy(fn($entry) => ctype_digit(trim((string) $entry->settlement_number))
+                    ? (string) (int) trim((string) $entry->settlement_number)
+                    : trim((string) $entry->settlement_number));
             $bankMatchStatuses = $this->eftBankMatchStatusService->statusesForSequences($sequences);
             $this->eftBankMatchStatusService->annotateBankEntries($bankEntriesBySequence->flatten(1));
         } catch (\Throwable $exception) {
@@ -208,8 +221,8 @@ class EftFileController extends Controller
                     $fileName = trim((string) ($item->file_name ?? ''));
                     $sequence = $item->sequence_number !== null
                         && ctype_digit((string) $item->sequence_number)
-                            ? (string) (int) $item->sequence_number
-                            : null;
+                        ? (string) (int) $item->sequence_number
+                        : null;
 
                     return [
                         'bank_match_status' => $sequence !== null
@@ -395,7 +408,11 @@ class EftFileController extends Controller
                 $file->type_id !== null ? (int) $file->type_id : null,
                 (string) ($file->type_name ?? ''),
                 $file->status_id !== null ? (int) $file->status_id : null,
-                match ((int) $file->trust_bank_account_id) { 1 => 'AGRP', 2 => 'AGRA', default => $file->trust_bank_account_id },
+                match ((int) $file->trust_bank_account_id) {
+                    1 => 'AGRP',
+                    2 => 'AGRA',
+                    default => $file->trust_bank_account_id
+                },
                 $file->sequence_number !== null ? (int) $file->sequence_number : null,
                 $file->total_amount !== null ? (float) $file->total_amount : null,
                 (int) ($file->item_count ?? 0),

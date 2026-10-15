@@ -14,9 +14,7 @@ class VieFundTransactionWorkingSetManager
 {
     private const CACHE_VERSION = 3;
 
-    public function __construct(private readonly RuntimeSettings $runtimeSettings)
-    {
-    }
+    public function __construct(private readonly RuntimeSettings $runtimeSettings) {}
 
     public function ensure(array $filters): ?VieFundTransactionWorkingSet
     {
@@ -177,9 +175,11 @@ class VieFundTransactionWorkingSetManager
         }
 
         $queueState = $this->hydrationQueueState($workingSet);
-        if ($queueState === 'queued'
+        if (
+            $queueState === 'queued'
             && $workingSet->updated_at
-            && $workingSet->updated_at->isAfter(now()->subSeconds(15))) {
+            && $workingSet->updated_at->isAfter(now()->subSeconds(15))
+        ) {
             $queueState = 'processing';
         }
         $rowsCached = (int) $workingSet->rows_cached;
@@ -188,11 +188,13 @@ class VieFundTransactionWorkingSetManager
             ? ($totalRows === 0 ? 100.0 : round(min(1, $rowsCached / $totalRows) * 100, 1))
             : null;
         $etaSeconds = null;
-        if (in_array($workingSet->state, ['warming', 'refreshing'], true)
+        if (
+            in_array($workingSet->state, ['warming', 'refreshing'], true)
             && $totalRows !== null
             && $totalRows > $rowsCached
             && $rowsCached > 0
-            && $workingSet->started_at) {
+            && $workingSet->started_at
+        ) {
             $elapsedSeconds = max(1, $workingSet->started_at->diffInSeconds(now()));
             $rowsPerSecond = $rowsCached / $elapsedSeconds;
             $etaSeconds = $rowsPerSecond > 0
@@ -247,9 +249,11 @@ class VieFundTransactionWorkingSetManager
                 $job = @unserialize($serialized, [
                     'allowed_classes' => [HydrateVieFundTransactionWorkingSet::class],
                 ]);
-                if (!$job instanceof HydrateVieFundTransactionWorkingSet
+                if (
+                    !$job instanceof HydrateVieFundTransactionWorkingSet
                     || $job->workingSetId !== $workingSet->id
-                    || $job->generation !== $workingSet->build_generation) {
+                    || $job->generation !== $workingSet->build_generation
+                ) {
                     continue;
                 }
 

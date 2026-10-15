@@ -101,6 +101,19 @@ final class AllTransactionColumns
         'fsp_note' => ['label' => 'FSP Note', 'field' => 'fsp_note', 'width' => 360],
     ];
 
+    private const ASM_DEFINITIONS = [
+        'match_status' => ['label' => 'ASM Match', 'field' => 'match_status', 'width' => 145],
+        'payment_id' => ['label' => 'ASM Payment ID', 'field' => 'payment_id', 'width' => 180],
+        'payment_type' => ['label' => 'ASM Payment Type', 'field' => 'payment_type', 'width' => 145],
+        'payment_type_description' => ['label' => 'ASM Payment Description', 'field' => 'payment_type_description', 'width' => 240],
+        'settlement_date' => ['label' => 'ASM Settlement', 'field' => 'settlement_date', 'width' => 125],
+        'currency' => ['label' => 'ASM Currency', 'field' => 'currency'],
+        'settlement_amount' => ['label' => 'ASM Amount', 'field' => 'settlement_amount', 'width' => 145],
+        'agra_role' => ['label' => 'AGRA Role', 'field' => 'agra_role'],
+        'agra_account' => ['label' => 'ASM AGRA Account', 'field' => 'agra_account', 'width' => 175],
+        'source_file' => ['label' => 'ASM File', 'field' => 'source_file', 'width' => 260],
+    ];
+
     /** @return array<string, array{label: string, field: ?string, sort?: string}> */
     public static function visible(): array
     {
@@ -145,6 +158,11 @@ final class AllTransactionColumns
         return self::configuredDefinitions(self::FSP_DEFINITIONS, 'all_transactions_fsp_visible_columns');
     }
 
+    public static function asmVisible(): array
+    {
+        return self::configuredDefinitions(self::ASM_DEFINITIONS, 'all_transactions_asm_visible_columns');
+    }
+
     public static function availableTransactionColumns(): array
     {
         return self::DEFINITIONS;
@@ -168,6 +186,11 @@ final class AllTransactionColumns
     public static function availableFspColumns(): array
     {
         return self::FSP_DEFINITIONS;
+    }
+
+    public static function availableAsmColumns(): array
+    {
+        return self::ASM_DEFINITIONS;
     }
 
     public static function isVisible(string $key): bool
@@ -222,6 +245,7 @@ final class AllTransactionColumns
             'eft' => self::eftVisible(),
             'bank' => self::bankVisible(),
             'fsp' => self::fspVisible(),
+            'asm' => self::asmVisible(),
             default => [],
         };
         $keys = array_merge(array_keys($definitions), [
@@ -246,15 +270,12 @@ final class AllTransactionColumns
             'all_transactions_eft_visible_columns' => 'viefund.columns.eft',
             'all_transactions_bank_visible_columns' => 'viefund.columns.bank',
             'all_transactions_fsp_visible_columns' => 'viefund.columns.fsp',
+            'all_transactions_asm_visible_columns' => 'viefund.columns.asm',
         };
         $configured = array_values(array_unique(array_map(
             'strtolower',
             (array) app(RuntimeSettings::class)->get($runtimeKey)
         )));
-        if ($configured === []) {
-            return $definitions;
-        }
-
         $visible = [];
         foreach ($configured as $key) {
             if (array_key_exists($key, $definitions)) {
@@ -262,6 +283,6 @@ final class AllTransactionColumns
             }
         }
 
-        return $visible ?: $definitions;
+        return $visible;
     }
 }

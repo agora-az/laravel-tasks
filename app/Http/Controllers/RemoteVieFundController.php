@@ -6,9 +6,11 @@ use App\Exports\VieFundReportSheetExport;
 use App\Models\RemoteVieFundCustomerTransaction;
 use App\Models\SettlementInstruction;
 use App\Services\Reconciliation\AgraFspBankMatcher;
+use App\Services\Reconciliation\AsmVieFundMatcher;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\VieFundDailyBalanceService;
+use App\Services\VieFund\VieFundMatchStatusSummaryAccumulator;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
@@ -22,6 +24,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -78,7 +81,8 @@ class RemoteVieFundController extends Controller
         private readonly FspMatchedRecordCollapser $fspRecordCollapser,
         private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService,
         private readonly VieFundTransactionWorkingSetManager $workingSetManager,
-        private readonly VieFundTransactionWorkingSetQuery $workingSetQuery
+        private readonly VieFundTransactionWorkingSetQuery $workingSetQuery,
+        private readonly AsmVieFundMatcher $asmVieFundMatcher
     ) {}
 
     public function allTransactions(Request $request): View|JsonResponse
@@ -99,8 +103,9 @@ class RemoteVieFundController extends Controller
         $hasEftMatch = $filterRequest->boolean('filter_has_eft_match');
         $hasAgraFspMatch = $filterRequest->boolean('filter_has_agra_fsp_match');
         $has7960FspMatch = $filterRequest->boolean('filter_has_7960_fsp_match');
+        $hasAsmMatch = $filterRequest->boolean('filter_has_asm_match');
         $matchStatuses = array_values(array_intersect(
-            ['Complete', 'Verify', 'Possible', 'Unknown'],
+            VieFundMatchStatusSummaryAccumulator::STATUSES,
             (array) $filterRequest->query('filter_match_status', [])
         ));
         $currencyCode = (string) $filterRequest->query('filter_currency_code', '00');
@@ -127,6 +132,7 @@ class RemoteVieFundController extends Controller
             'has_reconciliation_match' => $hasEftMatch ?: null,
             'has_agra_fsp_match' => $hasAgraFspMatch ?: null,
             'has_7960_fsp_match' => $has7960FspMatch ?: null,
+            'has_asm_match' => $hasAsmMatch ?: null,
             'match_statuses' => $matchStatuses ?: null,
         ]);
         $perPage = in_array((int) $filterRequest->query('per_page', 100), [50, 100, 250], true)
@@ -189,6 +195,7 @@ class RemoteVieFundController extends Controller
         $visibleBankSummaryColumns = AllTransactionColumns::bankSummaryVisible();
         $visibleBankDetailColumns = AllTransactionColumns::bankDetailVisible();
         $visibleFspColumns = AllTransactionColumns::fspVisible();
+        $visibleAsmColumns = AllTransactionColumns::asmVisible();
         $columnGroupOrder = AllTransactionColumns::groupOrder();
         $workingSetStatus = $this->workingSetManager->status($workingSet);
         if ($asyncPage) {
@@ -206,6 +213,7 @@ class RemoteVieFundController extends Controller
             $bankSummaryHeadings = array_values($visibleBankSummaryColumns);
             $bankHeadings = array_values($visibleBankDetailColumns);
             $fspHeadings = array_values($visibleFspColumns);
+            $asmHeadings = array_values($visibleAsmColumns);
 
             return response()->json([
                 'rows_html' => view('viefund-transactions.partials.rows', compact(
@@ -215,6 +223,7 @@ class RemoteVieFundController extends Controller
                     'bankSummaryHeadings',
                     'bankHeadings',
                     'fspHeadings',
+                    'asmHeadings',
                     'columnGroupOrder',
                     'currencyOptions'
                 ))->render(),
@@ -243,6 +252,7 @@ class RemoteVieFundController extends Controller
             'hasEftMatch',
             'hasAgraFspMatch',
             'has7960FspMatch',
+            'hasAsmMatch',
             'matchStatuses',
             'workingSetStatus',
             'currencyCode',
@@ -258,6 +268,7 @@ class RemoteVieFundController extends Controller
             'visibleBankSummaryColumns',
             'visibleBankDetailColumns',
             'visibleFspColumns',
+            'visibleAsmColumns',
             'columnGroupOrder'
         ));
     }
@@ -312,8 +323,9 @@ class RemoteVieFundController extends Controller
             'filter_has_eft_match' => ['sometimes', 'boolean'],
             'filter_has_agra_fsp_match' => ['sometimes', 'boolean'],
             'filter_has_7960_fsp_match' => ['sometimes', 'boolean'],
-            'filter_match_status' => ['sometimes', 'array', 'max:4'],
-            'filter_match_status.*' => ['string', 'in:Complete,Verify,Possible,Unknown', 'distinct'],
+            'filter_has_asm_match' => ['sometimes', 'boolean'],
+            'filter_match_status' => ['sometimes', 'array', 'max:5'],
+            'filter_match_status.*' => ['string', Rule::in(VieFundMatchStatusSummaryAccumulator::STATUSES), 'distinct'],
         ]);
 
         $transactionTypes = $this->canonicalTransactionTypes((array) ($validated['filter_trx_type'] ?? []));
@@ -381,11 +393,11 @@ class RemoteVieFundController extends Controller
 
         $fspItems = $this->fspRecordCollapser->withFileNetTotals(
             $this->fspRecordCollapser->collapse(SettlementInstruction::query()
-            ->whereIn('source_type', $sourceTypes->values()->all())
-            ->whereIn('source_id', $sourceIds)
-            ->orderBy('settlement_date')
-            ->orderBy('id')
-            ->get(FspMatchedRecordCollapser::queryColumns()))
+                ->whereIn('source_type', $sourceTypes->values()->all())
+                ->whereIn('source_id', $sourceIds)
+                ->orderBy('settlement_date')
+                ->orderBy('id')
+                ->get(FspMatchedRecordCollapser::queryColumns()))
         );
         $fspItemsBySourceId = $fspItems->groupBy(fn($record) => trim((string) $record->source_id));
         $bankMatchesBySource = $sourceTypes->mapWithKeys(fn(string $sourceType) => [
@@ -543,6 +555,22 @@ class RemoteVieFundController extends Controller
         ]);
     }
 
+    public function asmMatches(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'cash_transaction_ids' => ['required', 'array', 'max:250'],
+            'cash_transaction_ids.*' => ['required', 'integer', 'min:1', 'distinct'],
+        ]);
+
+        $records = $this->asmVieFundMatcher
+            ->recordsForCashTransactionIds($validated['cash_transaction_ids'])
+            ->map(fn($items) => collect($items)
+                ->map(fn(array $record) => AllTransactionColumns::filterLinkedPayload($record, 'asm'))
+                ->values());
+
+        return response()->json(['asm_records' => $records]);
+    }
+
     public function allTransactionsCountStatus(Request $request): JsonResponse
     {
         $filterRequest = $this->transactionFilterRequest($request, 'all');
@@ -565,7 +593,7 @@ class RemoteVieFundController extends Controller
         )));
         sort($transactionTypes);
         $matchStatuses = array_values(array_intersect(
-            ['Complete', 'Verify', 'Possible', 'Unknown'],
+            VieFundMatchStatusSummaryAccumulator::STATUSES,
             (array) $filterRequest->query('filter_match_status', [])
         ));
 
@@ -583,6 +611,7 @@ class RemoteVieFundController extends Controller
             'has_reconciliation_match' => $filterRequest->boolean('filter_has_eft_match') ?: null,
             'has_agra_fsp_match' => $filterRequest->boolean('filter_has_agra_fsp_match') ?: null,
             'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
+            'has_asm_match' => $filterRequest->boolean('filter_has_asm_match') ?: null,
             'match_statuses' => $matchStatuses ?: null,
         ]);
         $payload = [
@@ -781,6 +810,7 @@ class RemoteVieFundController extends Controller
             'has_reconciliation_match' => $filterRequest->boolean('filter_has_eft_match') ?: null,
             'has_agra_fsp_match' => $filterRequest->boolean('filter_has_agra_fsp_match') ?: null,
             'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
+            'has_asm_match' => $filterRequest->boolean('filter_has_asm_match') ?: null,
         ]);
         $workingSet = $this->workingSetManager->findReady($filters);
         if (!$workingSet) {
@@ -843,14 +873,16 @@ class RemoteVieFundController extends Controller
             'filter_has_eft_match' => ['sometimes', 'boolean'],
             'filter_has_agra_fsp_match' => ['sometimes', 'boolean'],
             'filter_has_7960_fsp_match' => ['sometimes', 'boolean'],
-            'filter_match_status' => ['sometimes', 'array', 'max:4'],
-            'filter_match_status.*' => ['string', 'in:Complete,Verify,Possible,Unknown', 'distinct'],
+            'filter_has_asm_match' => ['sometimes', 'boolean'],
+            'filter_match_status' => ['sometimes', 'array', 'max:5'],
+            'filter_match_status.*' => ['string', Rule::in(VieFundMatchStatusSummaryAccumulator::STATUSES), 'distinct'],
             'split_sheets' => ['sometimes', 'boolean'],
             'linked_record_layout' => ['sometimes', 'in:single,split'],
             'include_eft_records' => ['sometimes', 'boolean'],
             'include_bank_records' => ['sometimes', 'boolean'],
             'include_fsp_records' => ['sometimes', 'boolean'],
             'include_7960_fsp_records' => ['sometimes', 'boolean'],
+            'include_asm_records' => ['sometimes', 'boolean'],
         ]);
 
         $statusIds = array_values(array_unique(array_map('intval', (array) ($validated['filter_status'] ?? [6]))));
@@ -942,17 +974,19 @@ class RemoteVieFundController extends Controller
         $hasEftMatchArg = $request->boolean('filter_has_eft_match') ? '--has-eft-match' : '';
         $hasAgraFspMatchArg = $request->boolean('filter_has_agra_fsp_match') ? '--has-agra-fsp-match' : '';
         $has7960FspMatchArg = $request->boolean('filter_has_7960_fsp_match') ? '--has-7960-fsp-match' : '';
+        $hasAsmMatchArg = $request->boolean('filter_has_asm_match') ? '--has-asm-match' : '';
         $includeEftRecordsArg = $request->boolean('include_eft_records') ? '--include-eft-records' : '';
         $includeBankRecordsArg = $request->boolean('include_bank_records') ? '--include-bank-records' : '';
         $includeFspRecordsArg = $request->boolean('include_fsp_records') ? '--include-fsp-records' : '';
         $include7960FspRecordsArg = $request->boolean('include_7960_fsp_records') ? '--include-7960-fsp-records' : '';
+        $includeAsmRecordsArg = $request->boolean('include_asm_records') ? '--include-asm-records' : '';
         $linkedRecordLayoutArg = '--linked-record-layout=' . escapeshellarg(
             (string) ($validated['linked_record_layout'] ?? 'split')
         );
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
-            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg(base_path('artisan')),
             escapeshellarg($runId),
@@ -973,10 +1007,12 @@ class RemoteVieFundController extends Controller
             $hasEftMatchArg,
             $hasAgraFspMatchArg,
             $has7960FspMatchArg,
+            $hasAsmMatchArg,
             $includeEftRecordsArg,
             $includeBankRecordsArg,
             $includeFspRecordsArg,
             $include7960FspRecordsArg,
+            $includeAsmRecordsArg,
             $linkedRecordLayoutArg,
             escapeshellarg($outputBase),
             escapeshellarg($statusFile),
@@ -1731,8 +1767,7 @@ class RemoteVieFundController extends Controller
         string $dateBasis,
         ?string $dateFrom,
         ?string $dateTo
-    ): string
-    {
+    ): string {
         $query = SettlementInstruction::query()
             ->where('source_type', $sourceType)
             ->whereNotNull('source_id')
