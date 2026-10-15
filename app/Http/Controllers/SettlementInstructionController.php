@@ -37,7 +37,7 @@ class SettlementInstructionController extends Controller
         $summaryTotalsBySource = [];
         $sourceFilesBySource = [];
 
-        foreach ($validSources as $sourceType) {
+        foreach ([$activeSourceType] as $sourceType) {
             $pageParam = $sourceType === 'fundserv_agra' ? 'agra_page' : 'ltm_page';
             $summaryPageParam = $sourceType === 'fundserv_agra' ? 'agra_summary_page' : 'ltm_summary_page';
 
@@ -57,7 +57,24 @@ class SettlementInstructionController extends Controller
 
             $entriesBySource[$sourceType] = $entriesQuery
                 ->orderByDesc('id')
-                ->paginate(50, ['*'], $pageParam)
+                ->paginate(50, [
+                    'id',
+                    'create_date',
+                    'trade_date',
+                    'settlement_date',
+                    'side',
+                    'order_id',
+                    'source_id',
+                    'fund_account_id',
+                    'fund_id',
+                    'switch_from_fund_id',
+                    'switch_to_fund_id',
+                    'currency',
+                    'gross_amount',
+                    'net_amount',
+                    'settlement_amount',
+                    'source_file',
+                ], $pageParam)
                 ->appends($request->except([$pageParam]));
 
             $totalsQuery = SettlementInstruction::query();
@@ -83,22 +100,36 @@ class SettlementInstructionController extends Controller
                 'currency_totals' => $currencyTotals,
             ];
 
-            $summaryIdQuery = SettlementInstruction::query();
-            $this->applyFilters($summaryIdQuery, $request, $sourceType);
+            $summaryFilterKeys = [
+                'source_file',
+                'side',
+                'currency',
+                'settlement_source',
+                'date_from',
+                'date_to',
+                'search',
+            ];
+            $hasSummaryFilters = collect($summaryFilterKeys)
+                ->contains(fn(string $key) => $request->filled($key));
 
-            $summaryIds = $summaryIdQuery
-                ->whereNotNull('settlement_instruction_summary_id')
-                ->select('settlement_instruction_summary_id')
-                ->distinct()
-                ->pluck('settlement_instruction_summary_id');
+            if ($hasSummaryFilters) {
+                $summaryIdQuery = SettlementInstruction::query();
+                $this->applyFilters($summaryIdQuery, $request, $sourceType);
+                $summaryIds = $summaryIdQuery
+                    ->whereNotNull('settlement_instruction_summary_id')
+                    ->select('settlement_instruction_summary_id')
+                    ->distinct()
+                    ->pluck('settlement_instruction_summary_id');
+                $summaryQuery = SettlementInstructionSummary::query()->whereIn('id', $summaryIds);
+            } else {
+                $summaryQuery = SettlementInstructionSummary::query()->where('source_type', $sourceType);
+            }
 
-            $summaryTotalsBySource[$sourceType] = SettlementInstructionSummary::query()
-                ->whereIn('id', $summaryIds)
+            $summaryTotalsBySource[$sourceType] = (clone $summaryQuery)
                 ->selectRaw('count(*) as summary_count, sum(record_count) as total_summary_records, sum(total_settlement_amount) as total_summary_settlement')
                 ->first();
 
-            $summariesBySource[$sourceType] = SettlementInstructionSummary::query()
-                ->whereIn('id', $summaryIds)
+            $summariesBySource[$sourceType] = (clone $summaryQuery)
                 ->orderByDesc('max_settlement_date')
                 ->orderByDesc('id')
                 ->paginate(25, ['*'], $summaryPageParam)
@@ -129,8 +160,9 @@ class SettlementInstructionController extends Controller
                 $summary->setAttribute('currency_totals', $summaryAmounts->get($summary->id, collect()));
             });
 
-            $sourceFilesBySource[$sourceType] = SettlementInstruction::query()
+            $sourceFilesBySource[$sourceType] = SettlementInstructionSummary::query()
                 ->where('source_type', $sourceType)
+                ->where('record_count', '>', 0)
                 ->select('source_file')
                 ->distinct()
                 ->orderByDesc('source_file')

@@ -231,7 +231,7 @@
     };
 @endphp
 
-@foreach(['fundserv_agra', 'ltm'] as $sourceType)
+@foreach([$activeSourceTab] as $sourceType)
     @php
         $sourceTotals = $totalsBySource[$sourceType] ?? null;
         $sourceEntries = $entriesBySource[$sourceType] ?? null;
@@ -363,7 +363,7 @@
         </div>
     </div>
 
-    @foreach(['fundserv_agra', 'ltm'] as $sourceType)
+    @foreach([$activeSourceTab] as $sourceType)
         @php
             $sourceTotals = $totalsBySource[$sourceType] ?? null;
             $sourceEntries = $entriesBySource[$sourceType];
