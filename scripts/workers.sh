@@ -30,7 +30,8 @@ cleanup() {
     done
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 while true; do
     if ! kill -0 "$general_queue_pid" 2>/dev/null; then

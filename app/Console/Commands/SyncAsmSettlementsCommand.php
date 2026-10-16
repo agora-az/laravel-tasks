@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\AsmSettlementSummary;
+use App\Models\AsmSettlementTransaction;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
@@ -182,9 +183,31 @@ class SyncAsmSettlementsCommand extends Command
         }
 
         if ($eligibleCount === 0) {
+            if (AsmSettlementTransaction::query()->whereDoesntHave('vieFundMatches')->exists()) {
+                $this->writeProgress(
+                    $statusFile,
+                    'Retrying pending ASM mapping to VieFund...',
+                    0,
+                    0,
+                    90,
+                    $startedAt,
+                    ['phase' => 'mapping']
+                );
+                $mapExitCode = Artisan::call('asm:map-viefund');
+                $this->output->write(Artisan::output());
+                if ($mapExitCode !== self::SUCCESS) {
+                    return $this->failSync(
+                        $statusFile,
+                        'No new ASM files were found, and retrying the pending VieFund mapping failed.',
+                        $startedAt
+                    );
+                }
+            }
+
             $message = sprintf(
-                'No new ASM files found. %d remote files matched and are already in the database.',
-                $alreadyImported->count()
+                'No new ASM files found. %d remote files matched and are already in the database.%s',
+                $alreadyImported->count(),
+                isset($mapExitCode) ? ' Pending VieFund mapping completed.' : ''
             );
             $this->finish($statusFile, true, $message, 0, 0, $startedAt);
 

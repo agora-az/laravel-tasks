@@ -857,25 +857,25 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                                 )
                             );
                         }
-                        if ($includeAsmRecords) {
-                            if ($transactionAsmItems->isNotEmpty()) {
-                                array_push(
-                                    $transactionCellGroups['asm'],
-                                    ...$this->asmTransactionDetailCells(
-                                        $transactionAsmItems,
-                                        $fspDetailStyle,
-                                        $fspAmountDetailStyle
-                                    )
-                                );
-                            } else {
-                                array_push(
-                                    $transactionCellGroups['asm'],
-                                    ...$this->emptyDetailCells(
-                                        count($this->asmTransactionDetailHeaders()),
-                                        $fspDetailStyle
-                                    )
-                                );
-                            }
+                    }
+                    if ($includeAsmRecords) {
+                        if ($transactionAsmItems->isNotEmpty()) {
+                            array_push(
+                                $transactionCellGroups['asm'],
+                                ...$this->asmTransactionDetailCells(
+                                    $transactionAsmItems,
+                                    $fspDetailStyle,
+                                    $fspAmountDetailStyle
+                                )
+                            );
+                        } else {
+                            array_push(
+                                $transactionCellGroups['asm'],
+                                ...$this->emptyDetailCells(
+                                    count($this->asmTransactionDetailHeaders()),
+                                    $fspDetailStyle
+                                )
+                            );
                         }
                     }
                     if (!$separateLinkedRecordSheets && $includeBankRecords) {

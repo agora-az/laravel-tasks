@@ -395,7 +395,10 @@ class NavigationMenu
             if ($entry['type'] === 'page') {
                 $path = $this->slug($entry['label'], 'page');
                 $reservedFor = self::RESERVED_STANDALONE_PATHS[$path] ?? null;
-                if ($reservedFor !== null && $reservedFor !== $entry['key']) {
+                if (
+                    ($reservedFor !== null && $reservedFor !== $entry['key'])
+                    || ($reservedFor === null && in_array($path, self::RESERVED_GROUP_SLUGS, true))
+                ) {
                     throw new InvalidArgumentException("The URL /{$path} is reserved by another application page.");
                 }
                 $this->recordPath($paths, $path);

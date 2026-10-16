@@ -192,8 +192,9 @@ content, and map the resulting rows to VieFund automatically. By default the
 connection reuses settlement or bank SFTP credentials and reads `/ASM_Files`:
 
 ```dotenv
+VIEFUND_ALL_TRANSACTIONS_ASM_VISIBLE_COLUMNS=match_status,payment_id,payment_type,payment_type_description,settlement_date,currency,settlement_amount,agra_role,agra_account,source_file
 ASM_SFTP_HOST=
-ASM_SFTP_PORT=22
+ASM_SFTP_PORT=
 ASM_SFTP_USERNAME=
 ASM_SFTP_PASSWORD=
 ASM_SFTP_REMOTE_PATH=/ASM_Files
@@ -203,7 +204,8 @@ ASM_SFTP_DRY_RUN=false
 ```
 
 ASM-specific credentials are optional when the existing `SETTLEMENT_SFTP_*` or
-`BANK_SFTP_*` credentials access the same server. Preview remote, previously
+`BANK_SFTP_*` credentials access the same server. Leave the ASM host, port,
+username, and password unset to reuse that connection. Preview remote, previously
 imported, and eligible file counts without downloading anything:
 
 ```bash
