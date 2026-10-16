@@ -7,6 +7,7 @@ use App\Models\AsmVieFundMatch;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class AsmVieFundMatcher
 {
@@ -328,6 +329,39 @@ class AsmVieFundMatcher
                     DB::table('viefund_transaction_working_set_rows')
                         ->where('working_set_id', $row->working_set_id)
                         ->where('generation', $row->generation)
+                        ->where('cash_transaction_id', $row->cash_transaction_id)
+                        ->update([
+                            'match_status' => $matchStatus,
+                            'has_asm_match' => $records !== [],
+                            'enrichment' => json_encode($enrichment, JSON_THROW_ON_ERROR),
+                            'updated_at' => now(),
+                        ]);
+                });
+
+            if (!Schema::hasTable('viefund_transaction_mirror_rows')) {
+                return;
+            }
+            DB::table('viefund_transaction_mirror_rows')
+                ->whereIn('cash_transaction_id', $cashIds->all())
+                ->get(['cash_transaction_id', 'match_status', 'enrichment'])
+                ->each(function (object $row) use ($recordsByCash): void {
+                    $cashId = (string) (int) $row->cash_transaction_id;
+                    $records = collect($recordsByCash->get($cashId, collect()))->values()->all();
+                    $enrichment = json_decode(
+                        (string) ($row->enrichment ?? '{}'),
+                        true,
+                        512,
+                        JSON_THROW_ON_ERROR
+                    );
+                    $enrichment['asm_items'] = $records;
+                    $matchStatus = $row->match_status;
+                    if ($records !== [] && $matchStatus === EftBankMatchStatusService::UNKNOWN) {
+                        $matchStatus = AllTransactionMatchStatusResolver::ASM_ONLY;
+                    } elseif ($records === [] && $matchStatus === AllTransactionMatchStatusResolver::ASM_ONLY) {
+                        $matchStatus = EftBankMatchStatusService::UNKNOWN;
+                    }
+
+                    DB::table('viefund_transaction_mirror_rows')
                         ->where('cash_transaction_id', $row->cash_transaction_id)
                         ->update([
                             'match_status' => $matchStatus,

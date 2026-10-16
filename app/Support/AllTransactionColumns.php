@@ -210,6 +210,23 @@ final class AllTransactionColumns
     }
 
     /** @return list<string> */
+    public static function mirrorFields(): array
+    {
+        return array_values(array_unique(array_merge(
+            [
+                'cash_transaction_id',
+                'fund_transaction_id',
+                'trust_transaction_id',
+                'transaction_id',
+                'sort_id',
+                'basis_date',
+                'cash_status_id',
+            ],
+            array_filter(array_column(self::DEFINITIONS, 'field'))
+        )));
+    }
+
+    /** @return list<string> */
     public static function visibleKeys(): array
     {
         return array_keys(self::visible());

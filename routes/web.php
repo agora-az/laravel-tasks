@@ -51,6 +51,16 @@ Route::middleware('auth.check')->group(function () {
         Route::get('/settings', [ApplicationSettingsController::class, 'index'])->name('admin.settings.index');
         Route::put('/settings', [ApplicationSettingsController::class, 'update'])->name('admin.settings.update');
         Route::put('/settings/reset', [ApplicationSettingsController::class, 'reset'])->name('admin.settings.reset');
+        Route::get('/settings/mirror-status', [ApplicationSettingsController::class, 'mirrorStatus'])
+            ->name('admin.settings.mirror-status');
+        Route::post('/settings/mirror/start', [ApplicationSettingsController::class, 'startMirror'])
+            ->name('admin.settings.mirror.start');
+        Route::post('/settings/mirror/pause', [ApplicationSettingsController::class, 'pauseMirror'])
+            ->name('admin.settings.mirror.pause');
+        Route::post('/settings/mirror/resume', [ApplicationSettingsController::class, 'resumeMirror'])
+            ->name('admin.settings.mirror.resume');
+        Route::post('/settings/mirror/sync', [ApplicationSettingsController::class, 'syncMirror'])
+            ->name('admin.settings.mirror.sync');
     });
 
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');

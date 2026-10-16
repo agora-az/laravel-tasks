@@ -93,6 +93,13 @@ class VieFundRemoteService
         return $this->repository->fetchAllTransactionExportRowsAfter($search, $filters, $cursor, $limit);
     }
 
+    public function fetchAllTransactionMirrorRowsAfter(array $filters, ?array $cursor, int $limit): Collection
+    {
+        $filters['mirror_fields'] = true;
+
+        return $this->repository->fetchAllTransactionExportRowsAfter(null, $filters, $cursor, $limit);
+    }
+
     public function fetchDailyNetTotals(CarbonInterface $fromDate, CarbonInterface $toDate, array $filters = [], string $basis = 'settlement_date'): Collection
     {
         return $this->repository->fetchDailyNetTotals($fromDate, $toDate, $filters, $basis);

@@ -19,6 +19,25 @@ $columnGroupOrder = $parseColumnList('VIEFUND_ALL_TRANSACTIONS_COLUMN_GROUP_ORDE
 $columnGroupOrder = $columnGroupOrder ?: ['match', 'viefund', 'eft', 'fsp', 'asm', 'bank'];
 
 return [
+    'mirror' => [
+        'data_source' => env('VIEFUND_ALL_TRANSACTIONS_DATA_SOURCE', 'current'),
+        'inception_date' => env('VIEFUND_TRANSACTION_MIRROR_INCEPTION_DATE', env('VIEFUND_REPORT_INCEPTION_DATE')),
+        'currencies' => array_values(array_filter(array_map(
+            'trim',
+            explode(',', env('VIEFUND_TRANSACTION_MIRROR_CURRENCIES', '00,01'))
+        ))),
+        'status_ids' => array_values(array_unique(array_map(
+            'intval',
+            array_filter(explode(',', env('VIEFUND_TRANSACTION_MIRROR_STATUS_IDS', '0,1,2,3,4,5,6')), 'strlen')
+        ))),
+        'batch_size' => (int) env('VIEFUND_TRANSACTION_MIRROR_BATCH_SIZE', 1000),
+        'incremental_lookback_days' => (int) env('VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS', 90),
+        'maintenance_timezone' => env('VIEFUND_MAINTENANCE_TIMEZONE', 'America/Toronto'),
+        'maintenance_drain_start' => env('VIEFUND_MAINTENANCE_DRAIN_START', '18:55'),
+        'maintenance_start' => env('VIEFUND_MAINTENANCE_START', '19:00'),
+        'maintenance_end' => env('VIEFUND_MAINTENANCE_END', '19:20'),
+        'post_snapshot_sync_at' => env('VIEFUND_POST_SNAPSHOT_SYNC_AT', '19:25'),
+    ],
 
     /*
     |--------------------------------------------------------------------------

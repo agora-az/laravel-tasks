@@ -371,7 +371,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $outputOrder = ($filters['output_order'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $comparison = $outputOrder === 'asc' ? '>' : '<';
         $query = $this->buildAllTransactionCashLedgerQuery($search, $filters)
-            ->select(AllTransactionColumns::resultFields(true))
+            ->select(!empty($filters['mirror_fields'])
+                ? AllTransactionColumns::mirrorFields()
+                : AllTransactionColumns::resultFields(true))
             ->whereNotNull($dateColumn)
             ->orderBy($dateColumn, $outputOrder)
             ->orderBy('sort_id', $outputOrder)
@@ -455,7 +457,9 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $batchFilters['cash_transaction_ids_json'] = json_encode($cashTransactionIds->all(), JSON_THROW_ON_ERROR);
         $batchFilters['cash_transaction_ids_prevalidated'] = true;
         $rowsByCashTransaction = $this->buildAllTransactionCashLedgerQuery($search, $batchFilters)
-            ->select(AllTransactionColumns::resultFields(true))
+            ->select(!empty($filters['mirror_fields'])
+                ? AllTransactionColumns::mirrorFields()
+                : AllTransactionColumns::resultFields(true))
             ->get()
             ->keyBy(fn($row) => (string) (int) $row->cash_transaction_id);
 
@@ -693,6 +697,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 'CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id',
                 "COALESCE(fund_meta.fund_transaction_type, CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN trust_deposit_type.NameEN ELSE trust_type.NameEN END, cash_type.NameEN, CAST(ct.iType AS NVARCHAR(100))) AS transaction_type",
                 'cash_status.NameEN AS status',
+                'ct.iStatus AS cash_status_id',
                 'trust_status.NameEN AS trust_status',
                 'CAST(tr.Notes AS NVARCHAR(1000)) AS notes',
                 'ct.dtCreated AS created_date',

@@ -79,7 +79,34 @@ QUEUE_GENERAL_WORKERS=1
 QUEUE_CACHE_WORKERS=1
 CACHE_STORE=database
 APP_ADMIN_ACCEESS=authorized@example.com
+VIEFUND_ALL_TRANSACTIONS_DATA_SOURCE=current
+VIEFUND_TRANSACTION_MIRROR_INCEPTION_DATE=
+VIEFUND_TRANSACTION_MIRROR_CURRENCIES=00,01
+VIEFUND_TRANSACTION_MIRROR_STATUS_IDS=0,1,2,3,4,5,6
+VIEFUND_TRANSACTION_MIRROR_BATCH_SIZE=1000
+VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS=90
+VIEFUND_MAINTENANCE_TIMEZONE=America/Toronto
+VIEFUND_MAINTENANCE_DRAIN_START=18:55
+VIEFUND_MAINTENANCE_START=19:00
+VIEFUND_MAINTENANCE_END=19:20
+VIEFUND_POST_SNAPSHOT_SYNC_AT=19:25
 ```
+
+Set `VIEFUND_TRANSACTION_MIRROR_INCEPTION_DATE` to the earliest VieFund
+transaction date that must be available. Keep
+`VIEFUND_ALL_TRANSACTIONS_DATA_SOURCE=current` during the initial population.
+From **Admin / Application Settings**, start the population, monitor its
+maintenance-adjusted ETA, and select **Local mirror - administrators only** for
+validation after it reports ready. Select **Local mirror - all users** only
+after that validation succeeds. The current source remains available as an
+immediate rollback setting.
+
+Mirror batches stop starting at 6:55 p.m. Eastern, remain paused during the
+7:00–7:20 p.m. VieFund snapshot window, and resume after the five-minute
+stabilization buffer at 7:25 p.m. A scheduled incremental synchronization runs
+at 7:25 p.m.; a second pass at 10:10 p.m. refreshes matching enrichment after
+the nightly EFT, FSP, ASM, and bank imports. During initial population and
+incremental synchronization, users continue reading the last verified source.
 
 The App Service **Startup Command** must be:
 
@@ -148,7 +175,7 @@ Authorize administrators with a comma-separated Azure application setting. The i
 APP_ADMIN_ACCEESS=stacey@coldsnakedigital.com,other@example.com
 ```
 
-Authorized accounts receive an **Admin** navigation link to `/admin/settings`. Export batch sizes, cache TTLs, hydration batch sizes, All Transactions column visibility/order, and the global main-menu layout are stored in MySQL and apply without restarting the application. The menu editor can rename, reorder, and place pages into one-level dropdown groups. Each page has independent **Visible** and **Admin Visible** controls for regular-user and administrator menus. Dropdown groups provide matching bulk controls that update every page in the group and show an indeterminate state when their pages are mixed; the Admin link remains fixed and cannot be hidden there.
+Authorized accounts receive an **Admin** navigation link to `/admin/settings`. Export batch sizes, cache TTLs, hydration batch sizes, the All Transactions source and mirror controls, All Transactions column visibility/order, and the global main-menu layout are stored in MySQL and apply without restarting the application. The menu editor can rename, reorder, and place pages into one-level dropdown groups. Each page has independent **Visible** and **Admin Visible** controls for regular-user and administrator menus. Dropdown groups provide matching bulk controls that update every page in the group and show an indeterminate state when their pages are mixed; the Admin link remains fixed and cannot be hidden there.
 
 Menu URLs are generated from the current hierarchy and presentation labels using lowercase kebab-case slugs. Standalone pages use `/{page}`, while grouped pages use `/{group}/{page}`; for example, Bank / FSP AGRA under Reconciliation is `/reconciliation/bank-fsp-agra`. Renaming a group or page, or moving a page, changes its URL immediately, and previous generated URLs are not retained. Admin saves reject empty slugs, duplicate paths, duplicate group slugs, and names reserved by application endpoints. Stable internal page routes redirect to the current presentation URL and preserve query-string filters.
 

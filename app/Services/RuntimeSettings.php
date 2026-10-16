@@ -26,6 +26,18 @@ class RuntimeSettings
     public function definitions(): array
     {
         return [
+            'viefund.all_transactions.data_source' => [
+                'label' => 'All Transactions data source',
+                'description' => 'Choose the current period-cache path, administrator mirror preview, or the verified local mirror for everyone.',
+                'config' => 'viefund.mirror.data_source',
+                'type' => 'choice',
+                'group' => 'VieFund Transaction Mirror',
+                'options' => [
+                    'current' => 'Current source',
+                    'admin_preview' => 'Local mirror - administrators only',
+                    'local' => 'Local mirror - all users',
+                ],
+            ],
             'viefund.export.rows_per_sheet' => $this->integerDefinition(
                 'Rows per worksheet',
                 'Maximum transaction rows written to each Excel worksheet.',
@@ -213,6 +225,14 @@ class RuntimeSettings
                 throw new InvalidArgumentException(
                     "Value must be between {$definition['min']} and {$definition['max']}."
                 );
+            }
+
+            return $value;
+        }
+        if ($definition['type'] === 'choice') {
+            $value = trim((string) $value);
+            if (!array_key_exists($value, $definition['options'])) {
+                throw new InvalidArgumentException('Unsupported setting value.');
             }
 
             return $value;

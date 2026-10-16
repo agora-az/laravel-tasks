@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Services\Reconciliation\VieFundFundservMatcher;
 use App\Services\VieFund\VieFundExportLinkCache;
+use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Jobs\RefreshVieFundDashboardStats;
 use App\Jobs\RefreshVieFundReportInceptionDates;
@@ -59,6 +60,30 @@ Schedule::call(function (): int {
     ->name('viefund:prune-transaction-working-sets')
     ->dailyAt('20:35')
     ->timezone('America/Toronto')
+    ->onOneServer()
+    ->withoutOverlapping();
+
+Schedule::call(function (): void {
+    $manager = app(VieFundTransactionMirrorManager::class);
+    if ($manager->sync()?->isReady()) {
+        $manager->startIncremental();
+    }
+})
+    ->name('viefund:sync-transaction-mirror-post-snapshot')
+    ->dailyAt(config('viefund.mirror.post_snapshot_sync_at', '19:25'))
+    ->timezone(config('viefund.mirror.maintenance_timezone', 'America/Toronto'))
+    ->onOneServer()
+    ->withoutOverlapping();
+
+Schedule::call(function (): void {
+    $manager = app(VieFundTransactionMirrorManager::class);
+    if ($manager->sync()?->isReady()) {
+        $manager->startIncremental();
+    }
+})
+    ->name('viefund:sync-transaction-mirror-post-imports')
+    ->dailyAt('22:10')
+    ->timezone(config('viefund.mirror.maintenance_timezone', 'America/Toronto'))
     ->onOneServer()
     ->withoutOverlapping();
 

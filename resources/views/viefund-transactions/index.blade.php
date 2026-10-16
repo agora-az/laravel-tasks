@@ -964,7 +964,14 @@
     <div class="card all-transactions-table-card" style="padding:0;overflow:visible;">
         <div class="all-transactions-table-toolbar">
             <div class="all-transactions-toolbar-title-block">
-                @if(!empty($workingSetStatus['id']))
+                @if(!empty($useMirror))
+                    <div class="all-transactions-working-set-row">
+                        <div class="all-transactions-working-set-status all-transactions-working-set-status--ready">
+                            <span class="all-transactions-working-set-status-icon" aria-hidden="true">✓</span>
+                            <span>Verified local mirror</span>
+                        </div>
+                    </div>
+                @elseif(!empty($workingSetStatus['id']))
                     <div class="all-transactions-working-set-row">
                         <button id="all-transactions-cache-control"
                                 class="all-transactions-cache-control {{ !empty($workingSetStatus['ready']) ? 'all-transactions-cache-control--complete' : '' }}"

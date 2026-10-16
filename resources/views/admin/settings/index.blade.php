@@ -18,6 +18,7 @@
     .settings-description { display:block; margin-top:2px; color:#718096; font-size:13px; }
     .settings-default { display:block; margin-top:4px; color:#4a5568; font:12px ui-monospace,SFMono-Regular,Menlo,monospace; }
     .settings-number { width:100%; padding:9px 10px; border:1px solid #a0aec0; border-radius:4px; font:14px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .settings-select { width:100%; padding:9px 10px; border:1px solid #a0aec0; border-radius:4px; background:#fff; color:#2d3748; }
     .settings-reset { width:38px; height:38px; border:1px solid #a0aec0; border-radius:4px; background:#fff; cursor:pointer; font-size:18px; }
     .settings-reset:disabled { opacity:.25; cursor:not-allowed; }
     .settings-columns-scroll { overflow:visible; padding:2px 0 12px; }
@@ -68,6 +69,13 @@
     .navigation-remove { border-color:#c53030; color:#9b2c2c; }
     .settings-actions { position:sticky; bottom:0; display:flex; justify-content:flex-end; padding:16px 0; background:linear-gradient(to bottom,rgba(248,249,250,0),#f8f9fa 25%); }
     .settings-save { border:0; border-radius:4px; background:#1d2f37; color:#fff; padding:11px 20px; font-weight:700; cursor:pointer; }
+    .mirror-status-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:16px 0; }
+    .mirror-status-card { padding:12px; border:1px solid #cbd5e0; border-radius:4px; background:#fff; }
+    .mirror-status-card strong { display:block; margin-top:3px; color:#1d2f37; }
+    .mirror-progress { height:10px; overflow:hidden; border-radius:10px; background:#e2e8f0; }
+    .mirror-progress span { display:block; height:100%; background:#2f855a; transition:width .2s; }
+    .mirror-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .mirror-action { border:1px solid #718096; border-radius:4px; background:#fff; color:#2d3748; padding:8px 12px; cursor:pointer; }
     @media (max-width:760px) {
         .settings-heading { display:block; }
         .settings-heading p { margin-top:10px; }
@@ -83,6 +91,7 @@
         .navigation-group-header .navigation-remove { grid-column:2; }
         .navigation-visible,
         .navigation-remove { grid-column:2; justify-self:start; }
+        .mirror-status-grid { grid-template-columns:1fr 1fr; }
     }
 </style>
 
@@ -100,6 +109,41 @@
             @foreach($errors->all() as $error)<div>{{ $error }}</div>@endforeach
         </div>
     @endif
+
+    <section class="settings-group" data-mirror-status-url="{{ route('admin.settings.mirror-status') }}">
+        <h2>VieFund Transaction Mirror</h2>
+        <p class="settings-group-intro">The initial population and daily snapshot synchronization run in the background. Local cutover options remain unavailable until verification succeeds.</p>
+        <div class="mirror-status-grid">
+            <div class="mirror-status-card"><span class="settings-description">State</span><strong data-mirror-state>{{ $mirrorStatus['state'] ?? 'unavailable' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Phase</span><strong data-mirror-phase>{{ $mirrorStatus['phase'] ?? 'Not started' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Rows</span><strong data-mirror-rows>{{ number_format($mirrorStatus['rows_processed'] ?? 0) }} / {{ isset($mirrorStatus['expected_rows']) ? number_format($mirrorStatus['expected_rows']) : 'calculating' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Throughput</span><strong data-mirror-throughput>{{ isset($mirrorStatus['rows_per_second']) ? number_format($mirrorStatus['rows_per_second'], 1).' rows/sec' : 'Calculating...' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">ETA</span><strong data-mirror-eta>{{ isset($mirrorStatus['eta_seconds']) ? 'About '.ceil($mirrorStatus['eta_seconds'] / 60).' minutes' : 'Calculating ETA...' }}</strong></div>
+        </div>
+        <div class="mirror-progress" aria-label="Mirror population progress"><span data-mirror-progress style="width:{{ $mirrorStatus['progress_pct'] ?? 0 }}%"></span></div>
+        <p class="settings-description" data-mirror-detail>
+            @if(!empty($mirrorStatus['last_error']))
+                Last error: {{ $mirrorStatus['last_error'] }}
+            @elseif(($mirrorStatus['maintenance_phase'] ?? 'available') !== 'available')
+                VieFund is in its scheduled {{ str_replace('_', ' ', $mirrorStatus['maintenance_phase']) }} window.
+            @elseif(!empty($mirrorStatus['synced_through_at']))
+                Last verified synchronization: {{ $mirrorStatus['synced_through_at'] }}.
+            @else
+                Population has not completed.
+            @endif
+        </p>
+        <div class="mirror-actions">
+            @if(in_array($mirrorStatus['state'] ?? null, ['paused', 'failed'], true))
+                <form method="POST" action="{{ route('admin.settings.mirror.resume') }}">@csrf<button class="mirror-action" type="submit">Resume</button></form>
+            @elseif(in_array($mirrorStatus['state'] ?? null, ['queued', 'running', 'maintenance_wait', 'verifying', 'catching_up'], true))
+                <form method="POST" action="{{ route('admin.settings.mirror.pause') }}">@csrf<button class="mirror-action" type="submit">Pause</button></form>
+            @elseif(($mirrorStatus['ready'] ?? false) === true)
+                <form method="POST" action="{{ route('admin.settings.mirror.sync') }}">@csrf<button class="mirror-action" type="submit">Sync now</button></form>
+            @else
+                <form method="POST" action="{{ route('admin.settings.mirror.start') }}">@csrf<button class="mirror-action" type="submit">Start initial population</button></form>
+            @endif
+        </div>
+    </section>
 
     <form method="POST" action="{{ route('admin.settings.update') }}">
         @csrf
@@ -225,9 +269,17 @@
                             <div class="settings-row-copy">
                                 <label class="settings-label" for="setting-{{ Str::slug($setting['key']) }}">{{ $setting['label'] }}</label>
                                 <span class="settings-description">{{ $setting['description'] }}</span>
-                                <span class="settings-default">Default: {{ number_format($setting['default']) }}</span>
+                                <span class="settings-default">Default: {{ $setting['type'] === 'integer' ? number_format($setting['default']) : ($setting['options'][$setting['default']] ?? $setting['default']) }}</span>
                             </div>
-                            <input class="settings-number" id="setting-{{ Str::slug($setting['key']) }}" type="number" name="settings[{{ $setting['key'] }}]" value="{{ old('settings.' . $setting['key'], $setting['value']) }}" min="{{ $setting['min'] }}" max="{{ $setting['max'] }}" required>
+                            @if($setting['type'] === 'choice')
+                                <select class="settings-select" id="setting-{{ Str::slug($setting['key']) }}" name="settings[{{ $setting['key'] }}]" required>
+                                    @foreach($setting['options'] as $optionValue => $optionLabel)
+                                        <option value="{{ $optionValue }}" {{ old('settings.' . $setting['key'], $setting['value']) === $optionValue ? 'selected' : '' }}>{{ $optionLabel }}</option>
+                                    @endforeach
+                                </select>
+                            @else
+                                <input class="settings-number" id="setting-{{ Str::slug($setting['key']) }}" type="number" name="settings[{{ $setting['key'] }}]" value="{{ old('settings.' . $setting['key'], $setting['value']) }}" min="{{ $setting['min'] }}" max="{{ $setting['max'] }}" required>
+                            @endif
                             <button class="settings-reset" type="submit" name="setting_key" value="{{ $setting['key'] }}" formaction="{{ route('admin.settings.reset') }}" formmethod="POST" title="Use deployed default" aria-label="Reset {{ $setting['label'] }}" {{ $setting['overridden'] ? '' : 'disabled' }}>↺</button>
                         </div>
                     @endforeach
@@ -239,6 +291,48 @@
 </main>
 
 <script>
+const mirrorStatusSection = document.querySelector('[data-mirror-status-url]');
+if (mirrorStatusSection) {
+    const formatDuration = (seconds) => {
+        if (seconds === null || seconds === undefined) return 'Calculating ETA...';
+        if (seconds < 60) return 'Less than a minute';
+        if (seconds < 3600) return `About ${Math.ceil(seconds / 60)} minutes`;
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.ceil((seconds % 3600) / 60);
+        return `About ${hours}h${minutes ? ` ${minutes}m` : ''}`;
+    };
+    const refreshMirrorStatus = async () => {
+        try {
+            const response = await fetch(mirrorStatusSection.dataset.mirrorStatusUrl, {
+                headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+            });
+            if (!response.ok) return;
+            const status = await response.json();
+            mirrorStatusSection.querySelector('[data-mirror-state]').textContent = status.state || 'unavailable';
+            mirrorStatusSection.querySelector('[data-mirror-phase]').textContent = status.phase || 'Not started';
+            mirrorStatusSection.querySelector('[data-mirror-rows]').textContent =
+                `${Number(status.rows_processed || 0).toLocaleString()} / ${status.expected_rows === null ? 'calculating' : Number(status.expected_rows).toLocaleString()}`;
+            mirrorStatusSection.querySelector('[data-mirror-throughput]').textContent =
+                status.rows_per_second === null ? 'Calculating...' : `${Number(status.rows_per_second).toLocaleString()} rows/sec`;
+            mirrorStatusSection.querySelector('[data-mirror-eta]').textContent = formatDuration(status.eta_seconds);
+            mirrorStatusSection.querySelector('[data-mirror-progress]').style.width = `${status.progress_pct || 0}%`;
+            mirrorStatusSection.querySelector('[data-mirror-detail]').textContent =
+                status.last_error
+                    ? `Last error: ${status.last_error}`
+                    : status.maintenance_phase !== 'available'
+                    ? `VieFund is in its scheduled ${String(status.maintenance_phase).replaceAll('_', ' ')} window.`
+                    : status.estimated_completion_at
+                        ? `Estimated completion: ${new Date(status.estimated_completion_at).toLocaleString()}.`
+                        : status.synced_through_at
+                            ? `Last verified synchronization: ${new Date(status.synced_through_at).toLocaleString()}.`
+                            : 'Population has not completed.';
+        } catch (error) {
+            console.warn('Unable to refresh VieFund mirror status.', error);
+        }
+    };
+    window.setInterval(refreshMirrorStatus, 5000);
+}
+
 const navigationList = document.querySelector('[data-navigation-list]');
 let draggedNavigationItem = null;
 let navigationGroupSequence = 0;

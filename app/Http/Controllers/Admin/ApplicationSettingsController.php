@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Services\NavigationMenu;
 use App\Services\RuntimeSettings;
+use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Support\AllTransactionColumns;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -15,7 +16,11 @@ use InvalidArgumentException;
 
 class ApplicationSettingsController extends Controller
 {
-    public function index(RuntimeSettings $settings, NavigationMenu $navigation): View
+    public function index(
+        RuntimeSettings $settings,
+        NavigationMenu $navigation,
+        VieFundTransactionMirrorManager $mirrorManager
+    ): View
     {
         $items = [];
         foreach ($settings->definitions() as $key => $definition) {
@@ -27,9 +32,11 @@ class ApplicationSettingsController extends Controller
                 'value' => $settings->get($key),
                 'default' => $settings->default($key),
                 'overridden' => $settings->hasOverride($key),
-                'options' => $definition['type'] === 'columns'
-                    ? $this->orderedColumnOptions($key, $settings->get($key))
-                    : [],
+                'options' => match ($definition['type']) {
+                    'columns' => $this->orderedColumnOptions($key, $settings->get($key)),
+                    'choice' => $definition['options'],
+                    default => [],
+                },
             ];
         }
         $columnGroup = 'VieFund All Transactions - Column Settings';
@@ -48,13 +55,15 @@ class ApplicationSettingsController extends Controller
             'navigationDefaults' => $navigation->defaults(),
             'navigationOverridden' => $navigation->hasOverride(),
             'navigationPages' => $navigation->pages(),
+            'mirrorStatus' => $mirrorManager->status(),
         ]);
     }
 
     public function update(
         Request $request,
         RuntimeSettings $settings,
-        NavigationMenu $navigation
+        NavigationMenu $navigation,
+        VieFundTransactionMirrorManager $mirrorManager
     ): RedirectResponse
     {
         $submitted = (array) $request->input('settings', []);
@@ -71,6 +80,20 @@ class ApplicationSettingsController extends Controller
                 $value = (int) $value;
                 if ($value < $definition['min'] || $value > $definition['max']) {
                     $errors[$key] = "{$definition['label']} must be between {$definition['min']} and {$definition['max']}.";
+                    continue;
+                }
+            } elseif ($definition['type'] === 'choice') {
+                $value = trim((string) $value);
+                if (!array_key_exists($value, $definition['options'])) {
+                    $errors[$key] = "{$definition['label']} contains an unsupported option.";
+                    continue;
+                }
+                try {
+                    if ($key === 'viefund.all_transactions.data_source') {
+                        $mirrorManager->assertSourceModeAllowed($value);
+                    }
+                } catch (InvalidArgumentException $exception) {
+                    $errors[$key] = $exception->getMessage();
                     continue;
                 }
             } elseif ($definition['type'] === 'group_order') {
@@ -121,7 +144,8 @@ class ApplicationSettingsController extends Controller
     public function reset(
         Request $request,
         RuntimeSettings $settings,
-        NavigationMenu $navigation
+        NavigationMenu $navigation,
+        VieFundTransactionMirrorManager $mirrorManager
     ): RedirectResponse
     {
         $key = (string) $request->input('setting_key');
@@ -130,9 +154,57 @@ class ApplicationSettingsController extends Controller
 
             return back()->with('success', 'Navigation now uses its deployed default.');
         }
+        if ($key === 'viefund.all_transactions.data_source') {
+            try {
+                $mirrorManager->assertSourceModeAllowed((string) $settings->default($key));
+            } catch (InvalidArgumentException $exception) {
+                return back()->withErrors([$key => $exception->getMessage()]);
+            }
+        }
         $settings->forget($key);
 
         return back()->with('success', 'The setting now uses its deployed environment default.');
+    }
+
+    public function mirrorStatus(VieFundTransactionMirrorManager $mirrorManager): \Illuminate\Http\JsonResponse
+    {
+        return response()->json($mirrorManager->status());
+    }
+
+    public function startMirror(VieFundTransactionMirrorManager $mirrorManager): RedirectResponse
+    {
+        try {
+            $mirrorManager->startInitial();
+        } catch (InvalidArgumentException $exception) {
+            return back()->withErrors(['mirror' => $exception->getMessage()]);
+        }
+
+        return back()->with('success', 'VieFund transaction mirror population queued.');
+    }
+
+    public function pauseMirror(VieFundTransactionMirrorManager $mirrorManager): RedirectResponse
+    {
+        $mirrorManager->pause();
+
+        return back()->with('success', 'VieFund transaction mirror will remain paused at its last committed checkpoint.');
+    }
+
+    public function resumeMirror(VieFundTransactionMirrorManager $mirrorManager): RedirectResponse
+    {
+        $mirrorManager->resume();
+
+        return back()->with('success', 'VieFund transaction mirror synchronization resumed.');
+    }
+
+    public function syncMirror(VieFundTransactionMirrorManager $mirrorManager): RedirectResponse
+    {
+        try {
+            $mirrorManager->startIncremental();
+        } catch (InvalidArgumentException $exception) {
+            return back()->withErrors(['mirror' => $exception->getMessage()]);
+        }
+
+        return back()->with('success', 'VieFund transaction mirror incremental synchronization queued.');
     }
 
     private function orderedColumnOptions(string $settingKey, array $selected): array

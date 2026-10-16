@@ -15,6 +15,7 @@ use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundWorkingSetBalanceService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
+use App\Services\VieFund\VieFundTransactionMirrorQuery;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use App\Support\AllTransactionColumns;
 use Carbon\Carbon;
@@ -42,6 +43,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
 
     protected $signature = 'report:viefund-all-transactions
         {--run-id=}
+        {--data-source=current}
         {--search=}
         {--customer-name=}
         {--plan-account-id=}
@@ -84,7 +86,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         VieFundExportLinkCache $linkCache,
         VieFundTransactionWorkingSetManager $workingSetManager,
         VieFundTransactionWorkingSetQuery $workingSetQuery,
-        VieFundWorkingSetBalanceService $workingSetBalanceService
+        VieFundWorkingSetBalanceService $workingSetBalanceService,
+        VieFundTransactionMirrorQuery $mirrorQuery
     ): int {
         $startedAt = microtime(true);
         $startedAtIso = now()->toIso8601String();
@@ -110,6 +113,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             }
 
             $search = $this->stringOption('search');
+            $dataSource = $this->stringOption('data-source') === 'mirror' ? 'mirror' : 'current';
             $dateBasis = $this->normalizeDateBasis($this->stringOption('date-basis'));
             $outputOrder = $this->stringOption('output-order') === 'asc' ? 'asc' : 'desc';
             $currencyCode = in_array($this->stringOption('currency-code'), ['00', '01'], true)
@@ -145,8 +149,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'has_asm_match' => $hasAsmMatch,
                 'match_statuses' => $matchStatuses,
             ]);
-            $workingSet = $workingSetManager->findReady($filters);
-            if (!$workingSet) {
+            $workingSet = $dataSource === 'mirror' ? null : $workingSetManager->findReady($filters);
+            if ($dataSource === 'current' && !$workingSet) {
                 throw new \RuntimeException(
                     'A completed local period cache is required. Wait for cache hydration and retry the export.'
                 );
@@ -178,20 +182,24 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'success' => null,
                 'message' => 'Reviewing the matching transaction dates...',
                 'progress_pct' => 2,
-                'data_source' => 'working_set',
-                'working_set_id' => $workingSet->id,
-                'working_set_generation' => $workingSet->readableGeneration(),
+                'data_source' => $dataSource === 'mirror' ? 'mirror' : 'working_set',
+                'working_set_id' => $workingSet?->id,
+                'working_set_generation' => $workingSet?->readableGeneration(),
                 'started_at' => $startedAtIso,
                 'updated_at' => now()->toIso8601String(),
             ]);
 
             $stageStartedAt = microtime(true);
-            $dailyStats = $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters);
+            $dailyStats = $dataSource === 'mirror'
+                ? $mirrorQuery->dailyStats($search ?: null, $filters)
+                : $workingSetQuery->dailyStats($workingSet, $search ?: null, $filters);
             $summarizeDuringExport = $matchStatuses === [];
             $matchStatusSummaryAccumulator = new VieFundMatchStatusSummaryAccumulator();
             $matchStatusSummary = $summarizeDuringExport
                 ? null
-                : $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters);
+                : ($dataSource === 'mirror'
+                    ? $mirrorQuery->matchStatusSummary($search ?: null, $filters)
+                    : $workingSetQuery->matchStatusSummary($workingSet, $search ?: null, $filters));
             $totalTransactions = (int) $dailyStats->sum(fn($row) => (int) $row->transaction_count);
             $overallSelectedNet = (float) $dailyStats->sum(fn($row) => (float) $row->net_amount);
             $firstDate = $dailyStats->isNotEmpty()
@@ -203,7 +211,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             $balanceFromDate = $filters['date_from'] ?? $firstDate;
             $balanceToDate = $filters['date_to'] ?? $lastDate;
             $balanceReport = ($balanceFromDate && $balanceToDate)
-                ? $workingSetBalanceService->get($workingSet)
+                ? ($dataSource === 'mirror'
+                    ? $this->mirrorBalanceReport($mirrorQuery, $filters)
+                    : $workingSetBalanceService->get($workingSet))
                 : [
                     'rows' => [],
                     'opening_balance' => 0.0,
@@ -446,15 +456,15 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                     'updated_at' => now()->toIso8601String(),
                 ]);
                 $stageStartedAt = microtime(true);
-                $rows = $workingSet
-                    ? $workingSetQuery->exportRowsAfter(
-                        $workingSet,
+                $rows = $dataSource === 'mirror'
+                    ? $mirrorQuery->exportRowsAfter(
                         $search ?: null,
                         $filters,
                         $cursor,
                         $databaseBatchSize
                     )
-                    : $remoteService->fetchAllTransactionExportRowsAfter(
+                    : $workingSetQuery->exportRowsAfter(
+                        $workingSet,
                         $search ?: null,
                         $filters,
                         $cursor,
@@ -487,7 +497,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'updated_at' => now()->toIso8601String(),
                     ]);
 
-                    if ($workingSet) {
+                    if ($dataSource === 'mirror' || $workingSet !== null) {
                         $linkedEftItems = $rows
                             ->flatMap(fn($row) => $this->cachedEnrichmentRecords($row, 'eft_items'))
                             ->unique('id')
@@ -591,7 +601,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'started_at' => $startedAtIso,
                         'updated_at' => now()->toIso8601String(),
                     ]);
-                    if ($workingSet) {
+                    if ($dataSource === 'mirror' || $workingSet !== null) {
                         $asmItemsByCashTransaction = $rows->mapWithKeys(fn($row) => [
                             (string) (int) $row->cash_transaction_id => $this->cachedEnrichmentRecords($row, 'asm_items'),
                         ]);
@@ -1100,6 +1110,40 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 @unlink($lockFile);
             }
         }
+    }
+
+    private function mirrorBalanceReport(
+        VieFundTransactionMirrorQuery $mirrorQuery,
+        array $filters
+    ): array {
+        $ledgerFilters = array_intersect_key($filters, array_flip([
+            'date_from',
+            'date_to',
+            'date_basis',
+            'currency_code',
+            'status_ids',
+        ]));
+        $summary = $mirrorQuery->periodSummary($ledgerFilters);
+        $dailyStats = $mirrorQuery->dailyStats(null, $ledgerFilters);
+        $runningBalance = (float) $summary['opening_balance'];
+        $rows = $dailyStats->map(function (object $day) use (&$runningBalance): array {
+            $dailyNet = (float) $day->net_amount;
+            $runningBalance += $dailyNet;
+
+            return [
+                'report_date' => Carbon::parse($day->transaction_date)->toDateString(),
+                'transaction_count' => (int) $day->transaction_count,
+                'daily_net_transactions' => $dailyNet,
+                'running_daily_balance' => $runningBalance,
+            ];
+        })->all();
+
+        return [
+            'rows' => $rows,
+            'opening_balance' => (float) $summary['opening_balance'],
+            'final_balance' => (float) $summary['closing_balance'],
+            'balance_source' => 'Verified local VieFund mirror',
+        ];
     }
 
     private function transactionHeaders(

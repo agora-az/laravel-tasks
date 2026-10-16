@@ -14,6 +14,8 @@ use App\Services\VieFund\VieFundMatchStatusSummaryAccumulator;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
+use App\Services\VieFund\VieFundTransactionMirrorManager;
+use App\Services\VieFund\VieFundTransactionMirrorQuery;
 use App\Support\AllTransactionColumns;
 use Exception;
 use Illuminate\Support\Carbon;
@@ -82,6 +84,8 @@ class RemoteVieFundController extends Controller
         private readonly TransactionBankMatchStatusService $transactionBankMatchStatusService,
         private readonly VieFundTransactionWorkingSetManager $workingSetManager,
         private readonly VieFundTransactionWorkingSetQuery $workingSetQuery,
+        private readonly VieFundTransactionMirrorManager $mirrorManager,
+        private readonly VieFundTransactionMirrorQuery $mirrorQuery,
         private readonly AsmVieFundMatcher $asmVieFundMatcher
     ) {}
 
@@ -141,11 +145,19 @@ class RemoteVieFundController extends Controller
         $connectionError = null;
         $transactions = null;
         $availableTrxTypes = [];
-        $workingSet = $this->workingSetManager->ensure($filters);
+        $useMirror = $this->mirrorManager->shouldUseMirror($request->user());
+        $workingSet = $useMirror ? null : $this->workingSetManager->ensure($filters);
         $workingSetQueryable = $workingSet?->hasQueryableGeneration() ?? false;
 
         try {
-            if ($workingSetQueryable) {
+            if ($useMirror) {
+                $transactions = $this->mirrorQuery->paginate(
+                    $perPage,
+                    max(1, (int) $filterRequest->query('page', 1)),
+                    $search ?: null,
+                    $filters
+                );
+            } elseif ($workingSetQueryable) {
                 $transactions = $this->workingSetQuery->paginate(
                     $workingSet,
                     $perPage,
@@ -161,7 +173,7 @@ class RemoteVieFundController extends Controller
                     $filters['date_to'] ?? null
                 );
             }
-            if (!$workingSetQueryable && $has7960FspMatch) {
+            if (!$useMirror && !$workingSetQueryable && $has7960FspMatch) {
                 $filters['fsp_7960_source_ids_json'] = $this->fspSourceIdsJson(
                     'ltm',
                     $dateBasis,
@@ -169,7 +181,7 @@ class RemoteVieFundController extends Controller
                     $filters['date_to'] ?? null
                 );
             }
-            if (!$workingSetQueryable) {
+            if (!$useMirror && !$workingSetQueryable) {
                 $transactions = $this->remoteService->fetchAllTransactions(
                     $perPage,
                     max(1, (int) $filterRequest->query('page', 1)),
@@ -178,7 +190,9 @@ class RemoteVieFundController extends Controller
                 );
             }
             if (!$asyncPage) {
-                $availableTrxTypes = $this->remoteService->fetchDistinctTrxTypes();
+                $availableTrxTypes = $useMirror
+                    ? $this->mirrorQuery->availableTransactionTypes()
+                    : $this->remoteService->fetchDistinctTrxTypes();
             }
         } catch (Exception $e) {
             Log::error('Unable to load the complete VieFund transaction ledger.', ['exception' => $e]);
@@ -197,7 +211,7 @@ class RemoteVieFundController extends Controller
         $visibleFspColumns = AllTransactionColumns::fspVisible();
         $visibleAsmColumns = AllTransactionColumns::asmVisible();
         $columnGroupOrder = AllTransactionColumns::groupOrder();
-        $workingSetStatus = $this->workingSetManager->status($workingSet);
+        $workingSetStatus = $useMirror ? [] : $this->workingSetManager->status($workingSet);
         if ($asyncPage) {
             if ($connectionError || !$transactions) {
                 return response()->json([
@@ -235,10 +249,13 @@ class RemoteVieFundController extends Controller
             ], 200, $this->exportStatusNoCacheHeaders());
         }
 
-        $inceptionDates = [];
-        foreach (array_keys(self::ALL_TRANSACTION_DATE_BASES) as $basis) {
-            $inceptionDates[$basis] = $this->resolveAllTransactionInceptionDate($basis);
-        }
+        $inceptionDates = $useMirror
+            ? $this->mirrorQuery->inceptionDates($currencyCode)
+            : collect(array_keys(self::ALL_TRANSACTION_DATE_BASES))
+                ->mapWithKeys(fn (string $basis): array => [
+                    $basis => $this->resolveAllTransactionInceptionDate($basis),
+                ])
+                ->all();
         return view('viefund-transactions.index', compact(
             'transactions',
             'connectionError',
@@ -255,6 +272,7 @@ class RemoteVieFundController extends Controller
             'hasAsmMatch',
             'matchStatuses',
             'workingSetStatus',
+            'useMirror',
             'currencyCode',
             'statusIds',
             'dateBasisOptions',
@@ -626,6 +644,19 @@ class RemoteVieFundController extends Controller
             ? (int) $filterRequest->query('per_page', 100)
             : 100;
         $page = max(1, (int) $filterRequest->query('page', 1));
+        if ($this->mirrorManager->shouldUseMirror($request->user())) {
+            $total = $this->mirrorQuery->count($payload['search'] ?: null, $filters);
+
+            return response()->json([
+                'state' => 'complete',
+                'total' => $total,
+                'total_pages' => max(1, (int) ceil($total / $perPage)),
+                'page' => $page,
+                'cached' => true,
+                'source' => 'mirror',
+            ], 200, $this->exportStatusNoCacheHeaders());
+        }
+
         $workingSet = $this->workingSetManager->findQueryable($filters);
         if ($workingSet) {
             $total = $this->workingSetQuery->count($workingSet, $payload['search'] ?: null, $filters);
@@ -734,6 +765,27 @@ class RemoteVieFundController extends Controller
 
             // Deliberately exclude search, customer, transaction type, source, and match
             // filters so this remains a stable cash-ledger summary for the selected period.
+            if ($this->mirrorManager->shouldUseMirror($request->user())) {
+                $summary = $this->mirrorQuery->periodSummary([
+                    'date_from' => $dateFrom->toDateString(),
+                    'date_to' => $dateTo->toDateString(),
+                    'date_basis' => $dateBasis,
+                    'currency_code' => $currencyCode,
+                    'status_ids' => $statusIds,
+                ]);
+                $summary['balance_source'] = 'Verified local VieFund mirror';
+                $summary['uses_snapshots'] = false;
+                $summary['period_label'] = $dateFrom->isSameDay($dateTo)
+                    ? $dateFrom->format('M j, Y')
+                    : ($dateFrom->isSameMonth($dateTo) && $dateFrom->isSameYear($dateTo)
+                        ? $dateFrom->format('M j') . '–' . $dateTo->format('j, Y')
+                        : ($dateFrom->isSameYear($dateTo)
+                            ? $dateFrom->format('M j') . ' – ' . $dateTo->format('M j, Y')
+                            : $dateFrom->format('M j, Y') . ' – ' . $dateTo->format('M j, Y')));
+
+                return response()->json($summary, 200, $this->exportStatusNoCacheHeaders());
+            }
+
             $workingSet = $this->workingSetManager->findReady([
                 'date_from' => $dateFrom->toDateString(),
                 'date_to' => $dateTo->toDateString(),
@@ -812,6 +864,27 @@ class RemoteVieFundController extends Controller
             'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
             'has_asm_match' => $filterRequest->boolean('filter_has_asm_match') ?: null,
         ]);
+        if ($this->mirrorManager->shouldUseMirror($request->user())) {
+            try {
+                $summary = $this->mirrorQuery->matchStatusSummary($search ?: null, $filters);
+
+                return response()->json([
+                    'state' => 'complete',
+                    'currency' => self::ALL_TRANSACTION_CURRENCIES[$currencyCode],
+                    'statuses' => collect($summary)->map(
+                        fn(array $values, string $status): array => array_merge(['status' => $status], $values)
+                    )->values(),
+                    'source' => 'mirror',
+                ], 200, $this->exportStatusNoCacheHeaders());
+            } catch (Throwable $e) {
+                Log::error('Unable to load the mirrored All Transactions match summary.', ['exception' => $e]);
+
+                return response()->json([
+                    'message' => 'The match summary could not be loaded.',
+                ], 503, $this->exportStatusNoCacheHeaders());
+            }
+        }
+
         $workingSet = $this->workingSetManager->findReady($filters);
         if (!$workingSet) {
             return response()->json([
@@ -893,8 +966,9 @@ class RemoteVieFundController extends Controller
             'currency_code' => (string) $validated['filter_currency_code'],
             'status_ids' => $statusIds ?: [6],
         ];
-        $workingSet = $this->workingSetManager->findReady($workingSetFilters);
-        if (!$workingSet) {
+        $useMirror = $this->mirrorManager->shouldUseMirror($request->user());
+        $workingSet = $useMirror ? null : $this->workingSetManager->findReady($workingSetFilters);
+        if (!$useMirror && !$workingSet) {
             $workingSet = $this->workingSetManager->ensure($workingSetFilters);
 
             return response()->json([
@@ -954,9 +1028,9 @@ class RemoteVieFundController extends Controller
             'success' => null,
             'message' => 'All Transactions export queued...',
             'progress_pct' => 0,
-            'data_source' => 'working_set',
-            'working_set_id' => $workingSet->id,
-            'working_set_generation' => $workingSet->readableGeneration(),
+            'data_source' => $useMirror ? 'mirror' : 'working_set',
+            'working_set_id' => $workingSet?->id,
+            'working_set_generation' => $workingSet?->readableGeneration(),
             'started_at' => now()->toIso8601String(),
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
@@ -986,10 +1060,11 @@ class RemoteVieFundController extends Controller
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
-            '%s %s report:viefund-all-transactions --run-id=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-all-transactions --run-id=%s --data-source=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg(base_path('artisan')),
             escapeshellarg($runId),
+            escapeshellarg($useMirror ? 'mirror' : 'current'),
             escapeshellarg(trim((string) ($validated['search'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_customer_name'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_plan_account_id'] ?? ''))),
