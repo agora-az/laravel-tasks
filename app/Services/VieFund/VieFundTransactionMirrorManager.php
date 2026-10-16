@@ -132,9 +132,11 @@ class VieFundTransactionMirrorManager
             $sync = VieFundTransactionMirrorSync::query()
                 ->lockForUpdate()
                 ->findOrFail(VieFundTransactionMirrorSync::SINGLETON_ID);
-            if (in_array($sync->state, ['paused', 'failed'], true) && $sync->sync_generation) {
+            if (in_array($sync->state, ['paused', 'failed', 'verifying'], true) && $sync->sync_generation) {
                 $sync->forceFill([
-                    'state' => $this->availabilityWindow->isBlocked() ? 'maintenance_wait' : 'queued',
+                    'state' => $this->availabilityWindow->isBlocked()
+                        ? 'maintenance_wait'
+                        : ($sync->phase === 'verification' ? 'verifying' : 'queued'),
                     'paused_at' => null,
                     'last_error' => null,
                 ])->save();

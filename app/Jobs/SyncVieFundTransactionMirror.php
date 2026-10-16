@@ -37,7 +37,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
     ): void {
         $sync = VieFundTransactionMirrorSync::singleton()->fresh();
         if (
-            !in_array($sync->state, ['queued', 'running', 'maintenance_wait', 'catching_up'], true)
+            !in_array($sync->state, ['queued', 'running', 'maintenance_wait', 'catching_up', 'verifying'], true)
             || !$sync->sync_generation
         ) {
             return;
@@ -45,6 +45,11 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         if ($availability->isBlocked()) {
             $sync->forceFill(['state' => 'maintenance_wait'])->save();
             $manager->dispatch($availability->nextAvailableAt());
+            return;
+        }
+        if ($sync->phase === 'verification') {
+            $sync->forceFill(['state' => 'verifying', 'last_error' => null])->save();
+            $this->verifyOrContinue($sync, $manager);
             return;
         }
 
@@ -196,22 +201,38 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         }
 
         $sync->forceFill(['state' => 'verifying', 'phase' => 'verification'])->save();
-        DB::table('viefund_transaction_mirror_rows')
+        $manager->dispatch();
+    }
+
+    private function verifyOrContinue(
+        VieFundTransactionMirrorSync $sync,
+        VieFundTransactionMirrorManager $manager
+    ): void {
+        $currencies = array_values((array) $sync->currencies);
+        $generation = (string) $sync->sync_generation;
+        $verificationScope = fn() => DB::table('viefund_transaction_mirror_rows')
             ->whereBetween('created_date', [
                 $sync->target_from_date->copy()->startOfDay(),
                 $sync->target_through_date->copy()->endOfDay(),
             ])
             ->whereIn('currency_code', (array) $sync->currencies)
-            ->whereIn('cash_status_id', (array) $sync->status_ids)
-            ->where('sync_generation', '<>', $sync->sync_generation)
-            ->delete();
+            ->whereIn('cash_status_id', (array) $sync->status_ids);
+        $staleIds = $verificationScope()
+            ->where('sync_generation', '<>', $generation)
+            ->limit(max(100, min(5000, (int) config('viefund.mirror.batch_size', 1000))))
+            ->pluck('cash_transaction_id');
+
+        if ($staleIds->isNotEmpty()) {
+            DB::table('viefund_transaction_mirror_rows')
+                ->whereIn('cash_transaction_id', $staleIds)
+                ->where('sync_generation', '<>', $generation)
+                ->delete();
+            $manager->dispatch();
+            return;
+        }
+
         $verifiedCount = DB::table('viefund_transaction_mirror_rows')
-            ->whereBetween('created_date', [
-                $sync->target_from_date->copy()->startOfDay(),
-                $sync->target_through_date->copy()->endOfDay(),
-            ])
-            ->whereIn('currency_code', (array) $sync->currencies)
-            ->whereIn('cash_status_id', (array) $sync->status_ids)
+            ->where('sync_generation', $generation)
             ->count();
 
         if ($verifiedCount !== (int) $sync->expected_rows) {
