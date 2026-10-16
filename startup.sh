@@ -87,11 +87,13 @@ service nginx reload
 # Laravel optimizations
 cd /home/site/wwwroot
 
-# Ensure Laravel storage directories exist
-mkdir -p storage/framework/sessions
-mkdir -p storage/framework/views
-mkdir -p storage/framework/cache
-mkdir -p storage/logs
+# Ensure Laravel writable directories exist before running any Artisan command.
+mkdir -p \
+    storage/framework/cache/data \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/logs \
+    bootstrap/cache
 
 # Fix permissions
 chmod -R 755 storage bootstrap/cache

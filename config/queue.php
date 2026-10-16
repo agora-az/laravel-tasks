@@ -22,7 +22,7 @@ return [
             'connection' => env('DB_QUEUE_CONNECTION'),
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_VIEFUND_CACHE_QUEUE', 'viefund-cache'),
-            'retry_after' => (int) env('DB_VIEFUND_CACHE_QUEUE_RETRY_AFTER', 300),
+            'retry_after' => max(300, (int) env('DB_VIEFUND_CACHE_QUEUE_RETRY_AFTER', 300)),
             'after_commit' => false,
         ],
     ],
