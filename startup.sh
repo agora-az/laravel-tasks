@@ -3,24 +3,30 @@
 APP_ROOT=/home/site/wwwroot
 APP_READY_PATH="$APP_ROOT/artisan-safe.sh"
 APP_READY_TIMEOUT_SECONDS=120
-STARTUP_LOG_PATH=/home/site/wwwroot/storage/logs/startup.log
+STARTUP_LOG_PATH=/home/LogFiles/startup.log
 SUPERVISOR_DEPENDENCY_PATH=/tmp/python3-pkg-resources.deb
 SUPERVISOR_DEPENDENCY_URL='https://snapshot.debian.org/archive/debian-security/20260831T000000Z/pool/updates/main/s/setuptools/python3-pkg-resources_52.0.0-4%2Bdeb11u2_all.deb'
 SUPERVISOR_DEPENDENCY_SHA256='02a86666b1e705e27eaaca2a379c1009c37a0d1f1db2f75ba4a4bde123f83d52'
+
+mkdir -p "$(dirname "$STARTUP_LOG_PATH")"
+
+log_startup() {
+    local message
+    message="$(date -u '+%Y-%m-%dT%H:%M:%SZ') $1"
+    printf '%s\n' "$message" | tee -a "$STARTUP_LOG_PATH" >&2
+}
 
 wait_for_app_root() {
     local elapsed_seconds=0
 
     while [ ! -f "$APP_READY_PATH" ]; do
         if [ "$elapsed_seconds" -ge "$APP_READY_TIMEOUT_SECONDS" ]; then
-            printf '%s ERROR: Timed out waiting for %s.\n' \
-                "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$APP_READY_PATH" >&2
+            log_startup "ERROR: Timed out waiting for $APP_READY_PATH."
             return 1
         fi
 
         if [ "$elapsed_seconds" -eq 0 ]; then
-            printf '%s Waiting for the App Service webroot at %s...\n' \
-                "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$APP_READY_PATH" >&2
+            log_startup "Waiting for the App Service webroot at $APP_READY_PATH..."
         fi
 
         sleep 1
@@ -28,15 +34,13 @@ wait_for_app_root() {
     done
 }
 
+log_startup "Launching startup script..."
+
 if ! wait_for_app_root; then
     exit 1
 fi
 
 mkdir -p /home/site/wwwroot/storage/logs
-
-log_startup() {
-    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$STARTUP_LOG_PATH"
-}
 
 install_supervisor() {
     if command -v supervisord >/dev/null 2>&1; then
@@ -70,7 +74,7 @@ install_supervisor() {
     command -v supervisord >/dev/null 2>&1
 }
 
-log_startup "Launching startup script..."
+log_startup "App Service webroot is ready."
 
 # Copy custom nginx config
 cp /home/site/wwwroot/default /etc/nginx/sites-available/default

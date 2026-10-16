@@ -83,3 +83,43 @@ jobs:
             --src-path app.zip \
             --type zip \
             --clean true
+
+      - name: Enforce App Service runtime and restart
+        run: |
+          set -euo pipefail
+
+          az webapp config set \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql \
+            --startup-file 'bash /home/site/wwwroot/startup.sh || exit 1' \
+            --always-on true \
+            --output none
+
+          az webapp restart \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql
+
+      - name: Verify application startup
+        run: |
+          set -euo pipefail
+
+          host_name="$(az webapp show \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql \
+            --query defaultHostName \
+            --output tsv)"
+
+          sleep 15
+
+          for attempt in $(seq 1 36); do
+            if curl --fail --silent --show-error --max-time 5 "https://${host_name}/up" > /dev/null; then
+              echo "Application startup verified."
+              exit 0
+            fi
+
+            echo "Waiting for application startup (${attempt}/36)..."
+            sleep 5
+          done
+
+          echo "Application did not become healthy after six minutes." >&2
+          exit 1

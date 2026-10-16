@@ -108,26 +108,25 @@ at 7:25 p.m.; a second pass at 10:10 p.m. refreshes matching enrichment after
 the nightly EFT, FSP, ASM, and bank imports. During initial population and
 incremental synchronization, users continue reading the last verified source.
 
-The App Service **Startup Command** must be:
+The deployment workflow enforces this App Service **Startup Command**:
 
 ```bash
-bash /home/site/startup.sh
+bash /home/site/wwwroot/startup.sh || exit 1
 ```
 
-The deployment package writes the repository copy to
-`/home/site/wwwroot/startup.sh`. After changing that file, update the persistent
-startup script through the Azure SSH console before restarting the App Service:
+Invoking the script through `bash` intentionally avoids depending on executable
+permission bits from the ZIP deployment. It also removes the previous manual
+copy to `/home/site/startup.sh`, which could leave Azure running a stale script.
+The old persistent copy may remain on disk but is no longer used.
 
-```bash
-cp /home/site/startup.sh /home/site/startup.sh.bak
-install -m 755 /home/site/wwwroot/startup.sh /home/site/startup.sh
-```
-
-Enable **Always On** for the App Service so Supervisor's queue worker and
-scheduler continue running when the web application is idle. The startup script
-runs `php artisan migrate --force`, rebuilds Laravel's configuration, route, and
-view caches, and launches PHP-FPM, the queue worker, and scheduler under
-Supervisor.
+The explicit failure branch prevents Azure's generated startup wrapper from
+silently falling through to PHP-FPM when Supervisor setup fails. The workflow
+also enables **Always On**, waits for `/up` after the resulting restart, and
+fails the deployment if the application does not become healthy. The startup
+script runs `php artisan migrate --force`, rebuilds Laravel's configuration,
+route, and view caches, and launches PHP-FPM, the queue worker, and scheduler
+under Supervisor. Early startup diagnostics are written to
+`/home/LogFiles/startup.log`.
 
 Avoid deploying while a matching, import, export, or transaction-cache job is
 actively running. Pause transaction caching and allow the current batch to stop
@@ -143,6 +142,7 @@ php artisan about --only=environment
 supervisorctl status
 php artisan queue:failed
 curl -fsS http://127.0.0.1:8080/up
+tail -100 /home/LogFiles/startup.log
 ```
 
 `laravel-queue-cache-00`, `laravel-queue-general-00`, and `laravel-scheduler`

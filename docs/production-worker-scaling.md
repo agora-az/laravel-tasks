@@ -57,21 +57,27 @@ Increase the job timeout, the overlap-lock expiry, and the cache queue
 
 ## Deployment
 
-The active startup script is persisted outside the deployment root at
-`/home/site/startup.sh`. After deploying a startup-script change:
+The deployment workflow enforces the fail-closed startup command and enables
+Always On:
 
 ```bash
-cp /home/site/startup.sh /home/site/startup.sh.bak
-install -m 755 /home/site/wwwroot/startup.sh /home/site/startup.sh
+bash /home/site/wwwroot/startup.sh || exit 1
 ```
 
-Restart the App Service, then verify:
+Running the deployed script through `bash` requires read access but not an
+executable permission bit, so no post-deployment copy into `/home/site` is
+needed. This also prevents a persistent copied script from falling behind the
+repository version.
+
+The workflow restarts the App Service as part of applying those settings and
+waits for the `/up` health endpoint. After deployment, verify:
 
 ```bash
 cd /home/site/wwwroot
 supervisorctl status
 php artisan schedule:list
 php artisan queue:failed
+tail -100 /home/LogFiles/startup.log
 ```
 
 Expected Supervisor programs are `laravel-queue-cache-00`,
