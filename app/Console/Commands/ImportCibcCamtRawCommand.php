@@ -15,6 +15,7 @@ class ImportCibcCamtRawCommand extends Command
         {--path=resources/data/cibc : Directory containing CAMT XML files}
         {--pattern=*.xml : Glob pattern for files}
         {--truncate : Truncate bank_statement_entries before import}
+        {--replace-existing : Atomically replace existing bank data for each source file}
         {--chunk=500 : Insert chunk size}';
 
     protected $description = 'Import CIBC CAMT XML bank statements into raw storage with no dedupe/filtering';
@@ -24,6 +25,7 @@ class ImportCibcCamtRawCommand extends Command
         $pathOption = $this->scalarOption('path', 'resources/data/cibc');
         $patternOption = $this->scalarOption('pattern', '*.xml');
         $chunkOption = $this->scalarOption('chunk', '500');
+        $replaceExisting = (bool) $this->option('replace-existing');
 
         $directory = base_path($pathOption);
         $pattern = (string) $patternOption;
@@ -67,7 +69,13 @@ class ImportCibcCamtRawCommand extends Command
             ]);
 
             try {
-                $inserted = $this->importSingleFile($filePath, $import->id, $chunkSize);
+                $inserted = DB::transaction(function () use ($filePath, $import, $chunkSize, $replaceExisting) {
+                    if ($replaceExisting) {
+                        $this->deleteExistingFileData(basename($filePath));
+                    }
+
+                    return $this->importSingleFile($filePath, $import->id, $chunkSize);
+                });
 
                 $import->update([
                     'status' => 'completed',
@@ -100,6 +108,29 @@ class ImportCibcCamtRawCommand extends Command
         }
 
         return $totalErrors > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    private function deleteExistingFileData(string $sourceFile): void
+    {
+        $entryCount = BankStatementEntry::query()
+            ->where('source_file', $sourceFile)
+            ->count();
+        $summaryCount = BankStatementSummary::query()
+            ->where('source_file', $sourceFile)
+            ->count();
+
+        if ($entryCount === 0 && $summaryCount === 0) {
+            return;
+        }
+
+        BankStatementEntry::query()
+            ->where('source_file', $sourceFile)
+            ->delete();
+        BankStatementSummary::query()
+            ->where('source_file', $sourceFile)
+            ->delete();
+
+        $this->line("Replacing {$entryCount} entries and {$summaryCount} summaries for {$sourceFile}");
     }
 
     private function importSingleFile(string $filePath, int $importId, int $chunkSize): int

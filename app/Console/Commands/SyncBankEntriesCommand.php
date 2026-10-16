@@ -118,9 +118,39 @@ class SyncBankEntriesCommand extends Command
             return self::FAILURE;
         }
 
+        $completedImportNames = Import::query()
+            ->where('type', 'bank-camt-raw')
+            ->where('status', 'completed')
+            ->distinct()
+            ->pluck('filename')
+            ->all();
+
         $processedNames = Import::query()
             ->where('type', 'bank-camt-raw')
             ->where('status', 'completed')
+            ->whereExists(function ($query) {
+                $query->selectRaw('1')
+                    ->from('bank_statement_summaries')
+                    ->whereColumn('bank_statement_summaries.import_id', 'imports.id');
+            })
+            ->whereNotExists(function ($query) {
+                $query->selectRaw('1')
+                    ->from('bank_statement_entries')
+                    ->whereColumn('bank_statement_entries.source_file', 'imports.filename')
+                    ->whereNull('bank_statement_entries.bank_statement_summary_id');
+            })
+            ->whereNotExists(function ($query) use ($parserVersion) {
+                $query->selectRaw('1')
+                    ->from('bank_statement_entries as entries_without_analysis')
+                    ->whereColumn('entries_without_analysis.source_file', 'imports.filename')
+                    ->whereNotExists(function ($analysisQuery) use ($parserVersion) {
+                        $analysisQuery->selectRaw('1')
+                            ->from('bank_statement_entry_analyses as required_analysis')
+                            ->whereColumn('required_analysis.bank_statement_entry_id', 'entries_without_analysis.id')
+                            ->where('required_analysis.parser_version', $parserVersion);
+                    });
+            })
+            ->distinct()
             ->pluck('filename')
             ->all();
 
@@ -214,6 +244,13 @@ class SyncBankEntriesCommand extends Command
             ->sort()
             ->values();
 
+        $repairCandidateNames = $rebuild
+            ? collect()
+            : $candidateFiles
+                ->filter(fn($name) => in_array($name, $completedImportNames, true))
+                ->reject(fn($name) => in_array($name, $processedNames, true))
+                ->values();
+
         if ($candidateFiles->isEmpty()) {
             $this->info("No remote files matched pattern {$pattern}.");
             $this->writeStatus($statusFile, [
@@ -241,11 +278,15 @@ class SyncBankEntriesCommand extends Command
             $localPendingCount = $localPending->count();
             $toDownloadCount = $toDownload->count();
             $eligibleCount = $localPendingCount + $toDownloadCount;
+            $alreadyProcessedCount = $candidateFiles
+                ->filter(fn($name) => in_array($name, $processedNames, true))
+                ->count();
 
             $message = sprintf(
-                'Dry run complete. %d remote files matched, %d already processed, %d eligible to process (%d local pending, %d to download). No files were downloaded or imported.',
+                'Dry run complete. %d remote files matched, %d complete, %d need summary repair, %d eligible to process (%d local pending, %d to download). No files were downloaded or imported.',
                 $candidateFiles->count(),
-                $candidateFiles->count() - $toDownloadCount,
+                $alreadyProcessedCount,
+                $repairCandidateNames->count(),
                 $eligibleCount,
                 $localPendingCount,
                 $toDownloadCount
@@ -288,7 +329,7 @@ class SyncBankEntriesCommand extends Command
         $this->writeStatus($statusFile, [
             'inProgress' => true,
             'success' => null,
-            'message' => 'Downloading unprocessed files from SFTP...',
+            'message' => 'Downloading new or repairable files from SFTP...',
             'processed_files' => 0,
             'total_files' => $totalFiles,
             'progress_pct' => 0,
@@ -393,25 +434,14 @@ class SyncBankEntriesCommand extends Command
             '--path' => $stagingRelativeDir,
             '--pattern' => '*.xml',
             '--truncate' => $rebuild,
+            '--replace-existing' => true,
         ]);
 
         $this->line(Artisan::output());
 
-        if ($importExit !== 0) {
-            $this->error('Raw CAMT import failed.');
-            $this->cleanupDirectory($stagingDir);
-            $this->writeStatus($statusFile, [
-                'inProgress' => false,
-                'success' => false,
-                'message' => 'Raw CAMT import failed.',
-                'processed_files' => 0,
-                'total_files' => count($stagedFiles),
-                'progress_pct' => 0,
-                'started_at' => $startedAt,
-                'updated_at' => now()->toIso8601String(),
-                'completed_at' => now()->toIso8601String(),
-            ]);
-            return self::FAILURE;
+        $rawImportFailed = $importExit !== 0;
+        if ($rawImportFailed) {
+            $this->warn('Raw CAMT import completed with one or more file failures. Continuing analysis so successfully imported files remain usable.');
         }
 
         $processedCount = 0;
@@ -458,8 +488,15 @@ class SyncBankEntriesCommand extends Command
 
         $this->cleanupDirectory($stagingDir);
 
+        $repairedCount = collect($stagedFiles)
+            ->filter(fn($name) => $repairCandidateNames->contains($name))
+            ->count();
+        $newFileCount = count($stagedFiles) - $repairedCount;
+
         $this->info('Bank entries sync complete.');
         $this->info('Processed files: ' . count($stagedFiles));
+        $this->info('Repaired files: ' . $repairedCount);
+        $this->info('New files: ' . $newFileCount);
         $this->info('Downloaded from SFTP this run: ' . count($downloaded));
         if ($deletedProcessedLocalCount > 0) {
             $this->info('Deleted already-processed local files: ' . $deletedProcessedLocalCount);
@@ -468,15 +505,18 @@ class SyncBankEntriesCommand extends Command
             $this->warn('Failed downloads: ' . count($failed));
         }
 
-        $success = empty($failed) && $analysisFailures === 0;
+        $success = !$rawImportFailed && empty($failed) && $analysisFailures === 0;
         $this->writeStatus($statusFile, [
             'inProgress' => false,
             'success' => $success,
             'message' => $success
-                ? sprintf('Completed bank sync. Processed %d files, deleted %d already-processed local files.', count($stagedFiles), $deletedProcessedLocalCount)
-                : sprintf('Completed with issues. Processed %d files, deleted %d already-processed local files, %d download/stage failures, %d analysis failures.', count($stagedFiles), $deletedProcessedLocalCount, count($failed), $analysisFailures),
+                ? sprintf('Completed bank sync. Processed %d files (%d repaired, %d new), deleted %d already-processed local files.', count($stagedFiles), $repairedCount, $newFileCount, $deletedProcessedLocalCount)
+                : sprintf('Completed with issues. Processed %d files (%d repaired, %d new), deleted %d already-processed local files, raw import failure: %s, %d download/stage failures, %d analysis failures.', count($stagedFiles), $repairedCount, $newFileCount, $deletedProcessedLocalCount, $rawImportFailed ? 'yes' : 'no', count($failed), $analysisFailures),
             'processed_files' => count($stagedFiles),
             'total_files' => count($stagedFiles),
+            'repaired_files' => $repairedCount,
+            'new_files' => $newFileCount,
+            'raw_import_failed' => $rawImportFailed,
             'progress_pct' => 100,
             'started_at' => $startedAt,
             'updated_at' => now()->toIso8601String(),
