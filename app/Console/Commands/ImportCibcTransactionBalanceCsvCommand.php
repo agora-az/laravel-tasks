@@ -5,15 +5,17 @@ namespace App\Console\Commands;
 use App\Models\BankStatementEntry;
 use App\Models\BankStatementSummary;
 use App\Models\Import;
+use App\Services\Bank\BankSftpFileDownloader;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use phpseclib3\Net\SFTP;
 use RuntimeException;
 use Throwable;
 
 class ImportCibcTransactionBalanceCsvCommand extends Command
 {
     private const IMPORT_TYPE = 'bank-transaction-balance-csv';
+
+    private const MONTHLY_PDF_IMPORT_TYPE = 'bank-statement-pdf';
 
     private const CAMT_IMPORT_TYPE = 'bank-camt-raw';
 
@@ -46,7 +48,7 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
 
     protected $description = 'One-off import of a CIBC Transaction Balance CSV, with CAMT data taking priority';
 
-    public function handle(): int
+    public function handle(BankSftpFileDownloader $downloader): int
     {
         $sftpFile = $this->scalarOption('sftp-file');
         if ($sftpFile === '') {
@@ -57,7 +59,14 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
 
         $temporaryDirectory = null;
         try {
-            [$path, $temporaryDirectory] = $this->downloadFromBankSftp($sftpFile);
+            $download = $downloader->download(
+                $sftpFile,
+                'csv',
+                $this->scalarOption('remote-path') ?: null
+            );
+            $path = $download['path'];
+            $temporaryDirectory = $download['directory'];
+            $this->line("Downloaded {$sftpFile} temporarily from the bank SFTP folder.");
 
             return $this->importFile($path);
         } catch (Throwable $e) {
@@ -66,7 +75,7 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
             return self::FAILURE;
         } finally {
             if ($temporaryDirectory !== null) {
-                $this->cleanupTemporaryDirectory($temporaryDirectory);
+                $downloader->cleanup($temporaryDirectory);
                 $this->line('Removed the temporary CSV copy from the web server.');
             }
         }
@@ -155,6 +164,8 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
                         ->delete();
                 }
 
+                $this->removeLowerPriorityPdfData($selectedDays);
+
                 $this->insertDays(
                     $selectedDays,
                     $import->id,
@@ -204,104 +215,6 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
         ));
 
         return self::SUCCESS;
-    }
-
-    /**
-     * @return array{0: string, 1: string}
-     */
-    private function downloadFromBankSftp(string $filename): array
-    {
-        if (
-            $filename === ''
-            || basename($filename) !== $filename
-            || in_array($filename, ['.', '..'], true)
-            || strtolower(pathinfo($filename, PATHINFO_EXTENSION)) !== 'csv'
-        ) {
-            throw new RuntimeException('The SFTP filename must be one plain .csv filename without a directory path.');
-        }
-
-        $host = $this->configuredString('sftp.bank.host');
-        $username = $this->configuredString('sftp.bank.username');
-        $password = $this->configuredString('sftp.bank.password');
-        $port = (int) ($this->configuredString('sftp.bank.port') ?? '22');
-        $remotePath = $this->normalizeRemotePath(
-            $this->scalarOption('remote-path', $this->configuredString('sftp.bank.remote_path') ?? '/')
-        );
-
-        if ($host === null || $username === null || $password === null) {
-            throw new RuntimeException(
-                'Missing bank SFTP credentials. Set BANK_SFTP_HOST, BANK_SFTP_USERNAME, and BANK_SFTP_PASSWORD.'
-            );
-        }
-
-        $temporaryDirectory = storage_path(
-            'app/bank-transaction-balance-csv/' . now()->format('Ymd_His_u') . '_' . bin2hex(random_bytes(4))
-        );
-        if (
-            !is_dir($temporaryDirectory)
-            && !mkdir($temporaryDirectory, 0700, true)
-            && !is_dir($temporaryDirectory)
-        ) {
-            throw new RuntimeException("Unable to create temporary directory: {$temporaryDirectory}");
-        }
-
-        $localPath = $temporaryDirectory . DIRECTORY_SEPARATOR . $filename;
-        $partialPath = $localPath . '.part';
-        $remoteFile = $remotePath === '/' ? "/{$filename}" : "{$remotePath}/{$filename}";
-
-        try {
-            $sftp = new SFTP($host, $port);
-            try {
-                $loggedIn = $sftp->login($username, $password);
-            } catch (Throwable $e) {
-                throw new RuntimeException(
-                    "Unable to connect to bank SFTP host {$host}:{$port}. " . trim($e->getMessage()),
-                    0,
-                    $e
-                );
-            }
-
-            if (!$loggedIn) {
-                throw new RuntimeException('Bank SFTP authentication failed.');
-            }
-
-            $remoteSize = $sftp->filesize($remoteFile);
-            if ($remoteSize === false) {
-                throw new RuntimeException("Remote CSV was not found: {$remoteFile}");
-            }
-
-            if (!$sftp->get($remoteFile, $partialPath)) {
-                throw new RuntimeException("Unable to download remote CSV: {$remoteFile}");
-            }
-
-            $localSize = filesize($partialPath);
-            if ($localSize === false || $localSize !== $remoteSize) {
-                throw new RuntimeException(
-                    "Downloaded CSV size mismatch for {$filename}: expected {$remoteSize} bytes, received "
-                    . ($localSize === false ? 'an unreadable file' : "{$localSize} bytes") . '.'
-                );
-            }
-
-            if (!rename($partialPath, $localPath)) {
-                throw new RuntimeException("Unable to finalize the temporary CSV: {$localPath}");
-            }
-        } catch (Throwable $e) {
-            try {
-                $this->cleanupTemporaryDirectory($temporaryDirectory);
-            } catch (Throwable $cleanupError) {
-                throw new RuntimeException(
-                    $e->getMessage() . ' Temporary file cleanup also failed: ' . $cleanupError->getMessage(),
-                    0,
-                    $e
-                );
-            }
-
-            throw $e;
-        }
-
-        $this->line("Downloaded {$filename} temporarily from the bank SFTP folder.");
-
-        return [$localPath, $temporaryDirectory];
     }
 
     /**
@@ -776,6 +689,64 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
     }
 
     /**
+     * @param array<string, array<string, mixed>> $days
+     */
+    private function removeLowerPriorityPdfData(array $days): void
+    {
+        if (empty($days)) {
+            return;
+        }
+
+        $pdfImportIds = Import::query()
+            ->where('type', self::MONTHLY_PDF_IMPORT_TYPE)
+            ->pluck('id')
+            ->all();
+
+        if (empty($pdfImportIds)) {
+            return;
+        }
+
+        $removedEntries = 0;
+        $removedSummaries = 0;
+
+        foreach ($days as $day) {
+            $removedEntries += BankStatementEntry::query()
+                ->whereIn('import_id', $pdfImportIds)
+                ->where('account_number', $day['account_number'])
+                ->where('currency', $day['currency'])
+                ->where(function ($query) use ($day) {
+                    $query->whereDate('booking_date', $day['date'])
+                        ->orWhereDate('value_date', $day['date']);
+                })
+                ->delete();
+
+            $removedSummaries += BankStatementSummary::query()
+                ->whereIn('import_id', $pdfImportIds)
+                ->where('account_number', $day['account_number'])
+                ->where(function ($query) use ($day) {
+                    $query->where(function ($closingQuery) use ($day) {
+                        $closingQuery
+                            ->whereDate('closing_balance_date', $day['date'])
+                            ->where('closing_balance_currency', $day['currency']);
+                    })->orWhere(function ($openingQuery) use ($day) {
+                        $openingQuery
+                            ->whereNull('closing_balance_date')
+                            ->whereDate('opening_balance_date', $day['date'])
+                            ->where('opening_balance_currency', $day['currency']);
+                    });
+                })
+                ->delete();
+        }
+
+        if ($removedEntries > 0 || $removedSummaries > 0) {
+            $this->line(
+                "CSV priority removed {$removedEntries} PDF entries "
+                . "and {$removedSummaries} PDF summaries."
+            );
+        }
+    }
+
+    /**
      * @param array<string, mixed> $data
      * @param array<string, array<string, mixed>> $selectedDays
      * @param array<string, true> $camtCoverage
@@ -904,47 +875,6 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
     private function coverageKey(string $accountNumber, string $currency, string $date): string
     {
         return $accountNumber . '|' . strtoupper($currency) . '|' . $date;
-    }
-
-    private function configuredString(string $key): ?string
-    {
-        $value = config($key);
-        if (is_array($value)) {
-            $value = collect($value)->first(
-                fn(mixed $candidate) => $candidate !== null && trim((string) $candidate) !== ''
-            );
-        }
-
-        $normalized = trim((string) $value);
-
-        return $normalized !== '' ? $normalized : null;
-    }
-
-    private function normalizeRemotePath(string $remotePath): string
-    {
-        $trimmed = trim($remotePath);
-        if ($trimmed === '' || $trimmed === '/') {
-            return '/';
-        }
-
-        return '/' . trim($trimmed, '/');
-    }
-
-    private function cleanupTemporaryDirectory(string $directory): void
-    {
-        if (!is_dir($directory)) {
-            return;
-        }
-
-        foreach (glob($directory . DIRECTORY_SEPARATOR . '*') ?: [] as $file) {
-            if (is_file($file) && !unlink($file)) {
-                throw new RuntimeException("Unable to delete temporary file: {$file}");
-            }
-        }
-
-        if (is_dir($directory) && !rmdir($directory)) {
-            throw new RuntimeException("Unable to remove temporary directory: {$directory}");
-        }
     }
 
     private function resolvePath(string $path): string

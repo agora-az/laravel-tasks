@@ -42,15 +42,18 @@ fi
 
 mkdir -p /home/site/wwwroot/storage/logs
 
-install_supervisor() {
-    if command -v supervisord >/dev/null 2>&1; then
+install_runtime_dependencies() {
+    if command -v supervisord >/dev/null 2>&1 && \
+       command -v gs >/dev/null 2>&1 && \
+       command -v tesseract >/dev/null 2>&1; then
         return 0
     fi
 
-    log_startup "Installing Supervisor from the configured Debian repositories..."
+    log_startup "Installing Supervisor and local PDF OCR dependencies from the configured Debian repositories..."
 
     if apt-get -o Acquire::Retries=3 update >> "$STARTUP_LOG_PATH" 2>&1 && \
-       DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y supervisor >> "$STARTUP_LOG_PATH" 2>&1; then
+       DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
+           supervisor ghostscript tesseract-ocr >> "$STARTUP_LOG_PATH" 2>&1; then
         return 0
     fi
 
@@ -68,10 +71,13 @@ install_supervisor() {
 
     dpkg -i "$SUPERVISOR_DEPENDENCY_PATH" >> "$STARTUP_LOG_PATH" 2>&1 || return 1
 
-    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y supervisor \
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y \
+        supervisor ghostscript tesseract-ocr \
         >> "$STARTUP_LOG_PATH" 2>&1 || return 1
 
-    command -v supervisord >/dev/null 2>&1
+    command -v supervisord >/dev/null 2>&1 && \
+        command -v gs >/dev/null 2>&1 && \
+        command -v tesseract >/dev/null 2>&1
 }
 
 log_startup "App Service webroot is ready."
@@ -119,9 +125,9 @@ for cache_command in config:cache route:cache view:cache; do
     fi
 done
 
-# Install Supervisor
-if ! install_supervisor; then
-    log_startup "ERROR: Supervisor installation failed. See the preceding log output."
+# Install Supervisor and PDF OCR tools.
+if ! install_runtime_dependencies; then
+    log_startup "ERROR: Runtime dependency installation failed. See the preceding log output."
     exit 1
 fi
 

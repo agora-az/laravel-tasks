@@ -166,9 +166,11 @@ running balances, daily closing balances, and balance continuity between days.
 CAMT data is authoritative. For the same account, currency, and business date,
 the CSV importer skips the entire CSV day whenever an existing CAMT summary or
 entry covers that date. If a CAMT statement is imported later, the CAMT
-importer atomically removes the lower-priority CSV entries and summary for its
-covered dates. This prevents the overlapping April 23, 2026 activity from
-being imported twice and keeps precedence independent of import order.
+importer atomically removes lower-priority CSV and monthly PDF entries and
+summaries for its covered dates. The CSV importer similarly replaces
+lower-priority monthly PDF data for the dates it covers. This prevents
+overlapping activity from being imported twice and keeps the precedence
+`CAMT > Transaction Balance CSV > monthly PDF` independent of import order.
 
 The `resources/data` directory is intentionally excluded from Git and the
 deployment package. For production, upload the CSV to the configured bank SFTP
@@ -193,6 +195,65 @@ deletes rows associated with the CSV import and never deletes CAMT data. Use
 `--skip-analysis` only when analysis will be run separately. The local
 `--path=resources/data/cibc/TransactionBalance.csv` mode remains available for
 development and offline validation.
+
+## Historical CIBC Monthly PDF Statements
+
+Text-based monthly CIBC account-statement PDFs can be imported into the current
+bank entry, daily summary, balance, and analysis tables. The importer validates
+the statement period, account and transit numbers, account-summary totals,
+every transaction's running balance, daily balance continuity, and the final
+closing balance before writing. Debit and credit direction is determined from
+the exact balance arithmetic rather than transaction-description wording. When
+a PDF has no embedded text, the importer automatically renders it with
+Ghostscript and reads it with local Tesseract OCR. Financial statement images
+remain on the application server and are never sent to an external OCR
+service. OCR output must pass the same exact totals and running-balance checks
+as embedded PDF text before it can be imported.
+
+The importer creates one summary per calendar date, including no-activity
+dates. This supports partial months safely: any date already covered by CAMT
+or the Transaction Balance CSV is verified against that higher-priority source
+and skipped, while uncovered dates from the same PDF remain importable. A
+mismatch in daily counts, totals, or balances stops that PDF without changing
+its bank data.
+
+For production, upload the PDFs to the configured bank SFTP folder and preview
+the complete batch before importing:
+
+```bash
+cd /home/site/wwwroot
+php artisan import:cibc-monthly-pdf \
+  --sftp-pattern='*.pdf' \
+  --dry-run
+
+php artisan import:cibc-monthly-pdf \
+  --sftp-pattern='*.pdf'
+```
+
+The pattern can target one exact filename or a smaller batch, such as
+`--sftp-pattern='2023*.pdf'`. Use `--remote-path=/another/folder` only when the
+PDFs are outside `BANK_SFTP_REMOTE_PATH`. Each matching file is downloaded to
+private temporary App Service storage and the web-server copy is removed after
+that file succeeds or fails. OCR page images use a separate private temporary
+directory and are also removed in all outcomes. The SFTP source is never
+modified or deleted. Scanned statements take longer to process than text-based
+PDFs; run the dry run before the production import.
+
+Completed filenames are skipped on later batch runs. Use `--replace-existing`
+to atomically rebuild PDF data for matching filenames; higher-priority CAMT and
+CSV dates are still verified and preserved. The command runs the current `v2`
+bank-entry analysis by default. Local development can use either one file or a
+directory:
+
+```bash
+php artisan import:cibc-monthly-pdf \
+  --path='resources/data/cibc/2025.10 - ADSC - CIBC Trust Account.pdf' \
+  --dry-run
+
+php artisan import:cibc-monthly-pdf \
+  --path=resources/data/cibc \
+  --pattern='2023*.pdf'
+```
 
 ## Application Logins
 

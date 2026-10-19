@@ -11,7 +11,10 @@ use Illuminate\Support\Facades\DB;
 
 class ImportCibcCamtRawCommand extends Command
 {
-    private const TRANSACTION_BALANCE_CSV_IMPORT_TYPE = 'bank-transaction-balance-csv';
+    private const LOWER_PRIORITY_IMPORT_TYPES = [
+        'bank-transaction-balance-csv',
+        'bank-statement-pdf',
+    ];
 
     protected $signature = 'import:cibc-camt-raw
         {--path=resources/data/cibc : Directory containing CAMT XML files}
@@ -276,7 +279,7 @@ class ImportCibcCamtRawCommand extends Command
                 }
             }
 
-            $this->removeLowerPriorityCsvData(
+            $this->removeLowerPriorityBankData(
                 $this->nullIfEmpty($accountNumber),
                 array_values($camtCoverage)
             );
@@ -293,18 +296,18 @@ class ImportCibcCamtRawCommand extends Command
     /**
      * @param array<int, array{currency: string, date: string}> $coverage
      */
-    private function removeLowerPriorityCsvData(?string $accountNumber, array $coverage): void
+    private function removeLowerPriorityBankData(?string $accountNumber, array $coverage): void
     {
         if ($accountNumber === null || empty($coverage)) {
             return;
         }
 
-        $csvImportIds = Import::query()
-            ->where('type', self::TRANSACTION_BALANCE_CSV_IMPORT_TYPE)
+        $lowerPriorityImportIds = Import::query()
+            ->whereIn('type', self::LOWER_PRIORITY_IMPORT_TYPES)
             ->pluck('id')
             ->all();
 
-        if (empty($csvImportIds)) {
+        if (empty($lowerPriorityImportIds)) {
             return;
         }
 
@@ -313,7 +316,7 @@ class ImportCibcCamtRawCommand extends Command
 
         foreach ($coverage as $covered) {
             $removedEntries += BankStatementEntry::query()
-                ->whereIn('import_id', $csvImportIds)
+                ->whereIn('import_id', $lowerPriorityImportIds)
                 ->where('account_number', $accountNumber)
                 ->where('currency', $covered['currency'])
                 ->where(function ($query) use ($covered) {
@@ -323,7 +326,7 @@ class ImportCibcCamtRawCommand extends Command
                 ->delete();
 
             $removedSummaries += BankStatementSummary::query()
-                ->whereIn('import_id', $csvImportIds)
+                ->whereIn('import_id', $lowerPriorityImportIds)
                 ->where('account_number', $accountNumber)
                 ->where(function ($query) use ($covered) {
                     $query->where(function ($closingQuery) use ($covered) {
@@ -342,8 +345,8 @@ class ImportCibcCamtRawCommand extends Command
 
         if ($removedEntries > 0 || $removedSummaries > 0) {
             $this->line(
-                "CAMT priority removed {$removedEntries} CSV entries "
-                . "and {$removedSummaries} CSV summaries for account {$accountNumber}."
+                "CAMT priority removed {$removedEntries} lower-priority entries "
+                . "and {$removedSummaries} lower-priority summaries for account {$accountNumber}."
             );
         }
     }
