@@ -155,6 +155,45 @@ counts through App Service settings rather than editing Supervisor files; keep
 See [Production worker scaling](docs/production-worker-scaling.md) for queue
 ownership, plan-size defaults, deployment checks, and scaling guardrails.
 
+## One-off CIBC Transaction Balance CSV
+
+The historical CIBC `TransactionBalance.csv` export can be imported into the
+same bank entry, daily statement summary, balance, and analysis tables used by
+CAMT statements. The importer validates the complete file before writing,
+including headers, debit and credit totals, transaction counts, row-level
+running balances, daily closing balances, and balance continuity between days.
+
+CAMT data is authoritative. For the same account, currency, and business date,
+the CSV importer skips the entire CSV day whenever an existing CAMT summary or
+entry covers that date. If a CAMT statement is imported later, the CAMT
+importer atomically removes the lower-priority CSV entries and summary for its
+covered dates. This prevents the overlapping April 23, 2026 activity from
+being imported twice and keeps precedence independent of import order.
+
+The `resources/data` directory is intentionally excluded from Git and the
+deployment package. For production, upload the CSV to the configured bank SFTP
+folder. The normal CAMT synchronization only matches XML files, so it will
+ignore the CSV. The one-off importer downloads the exact filename to temporary
+App Service storage, validates or imports it, and removes the temporary
+web-server copy in all outcomes. It does not delete or modify the SFTP source.
+
+```bash
+cd /home/site/wwwroot
+php artisan import:cibc-transaction-balance-csv \
+  --sftp-file=bank_txns_09102025-04232026.csv \
+  --dry-run
+
+php artisan import:cibc-transaction-balance-csv \
+  --sftp-file=bank_txns_09102025-04232026.csv
+```
+
+The command also runs the current `v2` bank-entry analysis. Use
+`--replace-existing` to atomically rerun this same CSV import; replacement only
+deletes rows associated with the CSV import and never deletes CAMT data. Use
+`--skip-analysis` only when analysis will be run separately. The local
+`--path=resources/data/cibc/TransactionBalance.csv` mode remains available for
+development and offline validation.
+
 ## Application Logins
 
 Users sign in with their email address and password. Email matching is case-insensitive, and passwords are stored only as secure hashes. Successful and failed sign-in attempts are recorded in `login_attempts` with the user, normalized email, time, IP address, and browser user agent.

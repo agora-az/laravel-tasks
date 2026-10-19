@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\DB;
 
 class ImportCibcCamtRawCommand extends Command
 {
+    private const TRANSACTION_BALANCE_CSV_IMPORT_TYPE = 'bank-transaction-balance-csv';
+
     protected $signature = 'import:cibc-camt-raw
         {--path=resources/data/cibc : Directory containing CAMT XML files}
         {--pattern=*.xml : Glob pattern for files}
@@ -166,6 +168,18 @@ class ImportCibcCamtRawCommand extends Command
             $balances = $this->extractStatementBalances($statement);
             $openingBalance = $this->firstBalanceByCode($balances, 'OPBD');
             $closingBalance = $this->firstBalanceByCode($balances, 'CLBD');
+            $camtCoverage = [];
+            $priorityBalance = $closingBalance ?? $openingBalance;
+            if (
+                !empty($priorityBalance['balance_date'])
+                && !empty($priorityBalance['currency'])
+            ) {
+                $key = $priorityBalance['currency'] . '|' . $priorityBalance['balance_date'];
+                $camtCoverage[$key] = [
+                    'currency' => $priorityBalance['currency'],
+                    'date' => $priorityBalance['balance_date'],
+                ];
+            }
 
             $summary = BankStatementSummary::create([
                 'import_id' => $importId,
@@ -211,6 +225,22 @@ class ImportCibcCamtRawCommand extends Command
 
                 $additionalInfoNodes = $entry->xpath('./c:NtryDtls/c:TxDtls/c:AddtlTxInf') ?: [];
                 $additionalInfo = $this->joinXmlTextNodes($additionalInfoNodes);
+                $bookingDate = $this->parseDate($this->xpathString($entry, './c:BookgDt/c:Dt'));
+                $valueDate = $this->parseDate($this->xpathString($entry, './c:ValDt/c:Dt'));
+
+                if ($currency !== null) {
+                    foreach ([$bookingDate, $valueDate] as $coveredDate) {
+                        if ($coveredDate === null) {
+                            continue;
+                        }
+
+                        $key = $currency . '|' . $coveredDate;
+                        $camtCoverage[$key] = [
+                            'currency' => $currency,
+                            'date' => $coveredDate,
+                        ];
+                    }
+                }
 
                 $record = [
                     'import_id' => $importId,
@@ -221,8 +251,8 @@ class ImportCibcCamtRawCommand extends Command
                     'account_number' => $this->nullIfEmpty($accountNumber),
                     'entry_index' => $index,
                     'entry_reference' => $this->nullIfEmpty($this->xpathString($entry, './c:NtryRef')),
-                    'booking_date' => $this->parseDate($this->xpathString($entry, './c:BookgDt/c:Dt')),
-                    'value_date' => $this->parseDate($this->xpathString($entry, './c:ValDt/c:Dt')),
+                    'booking_date' => $bookingDate,
+                    'value_date' => $valueDate,
                     'credit_debit_indicator' => $this->nullIfEmpty($this->xpathString($entry, './c:CdtDbtInd')),
                     'status' => $this->nullIfEmpty($this->xpathString($entry, './c:Sts')),
                     'currency' => $this->nullIfEmpty($currency),
@@ -245,6 +275,11 @@ class ImportCibcCamtRawCommand extends Command
                     $batch = [];
                 }
             }
+
+            $this->removeLowerPriorityCsvData(
+                $this->nullIfEmpty($accountNumber),
+                array_values($camtCoverage)
+            );
         }
 
         if (!empty($batch)) {
@@ -253,6 +288,64 @@ class ImportCibcCamtRawCommand extends Command
         }
 
         return $inserted;
+    }
+
+    /**
+     * @param array<int, array{currency: string, date: string}> $coverage
+     */
+    private function removeLowerPriorityCsvData(?string $accountNumber, array $coverage): void
+    {
+        if ($accountNumber === null || empty($coverage)) {
+            return;
+        }
+
+        $csvImportIds = Import::query()
+            ->where('type', self::TRANSACTION_BALANCE_CSV_IMPORT_TYPE)
+            ->pluck('id')
+            ->all();
+
+        if (empty($csvImportIds)) {
+            return;
+        }
+
+        $removedEntries = 0;
+        $removedSummaries = 0;
+
+        foreach ($coverage as $covered) {
+            $removedEntries += BankStatementEntry::query()
+                ->whereIn('import_id', $csvImportIds)
+                ->where('account_number', $accountNumber)
+                ->where('currency', $covered['currency'])
+                ->where(function ($query) use ($covered) {
+                    $query->whereDate('booking_date', $covered['date'])
+                        ->orWhereDate('value_date', $covered['date']);
+                })
+                ->delete();
+
+            $removedSummaries += BankStatementSummary::query()
+                ->whereIn('import_id', $csvImportIds)
+                ->where('account_number', $accountNumber)
+                ->where(function ($query) use ($covered) {
+                    $query->where(function ($closingQuery) use ($covered) {
+                        $closingQuery
+                            ->whereDate('closing_balance_date', $covered['date'])
+                            ->where('closing_balance_currency', $covered['currency']);
+                    })->orWhere(function ($openingQuery) use ($covered) {
+                        $openingQuery
+                            ->whereNull('closing_balance_date')
+                            ->whereDate('opening_balance_date', $covered['date'])
+                            ->where('opening_balance_currency', $covered['currency']);
+                    });
+                })
+                ->delete();
+        }
+
+        if ($removedEntries > 0 || $removedSummaries > 0) {
+            $this->line(
+                "CAMT priority removed {$removedEntries} CSV entries "
+                . "and {$removedSummaries} CSV summaries for account {$accountNumber}."
+            );
+        }
     }
 
     private function xpathString(\SimpleXMLElement $node, string $path): ?string
