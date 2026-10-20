@@ -537,7 +537,7 @@ class VieFundReportsController extends Controller
         $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
         $statusFile = $this->dailyBalanceStatusFile($userId, $runId);
         $logPath = storage_path('logs/viefund-daily-balance-report.log');
-        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
+        $phpPath = config('app.php_cli_path') ?: '/usr/local/bin/php';
         $artisanPath = base_path('artisan');
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;
@@ -789,7 +789,7 @@ class VieFundReportsController extends Controller
         $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
         $statusFile = $this->customerBalancesStatusFile($userId, $runId);
         $logPath = storage_path('logs/viefund-customer-balances-report.log');
-        $phpPath = env('PHP_PATH', '/usr/local/bin/php');
+        $phpPath = config('app.php_cli_path') ?: '/usr/local/bin/php';
         $artisanPath = base_path('artisan');
 
         $hasLiveLock = file_exists($lockFile) && (time() - filemtime($lockFile)) < self::LOCK_TTL_SECONDS;

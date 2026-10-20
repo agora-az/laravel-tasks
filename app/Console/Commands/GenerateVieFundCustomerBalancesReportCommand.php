@@ -147,6 +147,11 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $currencyCode = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '00'));
         $currencyLabel = $currencyCode === '01' ? 'USD' : 'CAD';
 
+        config([
+            'viefund.balance_report_cash_account_scope.currency_code' => $currencyCode ?: null,
+            'viefund.balance_report_cash_account_scope.opened_before' => $simulatedGenerationTime ?: null,
+        ]);
+
         $outputRelativePath = ltrim($outputRelativePath, '/');
         if (!str_starts_with($outputRelativePath, 'reports/')) {
             $outputRelativePath = 'reports/' . basename($outputRelativePath);
