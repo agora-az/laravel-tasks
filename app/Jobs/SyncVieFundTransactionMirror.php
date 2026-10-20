@@ -49,7 +49,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         }
         if ($sync->phase === 'verification') {
             $sync->forceFill(['state' => 'verifying', 'last_error' => null])->save();
-            $this->verifyOrContinue($sync, $manager);
+            $this->verifyOrContinue($sync, $remoteService, $manager);
             return;
         }
 
@@ -62,10 +62,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
 
         try {
             if ($sync->expected_rows === null) {
-                $expected = 0;
-                foreach ((array) $sync->currencies as $currency) {
-                    $expected += $remoteService->countAllTransactions(null, $this->filters($sync, (string) $currency));
-                }
+                $expected = $this->countRemoteRows($sync, $remoteService);
                 $sync->forceFill(['expected_rows' => $expected])->save();
                 $manager->dispatch();
                 return;
@@ -206,6 +203,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
 
     private function verifyOrContinue(
         VieFundTransactionMirrorSync $sync,
+        VieFundRemoteService $remoteService,
         VieFundTransactionMirrorManager $manager
     ): void {
         $currencies = array_values((array) $sync->currencies);
@@ -231,14 +229,19 @@ class SyncVieFundTransactionMirror implements ShouldQueue
             return;
         }
 
-        $verifiedCount = DB::table('viefund_transaction_mirror_rows')
+        $verifiedCount = $verificationScope()
             ->where('sync_generation', $generation)
             ->count();
+        $expectedCount = $this->countRemoteRows($sync, $remoteService);
 
-        if ($verifiedCount !== (int) $sync->expected_rows) {
+        if ($expectedCount !== (int) $sync->expected_rows) {
+            $sync->forceFill(['expected_rows' => $expectedCount])->save();
+        }
+
+        if ($verifiedCount !== $expectedCount) {
             throw new \RuntimeException(sprintf(
-                'Mirror verification failed: VieFund reported %d rows but MySQL contains %d for the synchronized range.',
-                (int) $sync->expected_rows,
+                'Mirror verification failed: VieFund currently reports %d rows but MySQL contains %d for the synchronized range.',
+                $expectedCount,
                 $verifiedCount
             ));
         }
@@ -276,6 +279,21 @@ class SyncVieFundTransactionMirror implements ShouldQueue
             'synced_through_at' => now(),
             'last_error' => null,
         ])->save();
+    }
+
+    private function countRemoteRows(
+        VieFundTransactionMirrorSync $sync,
+        VieFundRemoteService $remoteService
+    ): int {
+        $expected = 0;
+        foreach ((array) $sync->currencies as $currency) {
+            $expected += $remoteService->countAllTransactions(
+                null,
+                $this->filters($sync, (string) $currency)
+            );
+        }
+
+        return $expected;
     }
 
     private function filters(VieFundTransactionMirrorSync $sync, string $currency): array
