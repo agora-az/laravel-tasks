@@ -11,7 +11,7 @@ A Laravel web application for generating and managing reconciliation reports.
 
 ## Requirements
 
-- PHP 8.2 or higher
+- PHP 8.4
 - Composer
 - MySQL database
 - Node.js (optional, for frontend assets)
@@ -70,6 +70,9 @@ terminal.
 
 The GitHub Actions workflow deploys the application on pushes to `main`. Before
 deploying, confirm these App Service settings:
+
+The workflow builds with PHP 8.4 and configures the Linux App Service runtime as
+`PHP|8.4` before deploying the application package.
 
 ```dotenv
 QUEUE_CONNECTION=database

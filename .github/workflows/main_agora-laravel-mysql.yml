@@ -18,8 +18,8 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.2"
-          extensions: mbstring, intl, pdo_mysql, bcmath, openssl
+          php-version: "8.4"
+          extensions: mbstring, intl, pdo_mysql, bcmath, openssl, dom, gd, simplexml, xml, xmlreader, xmlwriter, zip
 
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader --prefer-dist
@@ -74,6 +74,14 @@ jobs:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_45C596F713724017B545964677821373 }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_717678C703E446958CD58D7F82302A27 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_35F6613299DD4FE788FC444D2DB60CFA }}
+
+      - name: Configure App Service PHP runtime
+        run: |
+          az webapp config set \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql \
+            --linux-fx-version 'PHP|8.4' \
+            --output none
 
       - name: Clean deploy ZIP to Azure (CLI)
         run: |

@@ -2,9 +2,10 @@
 
 namespace App\Exports;
 
+use Maatwebsite\Excel\Concerns\Export;
 use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 
-class VieFundCustomerBalancesWorkbookExport implements WithMultipleSheets
+class VieFundCustomerBalancesWorkbookExport implements Export, WithMultipleSheets
 {
     private const ACCOUNTING_CURRENCY_FORMAT = '$#,##0.00;[Red]($#,##0.00);$0.00';
 

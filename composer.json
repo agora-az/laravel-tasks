@@ -3,11 +3,12 @@
     "description": "Laravel web project for generating reconciliation reports",
     "type": "project",
     "require": {
-        "laravel/framework": "^11.0",
+        "php": "^8.4",
+        "laravel/framework": "^12.0",
         "smalot/pdfparser": "^2.12",
-        "phpseclib/phpseclib": "^3.0",
-        "maatwebsite/excel": "^3.1",
-        "openspout/openspout": "^4.0"
+        "phpseclib/phpseclib": "^3.0.57",
+        "maatwebsite/excel": "^4.0",
+        "openspout/openspout": "^4.32"
     },
     "autoload": {
         "psr-4": {
