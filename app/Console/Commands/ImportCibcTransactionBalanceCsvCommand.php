@@ -15,7 +15,10 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
 {
     private const IMPORT_TYPE = 'bank-transaction-balance-csv';
 
-    private const MONTHLY_PDF_IMPORT_TYPE = 'bank-statement-pdf';
+    private const MONTHLY_PDF_IMPORT_TYPES = [
+        'bank-statement-pdf',
+        'bank-statement-td-pdf',
+    ];
 
     private const CAMT_IMPORT_TYPE = 'bank-camt-raw';
 
@@ -698,7 +701,7 @@ class ImportCibcTransactionBalanceCsvCommand extends Command
         }
 
         $pdfImportIds = Import::query()
-            ->where('type', self::MONTHLY_PDF_IMPORT_TYPE)
+            ->whereIn('type', self::MONTHLY_PDF_IMPORT_TYPES)
             ->pluck('id')
             ->all();
 

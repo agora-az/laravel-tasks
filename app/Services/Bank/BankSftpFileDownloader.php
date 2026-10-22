@@ -64,26 +64,48 @@ class BankSftpFileDownloader
         $remoteFile = $directory === '/' ? "/{$filename}" : "{$directory}/{$filename}";
 
         try {
-            $client = $this->client();
-            $remoteSize = $client->filesize($remoteFile);
-            if ($remoteSize === false) {
-                throw new RuntimeException("Remote bank file was not found: {$remoteFile}");
+            $lastError = null;
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                try {
+                    $client = $this->client();
+                    $remoteSize = $client->filesize($remoteFile);
+                    if ($remoteSize === false) {
+                        throw new RuntimeException("Remote bank file was not found: {$remoteFile}");
+                    }
+
+                    if (!$client->get($remoteFile, $partialPath)) {
+                        throw new RuntimeException("Unable to download remote bank file: {$remoteFile}");
+                    }
+
+                    $localSize = filesize($partialPath);
+                    if ($localSize === false || $localSize !== $remoteSize) {
+                        throw new RuntimeException(
+                            "Downloaded file size mismatch for {$filename}: expected {$remoteSize} bytes, received "
+                            . ($localSize === false ? 'an unreadable file' : "{$localSize} bytes") . '.'
+                        );
+                    }
+
+                    if (!rename($partialPath, $localPath)) {
+                        throw new RuntimeException("Unable to finalize the temporary bank file: {$localPath}");
+                    }
+
+                    $lastError = null;
+                    break;
+                } catch (Throwable $e) {
+                    $lastError = $e;
+                    $this->client = null;
+                    if (is_file($partialPath) && !unlink($partialPath)) {
+                        throw new RuntimeException(
+                            "Unable to remove partial bank download: {$partialPath}",
+                            0,
+                            $e
+                        );
+                    }
+                }
             }
 
-            if (!$client->get($remoteFile, $partialPath)) {
-                throw new RuntimeException("Unable to download remote bank file: {$remoteFile}");
-            }
-
-            $localSize = filesize($partialPath);
-            if ($localSize === false || $localSize !== $remoteSize) {
-                throw new RuntimeException(
-                    "Downloaded file size mismatch for {$filename}: expected {$remoteSize} bytes, received "
-                    . ($localSize === false ? 'an unreadable file' : "{$localSize} bytes") . '.'
-                );
-            }
-
-            if (!rename($partialPath, $localPath)) {
-                throw new RuntimeException("Unable to finalize the temporary bank file: {$localPath}");
+            if ($lastError !== null) {
+                throw $lastError;
             }
         } catch (Throwable $e) {
             try {

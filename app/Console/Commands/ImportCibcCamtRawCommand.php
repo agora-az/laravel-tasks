@@ -14,6 +14,7 @@ class ImportCibcCamtRawCommand extends Command
     private const LOWER_PRIORITY_IMPORT_TYPES = [
         'bank-transaction-balance-csv',
         'bank-statement-pdf',
+        'bank-statement-td-pdf',
     ];
 
     protected $signature = 'import:cibc-camt-raw

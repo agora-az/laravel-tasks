@@ -258,6 +258,49 @@ php artisan import:cibc-monthly-pdf \
   --pattern='2023*.pdf'
 ```
 
+## Historical TD Monthly PDF Statements
+
+TD Business Chequing statements use a separate importer because their secured
+PDF format, transaction columns, and per-page totals differ from CIBC. The TD
+importer extracts text locally with Ghostscript, identifies debit and credit
+amounts from the statement columns, and validates every reported running
+balance. It also verifies the combined credit/debit counts and totals from all
+statement pages and requires the opening balance, transactions, totals, and
+closing balance to reconcile exactly before writing.
+
+TD account `0690-5544789` is stored separately from the CIBC account. The
+legitimate July-October 2020 period in which both accounts were active is
+preserved; activity is not deduplicated across different account numbers.
+Consecutive TD statements share a balance-forward date, so the importer starts
+each statement's daily summaries on the following day. This preserves one
+summary per account and calendar date while retaining exact month-to-month
+balance continuity.
+
+For production, upload the TD PDFs to the configured bank SFTP folder, preview
+the complete batch, and then run the import:
+
+```bash
+cd /home/site/wwwroot
+php artisan import:td-monthly-pdf \
+  --sftp-pattern='ADSC Trust AC * Bank Stmt.pdf' \
+  --dry-run
+
+php artisan import:td-monthly-pdf \
+  --sftp-pattern='ADSC Trust AC * Bank Stmt.pdf'
+```
+
+Completed filenames are skipped, `--replace-existing` atomically rebuilds only
+matching TD imports, and parser-v2 analysis runs by default. SFTP downloads are
+retried with a fresh connection when a long-running session is interrupted.
+Temporary server copies are removed after each file. Local validation uses the
+same parser:
+
+```bash
+php artisan import:td-monthly-pdf \
+  --path=resources/data/cibc \
+  --dry-run
+```
+
 ## Application Logins
 
 Users sign in with their email address and password. Email matching is case-insensitive, and passwords are stored only as secure hashes. Successful and failed sign-in attempts are recorded in `login_attempts` with the user, normalized email, time, IP address, and browser user agent.

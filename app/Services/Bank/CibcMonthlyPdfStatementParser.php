@@ -6,7 +6,7 @@ use Carbon\CarbonImmutable;
 use RuntimeException;
 use Smalot\PdfParser\Parser;
 
-class CibcMonthlyPdfStatementParser
+class CibcMonthlyPdfStatementParser implements MonthlyPdfStatementParser
 {
     public function __construct(private readonly PdfOcrTextExtractor $ocrTextExtractor)
     {
