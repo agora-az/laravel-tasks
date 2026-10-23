@@ -74,6 +74,12 @@ deploying, confirm these App Service settings:
 The workflow builds with PHP 8.4 and configures the Linux App Service runtime as
 `PHP|8.4` before deploying the application package.
 
+ZIP deployment waits for package deployment to complete (`--async false`) but
+disables the CLI's separate Linux startup-status polling (`--track-status false`).
+That polling can report a startup timeout even when Kudu marks the deployment
+active and the app is healthy. Package deployment errors still fail the job;
+the subsequent explicit restart and `/up` check verify application startup.
+
 ```dotenv
 QUEUE_CONNECTION=database
 DB_QUEUE_RETRY_AFTER=3700

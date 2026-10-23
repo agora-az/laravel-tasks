@@ -90,6 +90,8 @@ jobs:
             --name agora-laravel-mysql \
             --src-path app.zip \
             --type zip \
+            --async false \
+            --track-status false \
             --clean true
 
       - name: Enforce App Service runtime and restart
