@@ -16,12 +16,20 @@ log_startup() {
     printf '%s\n' "$message" | tee -a "$STARTUP_LOG_PATH" >&2
 }
 
+report_startup_failure() {
+    log_startup "$1"
+    if [ -s "$STARTUP_LOG_PATH" ]; then
+        printf 'Recent startup log output:\n' >&2
+        tail -n 200 "$STARTUP_LOG_PATH" >&2
+    fi
+}
+
 wait_for_app_root() {
     local elapsed_seconds=0
 
     while [ ! -f "$APP_READY_PATH" ]; do
         if [ "$elapsed_seconds" -ge "$APP_READY_TIMEOUT_SECONDS" ]; then
-            log_startup "ERROR: Timed out waiting for $APP_READY_PATH."
+            report_startup_failure "ERROR: Timed out waiting for $APP_READY_PATH."
             return 1
         fi
 
@@ -113,21 +121,21 @@ rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
 # Run database migrations before serving code that depends on the new schema.
 if ! bash /home/site/wwwroot/artisan-safe.sh migrate --force >> "$STARTUP_LOG_PATH" 2>&1; then
-    log_startup "ERROR: Database migration failed."
+    report_startup_failure "ERROR: Database migration failed."
     exit 1
 fi
 
 # Cache Laravel config/routes/views and fail visibly if deployment is invalid.
 for cache_command in config:cache route:cache view:cache; do
     if ! bash /home/site/wwwroot/artisan-safe.sh "$cache_command" >> "$STARTUP_LOG_PATH" 2>&1; then
-        log_startup "ERROR: php artisan $cache_command failed."
+        report_startup_failure "ERROR: php artisan $cache_command failed."
         exit 1
     fi
 done
 
 # Install Supervisor and PDF OCR tools.
 if ! install_runtime_dependencies; then
-    log_startup "ERROR: Runtime dependency installation failed. See the preceding log output."
+    report_startup_failure "ERROR: Runtime dependency installation failed."
     exit 1
 fi
 
@@ -173,7 +181,7 @@ if ! pgrep -x php-fpm >/dev/null 2>&1; then
     log_startup "Starting PHP-FPM..."
 
     if ! /usr/local/sbin/php-fpm -D >> "$STARTUP_LOG_PATH" 2>&1; then
-        log_startup "ERROR: PHP-FPM failed to start."
+        report_startup_failure "ERROR: PHP-FPM failed to start."
         exit 1
     fi
 fi
