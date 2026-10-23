@@ -20,6 +20,7 @@ class AsmVieFundMatcher
     /** @return array<string, int> */
     public function rebuild(): array
     {
+        $totalTransactions = AsmSettlementTransaction::query()->count();
         $previousCashTransactionIds = AsmVieFundMatch::query()
             ->whereNotNull('viefund_cash_transaction_id')
             ->pluck('viefund_cash_transaction_id')
@@ -27,6 +28,18 @@ class AsmVieFundMatcher
             ->unique()
             ->values();
         $transactions = AsmSettlementTransaction::query()
+            ->select([
+                'id',
+                'settlement_date',
+                'settlement_amount',
+                'currency',
+                'sender_company_code',
+                'sender_account_number',
+                'receiver_company_code',
+                'receiver_dealer_account_number',
+                'receiver_fund_company_account_number',
+                'receiver_intermediary_account_number',
+            ])
             ->orderBy('id')
             ->get();
         $accounts = $transactions
@@ -49,38 +62,6 @@ class AsmVieFundMatcher
             ->map(fn($id) => (int) $id)
             ->unique()
             ->values();
-        $dateFrom = $transactions->min('settlement_date');
-        $dateTo = $transactions->max('settlement_date');
-        $cashTransactions = collect();
-
-        if ($planIds->isNotEmpty() && $dateFrom && $dateTo) {
-            $cashTransactions = $planIds
-                ->chunk(1000)
-                ->flatMap(fn(Collection $chunk) => $remote
-                    ->table('dbo.UB_CashTrx')
-                    ->whereIn('iPlanID', $chunk->all())
-                    ->where('iStatus', 6)
-                    ->whereBetween('dtSettlement', [
-                        Carbon::parse($dateFrom)->startOfDay(),
-                        Carbon::parse($dateTo)->endOfDay(),
-                    ])
-                    ->get([
-                        'ID',
-                        'iPlanID',
-                        'iCashAccountID',
-                        'iType',
-                        'Type',
-                        'TypeDetail',
-                        'iStatus',
-                        'dtTrade',
-                        'dtProcessing',
-                        'dtSettlement',
-                        'mAmount',
-                        'SourceID',
-                        'dtCreated',
-                    ]))
-                ->groupBy(fn(object $cash) => (string) (int) $cash->iPlanID);
-        }
 
         $now = now();
         $rows = [];
@@ -90,73 +71,113 @@ class AsmVieFundMatcher
             self::ACCOUNT_UNRESOLVED => 0,
         ];
 
-        foreach ($transactions as $transaction) {
-            $account = $this->agraAccount($transaction);
-            $matchingPlans = $account ? collect($plans->get($account, collect())) : collect();
-            $matchingPlans = $this->plansForCurrency($matchingPlans, $transaction->currency);
+        $transactions
+            ->groupBy(fn(AsmSettlementTransaction $transaction) => $transaction->settlement_date?->format('Y-m') ?? 'undated')
+            ->each(function (Collection $periodTransactions) use (
+                $remote,
+                $planIds,
+                $plans,
+                $now,
+                &$rows,
+                &$counts
+            ): void {
+                $cashTransactions = collect();
+                $dateFrom = $periodTransactions->min('settlement_date');
+                $dateTo = $periodTransactions->max('settlement_date');
 
-            if ($matchingPlans->isEmpty()) {
-                $rows[] = $this->mappingRow(
-                    $transaction,
-                    $account,
-                    null,
-                    null,
-                    self::ACCOUNT_UNRESOLVED,
-                    'agra_account_not_found',
-                    0,
-                    [],
-                    $now
-                );
-                ++$counts[self::ACCOUNT_UNRESOLVED];
-                continue;
-            }
-
-            $exactMatches = $matchingPlans->flatMap(function (object $plan) use ($cashTransactions, $transaction) {
-                return collect($cashTransactions->get((string) (int) $plan->ID, collect()))
-                    ->filter(fn(object $cash) => $this->isExactCashMatch($transaction, $cash))
-                    ->map(fn(object $cash) => ['plan' => $plan, 'cash' => $cash]);
-            })->values();
-
-            if ($exactMatches->isNotEmpty()) {
-                foreach ($exactMatches as $match) {
-                    $cash = $match['cash'];
-                    $rows[] = $this->mappingRow(
-                        $transaction,
-                        $account,
-                        (int) $match['plan']->ID,
-                        (int) $cash->ID,
-                        self::EXACT,
-                        'account_settlement_date_currency_signed_amount_confirmed',
-                        1,
-                        [
-                            'cash_status' => (int) $cash->iStatus,
-                            'cash_type_id' => (int) $cash->iType,
-                            'cash_type' => trim((string) $cash->Type),
-                            'cash_type_detail' => trim((string) $cash->TypeDetail),
-                            'cash_source_id' => trim((string) $cash->SourceID),
-                        ],
-                        $now
-                    );
+                if ($planIds->isNotEmpty() && $dateFrom && $dateTo) {
+                    $cashTransactions = $planIds
+                        ->chunk(1000)
+                        ->flatMap(fn(Collection $chunk) => $remote
+                            ->table('dbo.UB_CashTrx')
+                            ->whereIn('iPlanID', $chunk->all())
+                            ->where('iStatus', 6)
+                            ->whereBetween('dtSettlement', [
+                                Carbon::parse($dateFrom)->startOfDay(),
+                                Carbon::parse($dateTo)->endOfDay(),
+                            ])
+                            ->get([
+                                'ID',
+                                'iPlanID',
+                                'iType',
+                                'Type',
+                                'TypeDetail',
+                                'iStatus',
+                                'dtSettlement',
+                                'mAmount',
+                                'SourceID',
+                            ]))
+                        ->groupBy(fn(object $cash) => (string) (int) $cash->iPlanID);
                 }
-                ++$counts[self::EXACT];
-                continue;
-            }
 
-            foreach ($matchingPlans as $plan) {
-                $rows[] = $this->mappingRow(
-                    $transaction,
-                    $account,
-                    (int) $plan->ID,
-                    null,
-                    self::ACCOUNT_ONLY,
-                    'agra_account_currency',
-                    0.5,
-                    [],
-                    $now
-                );
-            }
-            ++$counts[self::ACCOUNT_ONLY];
-        }
+                foreach ($periodTransactions as $transaction) {
+                    $account = $this->agraAccount($transaction);
+                    $matchingPlans = $account ? collect($plans->get($account, collect())) : collect();
+                    $matchingPlans = $this->plansForCurrency($matchingPlans, $transaction->currency);
+
+                    if ($matchingPlans->isEmpty()) {
+                        $rows[] = $this->mappingRow(
+                            $transaction,
+                            $account,
+                            null,
+                            null,
+                            self::ACCOUNT_UNRESOLVED,
+                            'agra_account_not_found',
+                            0,
+                            [],
+                            $now
+                        );
+                        ++$counts[self::ACCOUNT_UNRESOLVED];
+                        continue;
+                    }
+
+                    $exactMatches = $matchingPlans->flatMap(function (object $plan) use ($cashTransactions, $transaction) {
+                        return collect($cashTransactions->get((string) (int) $plan->ID, collect()))
+                            ->filter(fn(object $cash) => $this->isExactCashMatch($transaction, $cash))
+                            ->map(fn(object $cash) => ['plan' => $plan, 'cash' => $cash]);
+                    })->values();
+
+                    if ($exactMatches->isNotEmpty()) {
+                        foreach ($exactMatches as $match) {
+                            $cash = $match['cash'];
+                            $rows[] = $this->mappingRow(
+                                $transaction,
+                                $account,
+                                (int) $match['plan']->ID,
+                                (int) $cash->ID,
+                                self::EXACT,
+                                'account_settlement_date_currency_signed_amount_confirmed',
+                                1,
+                                [
+                                    'cash_status' => (int) $cash->iStatus,
+                                    'cash_type_id' => (int) $cash->iType,
+                                    'cash_type' => trim((string) $cash->Type),
+                                    'cash_type_detail' => trim((string) $cash->TypeDetail),
+                                    'cash_source_id' => trim((string) $cash->SourceID),
+                                ],
+                                $now
+                            );
+                        }
+                        ++$counts[self::EXACT];
+                        continue;
+                    }
+
+                    foreach ($matchingPlans as $plan) {
+                        $rows[] = $this->mappingRow(
+                            $transaction,
+                            $account,
+                            (int) $plan->ID,
+                            null,
+                            self::ACCOUNT_ONLY,
+                            'agra_account_currency',
+                            0.5,
+                            [],
+                            $now
+                        );
+                    }
+                    ++$counts[self::ACCOUNT_ONLY];
+                }
+            });
 
         DB::transaction(function () use ($rows): void {
             AsmVieFundMatch::query()->delete();
@@ -171,12 +192,16 @@ class AsmVieFundMatcher
             ->map(fn($id) => (int) $id)
             ->unique()
             ->values();
-        $this->refreshWorkingSetRows(
-            $previousCashTransactionIds->merge($currentCashTransactionIds)->unique()->values(),
-            $currentCashTransactionIds
-        );
+        $affectedCashTransactionIds = $previousCashTransactionIds
+            ->merge($currentCashTransactionIds)
+            ->unique()
+            ->values();
+        unset($rows, $transactions, $plans, $planIds);
+        gc_collect_cycles();
 
-        return $counts + ['total' => $transactions->count()];
+        $this->refreshWorkingSetRows($affectedCashTransactionIds);
+
+        return $counts + ['total' => $totalTransactions];
     }
 
     /** @return Collection<string, Collection<int, array<string, mixed>>> */
@@ -193,7 +218,7 @@ class AsmVieFundMatcher
         }
 
         return AsmVieFundMatch::query()
-            ->with('transaction')
+            ->with(['transaction:id,payment_id,payment_type,payment_type_description,settlement_date,currency,settlement_amount,sender_company_code,receiver_company_code,source_file'])
             ->where('match_status', self::EXACT)
             ->whereIn('viefund_cash_transaction_id', $ids)
             ->get()
@@ -296,16 +321,14 @@ class AsmVieFundMatcher
         ];
     }
 
-    private function refreshWorkingSetRows(
-        Collection $affectedCashTransactionIds,
-        Collection $currentCashTransactionIds
-    ): void {
+    private function refreshWorkingSetRows(Collection $affectedCashTransactionIds): void
+    {
         if ($affectedCashTransactionIds->isEmpty()) {
             return;
         }
 
-        $recordsByCash = $this->recordsForCashTransactionIds($currentCashTransactionIds);
-        $affectedCashTransactionIds->chunk(500)->each(function (Collection $cashIds) use ($recordsByCash): void {
+        $affectedCashTransactionIds->chunk(500)->each(function (Collection $cashIds): void {
+            $recordsByCash = $this->recordsForCashTransactionIds($cashIds);
             DB::table('viefund_transaction_working_set_rows')
                 ->whereIn('cash_transaction_id', $cashIds->all())
                 ->get(['working_set_id', 'generation', 'cash_transaction_id', 'match_status', 'enrichment'])

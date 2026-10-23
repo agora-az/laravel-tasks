@@ -337,8 +337,8 @@ class SyncAsmSettlementsCommand extends Command
             array_values(array_diff($staged, $importedAfterSync))
         )));
 
-        $mapExitCode = self::FAILURE;
-        if ($importExitCode === self::SUCCESS) {
+        $mapExitCode = null;
+        if ($importedAfterSync !== []) {
             $this->writeProgress(
                 $statusFile,
                 'Mapping ASM files to VieFund...',
@@ -360,6 +360,11 @@ class SyncAsmSettlementsCommand extends Command
         $this->cleanupDirectory($stagingDir);
 
         $success = $importExitCode === self::SUCCESS && $mapExitCode === self::SUCCESS && $failed === [];
+        $mappingResult = match ($mapExitCode) {
+            self::SUCCESS => 'completed',
+            null => 'not run because no files were imported',
+            default => 'failed',
+        };
         $message = $success
             ? sprintf(
                 'Completed ASM sync. Imported and mapped %d new files; %d remote files were already in the database.',
@@ -370,7 +375,7 @@ class SyncAsmSettlementsCommand extends Command
                 'ASM sync completed with issues: %d files imported and %d files failed; VieFund mapping %s.',
                 count($importedAfterSync),
                 count($failed),
-                $mapExitCode === self::SUCCESS ? 'completed' : 'failed'
+                $mappingResult
             );
         $this->finish(
             $statusFile,

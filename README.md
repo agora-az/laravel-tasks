@@ -400,7 +400,11 @@ php artisan asm:import-settlements
 
 The importer validates the ASM headers, records file-level summaries, imports
 row-level payment data, and skips workbooks whose file content was already
-imported. The **Data Sources → ASM Files** page shows file summaries above the
+imported. If a workbook's settlement-date header is damaged, the importer only
+recovers the column when exactly one unmapped column contains the date encoded
+in the `asm_AGRA_YYYYMMDD.xlsx` filename on every populated row. Successful
+workbooks are still mapped to VieFund when another workbook in the same sync
+fails. The **Data Sources → ASM Files** page shows file summaries above the
 filterable transaction table and provides the SFTP sync action.
 
 After importing new ASM workbooks, map their AGRA-side accounts to VieFund plans

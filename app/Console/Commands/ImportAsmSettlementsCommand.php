@@ -10,6 +10,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
+use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 class ImportAsmSettlementsCommand extends Command
 {
@@ -183,6 +184,22 @@ class ImportAsmSettlementsCommand extends Command
                 $normalized = $this->normalizeHeader($sheet->getCell([$column, 1])->getFormattedValue());
                 if (isset(self::EXPECTED_HEADERS[$normalized])) {
                     $headerMap[self::EXPECTED_HEADERS[$normalized]] = $column;
+                }
+            }
+
+            if (!isset($headerMap['settlement_date'])) {
+                $settlementDateColumn = $this->inferSettlementDateColumn(
+                    $sheet,
+                    $filename,
+                    $highestColumn,
+                    $highestRow,
+                    $headerMap
+                );
+                if ($settlementDateColumn !== null) {
+                    $headerMap['settlement_date'] = $settlementDateColumn;
+                    $this->warn(
+                        "Recovered the settlement date column in {$filename} from values matching its filename date."
+                    );
                 }
             }
 
@@ -437,6 +454,57 @@ class ImportAsmSettlementsCommand extends Command
     private function normalizeHeader(mixed $value): string
     {
         return preg_replace('/[^a-z0-9]/', '', strtolower(trim((string) $value))) ?? '';
+    }
+
+    /** @param array<string, int> $headerMap */
+    private function inferSettlementDateColumn(
+        Worksheet $sheet,
+        string $filename,
+        int $highestColumn,
+        int $highestRow,
+        array $headerMap
+    ): ?int {
+        if (!preg_match('/^asm_AGRA_(\d{8})\.xlsx$/i', $filename, $matches)) {
+            return null;
+        }
+
+        try {
+            $expectedDate = Carbon::createFromFormat('Ymd', $matches[1])->toDateString();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $mappedColumns = array_values($headerMap);
+        $candidates = [];
+
+        for ($column = 1; $column <= $highestColumn; $column++) {
+            if (in_array($column, $mappedColumns, true)) {
+                continue;
+            }
+
+            $hasValue = false;
+            for ($rowNumber = 2; $rowNumber <= $highestRow; $rowNumber++) {
+                $value = trim((string) $sheet->getCell([$column, $rowNumber])->getFormattedValue());
+                if ($value === '') {
+                    continue;
+                }
+
+                $hasValue = true;
+                try {
+                    if ($this->parseDate($value) !== $expectedDate) {
+                        continue 2;
+                    }
+                } catch (\Throwable) {
+                    continue 2;
+                }
+            }
+
+            if ($hasValue) {
+                $candidates[] = $column;
+            }
+        }
+
+        return count($candidates) === 1 ? $candidates[0] : null;
     }
 
     private function nullIfEmpty(mixed $value): ?string
