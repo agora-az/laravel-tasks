@@ -49,6 +49,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         {--plan-account-id=}
         {--transaction-id=}
         {--source-id=}
+        {--fund-id=}
         {--date-from=}
         {--date-to=}
         {--date-basis=settlement_date}
@@ -136,6 +137,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'plan_account_id' => $this->stringOption('plan-account-id'),
                 'trx_id' => $this->stringOption('transaction-id'),
                 'source_id' => $this->stringOption('source-id'),
+                'fund_id' => $this->stringOption('fund-id'),
                 'date_from' => $this->stringOption('date-from'),
                 'date_to' => $this->stringOption('date-to'),
                 'date_basis' => $dateBasis,
@@ -2277,6 +2279,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ['Plan Account Filter', $filters['plan_account_id'] ?? 'All plan accounts'],
             ['Transaction ID Filter', $filters['trx_id'] ?? 'All transaction IDs'],
             ['Source ID Filter', $filters['source_id'] ?? 'All source IDs'],
+            ['Fund / Unit ID Filter', $filters['fund_id'] ?? 'All funds'],
             ['Date From', $filters['date_from'] ?? 'Inception'],
             ['Date To', $filters['date_to'] ?? 'Latest available'],
             ['Date Basis', $this->dateBasisLabel((string) ($filters['date_basis'] ?? 'settlement_date'))],

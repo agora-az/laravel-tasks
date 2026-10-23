@@ -160,6 +160,7 @@ class VieFundTransactionWorkingSetQuery
         $this->applyContains($query, 'plan_account_id', $filters['plan_account_id'] ?? null);
         $this->applyTransactionIds($query, $filters['trx_id'] ?? null);
         $this->applyContains($query, 'source_id', $filters['source_id'] ?? null);
+        $this->applyContains($query, 'fund_id', $filters['fund_id'] ?? null);
 
         if (!empty($filters['trx_type'])) {
             $query->whereIn('transaction_type', (array) $filters['trx_type']);

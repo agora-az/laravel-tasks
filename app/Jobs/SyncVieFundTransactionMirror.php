@@ -109,6 +109,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 'trust_transaction_id' => $row->trust_transaction_id ? (int) $row->trust_transaction_id : null,
                 'ledger_relationship' => $this->nullableString($row->ledger_relationship ?? null),
                 'source_id' => $this->nullableString($row->source_id ?? null),
+                'fund_id' => $this->nullableString($row->fund_id ?? null),
                 'customer_name' => $this->nullableString($row->customer_name ?? null),
                 'plan_account_id' => $this->nullableString($row->plan_account_id ?? null),
                 'transaction_type' => $this->nullableString($row->transaction_type ?? null),

@@ -69,7 +69,7 @@ The report screens may use locally refreshed data for speed, but the chosen repo
 
 ## All Transactions period caches
 
-The **All Transactions** page builds a local period cache on demand. A cache is identified by its date basis, start date, end date, currency, and selected VieFund statuses. Changing any of those criteria creates or reuses a separate cache; it does not overwrite rows belonging to another period. Search text plus customer, plan account, transaction, source, transaction-type, and match filters are applied within the applicable period cache and do not start another hydration process.
+The **All Transactions** page builds a local period cache on demand. A cache is identified by its date basis, start date, end date, currency, and selected VieFund statuses. Changing any of those criteria creates or reuses a separate cache; it does not overwrite rows belonging to another period. Search text plus customer, plan account, transaction, source, fund/unit ID, transaction-type, and match filters are applied within the applicable period cache and do not start another hydration process. The filtered totals show cash outflows, inflows, and net amount for all matching rows; the separate period balance summary remains unfiltered by those detail criteria. Excel exports use the same detail filters.
 
 Several different period requests made close together can therefore queue several independent hydration processes. Reusing the same broad period criteria shares the existing process across users. Prefer allowing one useful period to finish before requesting several substantially different periods, especially for long date ranges.
 

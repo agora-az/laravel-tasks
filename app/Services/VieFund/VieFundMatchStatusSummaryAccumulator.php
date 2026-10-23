@@ -24,6 +24,8 @@ final class VieFundMatchStatusSummaryAccumulator
             $this->summary[$status] = [
                 'viefund_count' => 0,
                 'viefund_total' => 0.0,
+                'viefund_outflow' => 0.0,
+                'viefund_inflow' => 0.0,
                 'eft_count' => 0,
                 'eft_total' => 0.0,
                 'fsp_count' => 0,
@@ -58,7 +60,13 @@ final class VieFundMatchStatusSummaryAccumulator
             ? $row->match_status
             : 'Unknown';
         ++$this->summary[$status]['viefund_count'];
-        $this->summary[$status]['viefund_total'] += (float) ($row->amount ?? 0);
+        $amount = (float) ($row->amount ?? 0);
+        $this->summary[$status]['viefund_total'] += $amount;
+        if ($amount < 0) {
+            $this->summary[$status]['viefund_outflow'] += abs($amount);
+        } elseif ($amount > 0) {
+            $this->summary[$status]['viefund_inflow'] += $amount;
+        }
 
         $enrichment = $row->cached_enrichment ?? null;
         if (!is_array($enrichment)) {

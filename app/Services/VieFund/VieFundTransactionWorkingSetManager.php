@@ -12,7 +12,7 @@ use Throwable;
 
 class VieFundTransactionWorkingSetManager
 {
-    private const CACHE_VERSION = 3;
+    private const CACHE_VERSION = 4;
 
     public function __construct(private readonly RuntimeSettings $runtimeSettings) {}
 

@@ -479,6 +479,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return empty($search)
             && empty($filters['trx_id'])
             && empty($filters['source_id'])
+            && empty($filters['fund_id'])
             && empty($filters['trx_type'])
             && !array_key_exists('agra_fsp_source_ids_json', $filters)
             && !array_key_exists('fsp_7960_source_ids_json', $filters);
@@ -601,9 +602,12 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_FundTrxLookup as fm_l", 'fm_l.iTrxID', '=', 'fm_t.ID')
             ->leftJoin("{$schema}.UB_Def_TrxType as fm_tt", 'fm_tt.ID', '=', 'fm_l.iType')
             ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('fm_fc.iCashTrxID', $filters['cash_transaction_ids']))
+            ->when(!empty($filters['fund_id']), fn($query) => $query
+                ->where('fm_l.FundID', 'like', '%' . trim((string) $filters['fund_id']) . '%'))
             ->selectRaw('fm_fc.iCashTrxID AS cash_id')
             ->selectRaw('MIN(fm_t.ID) AS fund_transaction_id')
             ->selectRaw('MIN(CAST(fm_t.SourceID AS NVARCHAR(100))) AS fund_source_id')
+            ->selectRaw('MIN(CAST(fm_l.FundID AS NVARCHAR(100))) AS fund_id')
             ->selectRaw("MIN(ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))) AS fund_transaction_type")
             ->when(array_key_exists('agra_fsp_source_ids_json', $filters), function ($query) use ($filters) {
                 $query->whereRaw(
@@ -685,6 +689,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                     || array_key_exists('fsp_7960_source_ids_json', $filters),
                 fn($query) => $query->whereNotNull('fund_meta.cash_id')
             )
+            ->when(!empty($filters['fund_id']), fn($query) => $query->whereNotNull('fund_meta.cash_id'))
             ->selectRaw(implode(', ', [
                 "CONCAT('C-', CAST(ct.ID AS NVARCHAR(30))) AS transaction_id",
                 'ct.ID AS cash_transaction_id',
@@ -693,6 +698,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 'tr.ID AS related_trust_id',
                 "CASE WHEN fund_meta.cash_id IS NOT NULL AND tr.ID IS NOT NULL THEN 'Fund/Trust-linked cash' WHEN fund_meta.cash_id IS NOT NULL THEN 'Fund-linked cash' WHEN tr.ID IS NOT NULL THEN 'Trust-linked cash' ELSE 'Cash ledger only' END AS ledger_relationship",
                 'COALESCE(fund_meta.fund_source_id, CAST(ct.SourceID AS NVARCHAR(100))) AS source_id',
+                'fund_meta.fund_id AS fund_id',
                 "LTRIM(RTRIM(CONCAT(ISNULL(c.FirstName, ''), ' ', ISNULL(c.LastName, '')))) AS customer_name",
                 'CAST(p.DealerAccountID AS NVARCHAR(100)) AS plan_account_id',
                 "COALESCE(fund_meta.fund_transaction_type, CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN trust_deposit_type.NameEN ELSE trust_type.NameEN END, cash_type.NameEN, CAST(ct.iType AS NVARCHAR(100))) AS transaction_type",
@@ -741,6 +747,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 $searchQuery->where('customer_name', 'like', $like)
                     ->orWhere('plan_account_id', 'like', $like)
                     ->orWhere('source_id', 'like', $like)
+                    ->orWhere('fund_id', 'like', $like)
                     ->orWhere('transaction_type', 'like', $like)
                     ->orWhere('notes', 'like', $like)
                     ->orWhereRaw('CAST(cash_transaction_id AS NVARCHAR) LIKE ?', [$like])

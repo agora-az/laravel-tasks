@@ -124,6 +124,7 @@ class RemoteVieFundController extends Controller
             'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
             'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
             'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'fund_id' => trim((string) $filterRequest->query('filter_fund_id', '')),
             'date_from' => trim((string) $filterRequest->query('filter_date_from', $filterRequest->query('filter_created_from', $defaultFrom))),
             'date_to' => trim((string) $filterRequest->query('filter_date_to', $filterRequest->query('filter_created_to', $defaultTo))),
             'date_basis' => $dateBasis,
@@ -145,7 +146,7 @@ class RemoteVieFundController extends Controller
         $connectionError = null;
         $transactions = null;
         $availableTrxTypes = [];
-        $useMirror = $this->mirrorManager->shouldUseMirror($request->user());
+        $useMirror = $this->shouldUseMirrorForAllTransactions($request, $filters);
         $workingSet = $useMirror ? null : $this->workingSetManager->ensure($filters);
         $workingSetQueryable = $workingSet?->hasQueryableGeneration() ?? false;
 
@@ -330,6 +331,7 @@ class RemoteVieFundController extends Controller
             'filter_plan_account_id' => ['nullable', 'string', 'max:100'],
             'filter_trx_id' => ['nullable', 'string', 'max:10000'],
             'filter_source_id' => ['nullable', 'string', 'max:10000'],
+            'filter_fund_id' => ['nullable', 'string', 'max:100'],
             'filter_date_from' => ['required', 'date'],
             'filter_date_to' => ['required', 'date', 'after_or_equal:filter_date_from'],
             'filter_date_basis' => ['required', 'in:' . implode(',', array_keys(self::ALL_TRANSACTION_DATE_BASES))],
@@ -620,6 +622,7 @@ class RemoteVieFundController extends Controller
             'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
             'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
             'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'fund_id' => trim((string) $filterRequest->query('filter_fund_id', '')),
             'date_from' => trim((string) $filterRequest->query('filter_date_from', $filterRequest->query('filter_created_from', $defaultFrom))),
             'date_to' => trim((string) $filterRequest->query('filter_date_to', $filterRequest->query('filter_created_to', $defaultTo))),
             'date_basis' => $dateBasis,
@@ -644,7 +647,7 @@ class RemoteVieFundController extends Controller
             ? (int) $filterRequest->query('per_page', 100)
             : 100;
         $page = max(1, (int) $filterRequest->query('page', 1));
-        if ($this->mirrorManager->shouldUseMirror($request->user())) {
+        if ($this->shouldUseMirrorForAllTransactions($request, $filters)) {
             $total = $this->mirrorQuery->count($payload['search'] ?: null, $filters);
 
             return response()->json([
@@ -847,12 +850,17 @@ class RemoteVieFundController extends Controller
             (array) $filterRequest->query('filter_trx_type', [])
         )));
         sort($transactionTypes);
+        $matchStatuses = array_values(array_intersect(
+            VieFundMatchStatusSummaryAccumulator::STATUSES,
+            (array) $filterRequest->query('filter_match_status', [])
+        ));
         $search = trim((string) $filterRequest->query('search', ''));
         $filters = array_filter([
             'customer_name' => trim((string) $filterRequest->query('filter_customer_name', '')),
             'plan_account_id' => trim((string) $filterRequest->query('filter_plan_account_id', '')),
             'trx_id' => trim((string) $filterRequest->query('filter_trx_id', '')),
             'source_id' => trim((string) $filterRequest->query('filter_source_id', '')),
+            'fund_id' => trim((string) $filterRequest->query('filter_fund_id', '')),
             'date_from' => trim((string) $filterRequest->query('filter_date_from', $defaultFrom)),
             'date_to' => trim((string) $filterRequest->query('filter_date_to', $defaultTo)),
             'date_basis' => $dateBasis,
@@ -863,14 +871,16 @@ class RemoteVieFundController extends Controller
             'has_agra_fsp_match' => $filterRequest->boolean('filter_has_agra_fsp_match') ?: null,
             'has_7960_fsp_match' => $filterRequest->boolean('filter_has_7960_fsp_match') ?: null,
             'has_asm_match' => $filterRequest->boolean('filter_has_asm_match') ?: null,
+            'match_statuses' => $matchStatuses ?: null,
         ]);
-        if ($this->mirrorManager->shouldUseMirror($request->user())) {
+        if ($this->shouldUseMirrorForAllTransactions($request, $filters)) {
             try {
                 $summary = $this->mirrorQuery->matchStatusSummary($search ?: null, $filters);
 
                 return response()->json([
                     'state' => 'complete',
                     'currency' => self::ALL_TRANSACTION_CURRENCIES[$currencyCode],
+                    'totals' => $this->filteredTransactionTotals($summary, $matchStatuses),
                     'statuses' => collect($summary)->map(
                         fn(array $values, string $status): array => array_merge(['status' => $status], $values)
                     )->values(),
@@ -901,7 +911,7 @@ class RemoteVieFundController extends Controller
                 'filters' => $filters,
             ], JSON_THROW_ON_ERROR));
             $summary = Cache::remember(
-                "viefund_all_transactions_match_summary:{$signature}",
+                "viefund_all_transactions_match_summary:v2:{$signature}",
                 now()->addMinutes(5),
                 fn(): array => $this->workingSetQuery->matchStatusSummary(
                     $workingSet,
@@ -913,6 +923,7 @@ class RemoteVieFundController extends Controller
             return response()->json([
                 'state' => 'complete',
                 'currency' => self::ALL_TRANSACTION_CURRENCIES[$currencyCode],
+                'totals' => $this->filteredTransactionTotals($summary, $matchStatuses),
                 'statuses' => collect($summary)->map(
                     fn(array $values, string $status): array => array_merge(['status' => $status], $values)
                 )->values(),
@@ -934,6 +945,7 @@ class RemoteVieFundController extends Controller
             'filter_plan_account_id' => ['nullable', 'string', 'max:100'],
             'filter_trx_id' => ['nullable', 'string', 'max:500'],
             'filter_source_id' => ['nullable', 'string', 'max:500'],
+            'filter_fund_id' => ['nullable', 'string', 'max:100'],
             'filter_date_from' => ['required', 'date'],
             'filter_date_to' => ['required', 'date', 'after_or_equal:filter_date_from'],
             'filter_date_basis' => ['required', 'in:' . implode(',', array_keys(self::ALL_TRANSACTION_DATE_BASES))],
@@ -966,7 +978,8 @@ class RemoteVieFundController extends Controller
             'currency_code' => (string) $validated['filter_currency_code'],
             'status_ids' => $statusIds ?: [6],
         ];
-        $useMirror = $this->mirrorManager->shouldUseMirror($request->user());
+        $useMirror = empty(trim((string) ($validated['filter_fund_id'] ?? '')))
+            && $this->mirrorManager->shouldUseMirror($request->user());
         $workingSet = $useMirror ? null : $this->workingSetManager->findReady($workingSetFilters);
         if (!$useMirror && !$workingSet) {
             $workingSet = $this->workingSetManager->ensure($workingSetFilters);
@@ -1060,7 +1073,7 @@ class RemoteVieFundController extends Controller
         $logPath = storage_path('logs/viefund-all-transactions-export.log');
 
         $command = sprintf(
-            '%s %s report:viefund-all-transactions --run-id=%s --data-source=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-all-transactions --run-id=%s --data-source=%s --search=%s --customer-name=%s --plan-account-id=%s --transaction-id=%s --source-id=%s --fund-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s --currency-code=%s %s %s %s %s %s %s %s %s %s %s %s %s %s %s --output-base=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
             escapeshellarg($phpPath),
             escapeshellarg(base_path('artisan')),
             escapeshellarg($runId),
@@ -1070,6 +1083,7 @@ class RemoteVieFundController extends Controller
             escapeshellarg(trim((string) ($validated['filter_plan_account_id'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_trx_id'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_source_id'] ?? ''))),
+            escapeshellarg(trim((string) ($validated['filter_fund_id'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_date_from'] ?? ''))),
             escapeshellarg(trim((string) ($validated['filter_date_to'] ?? ''))),
             escapeshellarg((string) $validated['filter_date_basis']),
@@ -1710,6 +1724,37 @@ class RemoteVieFundController extends Controller
         // Keep the potentially large filter payload in the server-side session.
         // Small navigation values in the URL (page, sort, per_page) still take precedence.
         return $request->duplicate(array_merge($storedFilters, $request->query->all()));
+    }
+
+    private function shouldUseMirrorForAllTransactions(Request $request, array $filters): bool
+    {
+        return empty($filters['fund_id']) && $this->mirrorManager->shouldUseMirror($request->user());
+    }
+
+    private function filteredTransactionTotals(array $summary, array $matchStatuses): array
+    {
+        $totals = [
+            'transaction_count' => 0,
+            'outflow_amount' => 0.0,
+            'inflow_amount' => 0.0,
+            'net_amount' => 0.0,
+        ];
+
+        foreach ($summary as $status => $statusTotals) {
+            if ($matchStatuses !== [] && !in_array($status, $matchStatuses, true)) {
+                continue;
+            }
+            $totals['transaction_count'] += (int) ($statusTotals['viefund_count'] ?? 0);
+            $totals['outflow_amount'] += (float) ($statusTotals['viefund_outflow'] ?? 0);
+            $totals['inflow_amount'] += (float) ($statusTotals['viefund_inflow'] ?? 0);
+            $totals['net_amount'] += (float) ($statusTotals['viefund_total'] ?? 0);
+        }
+
+        foreach (['outflow_amount', 'inflow_amount', 'net_amount'] as $amountKey) {
+            $totals[$amountKey] = round($totals[$amountKey], 2);
+        }
+
+        return $totals;
     }
 
     private function rememberTransactionFilters(

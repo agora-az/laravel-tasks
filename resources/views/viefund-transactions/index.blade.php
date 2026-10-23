@@ -16,6 +16,7 @@
         || !empty($filters['plan_account_id'])
         || !empty($filters['trx_id'])
         || !empty($filters['source_id'])
+        || !empty($filters['fund_id'])
         || !empty($filters['date_from'])
         || !empty($filters['date_to'])
         || !empty($filters['trx_type'])
@@ -73,7 +74,7 @@
     </summary>
     <form action="{{ route('viefund-transactions.filters') }}" method="POST" style="padding:20px 24px;" data-inception-dates='@json($inceptionDates)'>
         @csrf
-        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;margin-bottom:16px;">
+        <div class="all-transactions-primary-filters">
             <div>
                 <label for="all-customer-search" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Customer</label>
                 <input id="all-customer-search" name="filter_customer_name" value="{{ $filters['customer_name'] ?? '' }}" placeholder="Search by name…" autocomplete="off"
@@ -83,6 +84,11 @@
                 <label for="all-plan-account" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Plan Account ID</label>
                 <input id="all-plan-account" name="filter_plan_account_id" value="{{ $filters['plan_account_id'] ?? '' }}" placeholder="Search by account ID…"
                        style="width:100%;height:40px;padding:8px 12px;border:1px solid #cbd5e0;border-radius:4px;box-sizing:border-box;font-size:13px;">
+            </div>
+            <div>
+                <label for="all-fund-id" style="display:block;font-size:12px;font-weight:800;color:#4a5568;margin-bottom:6px;">Fund / Unit ID</label>
+                <input id="all-fund-id" name="filter_fund_id" value="{{ $filters['fund_id'] ?? '' }}" placeholder="e.g. CASHagch"
+                       style="width:100%;height:40px;padding:8px 12px;border:1px solid #cbd5e0;border-radius:4px;box-sizing:border-box;font-size:13px;font-family:monospace;">
             </div>
         </div>
 
@@ -156,22 +162,22 @@
             </fieldset>
 
             <fieldset class="all-transactions-filter-group all-transactions-match-filter">
-                <legend>Match Filter</legend>
+                <legend>Match Only</legend>
                 <label class="all-transactions-match-option all-transactions-match-option-eft">
                     <input type="checkbox" name="filter_has_eft_match" value="1" {{ $hasEftMatch ? 'checked' : '' }}>
-                    EFT matches only
+                    EFT
                 </label>
                 <label class="all-transactions-match-option all-transactions-match-option-fsp">
                     <input type="checkbox" name="filter_has_agra_fsp_match" value="1" {{ $hasAgraFspMatch ? 'checked' : '' }}>
-                    FSP (AGRA) matches only
+                    FSP (AGRA)
                 </label>
                 <label class="all-transactions-match-option all-transactions-match-option-fsp-7960">
                     <input type="checkbox" name="filter_has_7960_fsp_match" value="1" {{ $has7960FspMatch ? 'checked' : '' }}>
-                    FSP (7960) matches only
+                    FSP (7960)
                 </label>
                 <label class="all-transactions-match-option">
                     <input type="checkbox" name="filter_has_asm_match" value="1" {{ $hasAsmMatch ? 'checked' : '' }}>
-                    ASM matches only
+                    ASM
                 </label>
                 <div class="all-transactions-filter-help">FSP uses fund Source ID. ASM uses AGRA account, settlement date, currency, and signed amount against confirmed VieFund cash transactions.</div>
             </fieldset>
@@ -192,6 +198,12 @@
         grid-template-columns:repeat(3,minmax(0,1fr));
         gap:12px;
         align-items:stretch;
+    }
+    .all-transactions-primary-filters {
+        display:grid;
+        grid-template-columns:repeat(3,minmax(0,1fr));
+        gap:16px 24px;
+        margin-bottom:16px;
     }
     .all-transactions-filter-group {
         min-width:0;
@@ -222,8 +234,8 @@
         height:16px;
     }
     .all-transactions-match-filter {
-        display:flex;
-        flex-direction:column;
+        display:grid;
+        grid-template-columns:repeat(2,minmax(0,1fr));
         gap:8px;
     }
     .all-transactions-match-option {
@@ -241,8 +253,8 @@
         border-color:#e4d7ef;
     }
     .all-transactions-filter-help {
-        margin-top:auto;
-        padding-top:5px;
+        grid-column:1 / -1;
+        padding-top:2px;
         color:#718096;
         font-size:11px;
         line-height:1.35;
@@ -867,6 +879,7 @@
     .all-transactions-match-summary-positive { color:#166534;font-weight:700; }
     .all-transactions-match-summary-negative { color:#b91c1c;font-weight:700; }
     @media (max-width: 1100px) {
+        .all-transactions-primary-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
         .all-transactions-date-filters { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
         .all-transactions-secondary-filters { grid-template-columns:1fr; }
         .all-transactions-summary-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
@@ -875,6 +888,7 @@
         #all-transactions-excel-export { width:auto; }
     }
     @media (max-width: 700px) {
+        .all-transactions-primary-filters { grid-template-columns:1fr; }
         .all-transactions-date-filters { grid-template-columns:1fr !important; }
         .all-transactions-summary-grid { grid-template-columns:1fr; }
         .all-transactions-match-controls { width:100%; }
@@ -921,11 +935,39 @@
         <div id="all-transactions-summary-error" role="status" style="display:none;margin-top:8px;color:#b91c1c;font-size:12px;"></div>
     </section>
 
+    <section id="all-transactions-filtered-summary" aria-labelledby="all-transactions-filtered-summary-heading" aria-busy="true" style="margin-bottom:18px;">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+            <div>
+                <h3 id="all-transactions-filtered-summary-heading" style="margin:0;color:#2d3748;">Filtered Transaction Totals</h3>
+                <div style="margin-top:3px;color:#718096;font-size:12px;">Totals follow all current filters, including Fund / Unit ID and transaction type. Negative amounts are cash outflows (typically buys); positive amounts are inflows (typically sells). Net is inflows less outflows.</div>
+            </div>
+            <div id="all-transactions-filtered-summary-state" role="status" style="color:#4a5568;font-size:12px;font-weight:700;">Loading filtered totals…</div>
+        </div>
+        <div class="all-transactions-summary-grid">
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Filtered Cash Transactions</div>
+                <div id="all-transactions-filtered-count" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Cash Outflows</div>
+                <div id="all-transactions-filtered-outflow" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Cash Inflows</div>
+                <div id="all-transactions-filtered-inflow" class="all-transactions-summary-value">Loading…</div>
+            </div>
+            <div class="card all-transactions-summary-card">
+                <div class="all-transactions-summary-label">Net Filtered Amount</div>
+                <div id="all-transactions-filtered-net" class="all-transactions-summary-value">Loading…</div>
+            </div>
+        </div>
+    </section>
+
     <section id="all-transactions-match-summary" aria-labelledby="all-transactions-match-summary-heading" aria-busy="true" style="margin-bottom:18px;">
         <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
             <div>
                 <h3 id="all-transactions-match-summary-heading" style="margin:0;color:#2d3748;">Match Status Summary</h3>
-                <div style="margin-top:3px;color:#718096;font-size:12px;">Counts are unique linked records; EFT and FSP totals use their full reconciliation batches. Match checkboxes are excluded so every status remains visible. Variance is Bank - (EFT + FSP).</div>
+                <div style="margin-top:3px;color:#718096;font-size:12px;">Counts are unique linked records; EFT and FSP totals use their full reconciliation batches. Match checkboxes do not remove rows from this breakdown; filtered totals above still respect them. Variance is Bank - (EFT + FSP).</div>
             </div>
             <div id="all-transactions-match-summary-state" role="status" style="color:#4a5568;font-size:12px;font-weight:700;">Loading summaries…</div>
         </div>
@@ -1052,6 +1094,7 @@
             <input type="hidden" name="filter_plan_account_id" value="{{ $filters['plan_account_id'] ?? '' }}">
             <input type="hidden" name="filter_trx_id" value="{{ $filters['trx_id'] ?? '' }}">
             <input type="hidden" name="filter_source_id" value="{{ $filters['source_id'] ?? '' }}">
+            <input type="hidden" name="filter_fund_id" value="{{ $filters['fund_id'] ?? '' }}">
             <input type="hidden" name="filter_date_from" value="{{ $filters['date_from'] ?? '' }}">
             <input type="hidden" name="filter_date_to" value="{{ $filters['date_to'] ?? '' }}">
             <input type="hidden" name="filter_date_basis" value="{{ $dateBasis }}">
@@ -2155,11 +2198,17 @@
     loadPeriodSummary();
 
     const matchSummary = document.getElementById('all-transactions-match-summary');
+    const filteredSummary = document.getElementById('all-transactions-filtered-summary');
     const loadMatchSummary = async () => {
         if (!matchSummary) return;
 
         const body = document.getElementById('all-transactions-match-summary-body');
         const state = document.getElementById('all-transactions-match-summary-state');
+        const filteredState = document.getElementById('all-transactions-filtered-summary-state');
+        const filteredCount = document.getElementById('all-transactions-filtered-count');
+        const filteredOutflow = document.getElementById('all-transactions-filtered-outflow');
+        const filteredInflow = document.getElementById('all-transactions-filtered-inflow');
+        const filteredNet = document.getElementById('all-transactions-filtered-net');
         const formatMoney = (value) => {
             const amount = Number(value || 0);
             const formatted = `$${Math.abs(amount).toLocaleString('en-CA', {minimumFractionDigits:2,maximumFractionDigits:2})}`;
@@ -2184,10 +2233,24 @@
             const data = await parseJsonResponse(response, 'The match summary returned an invalid response');
             if (response.status === 202) {
                 state.textContent = data.message || 'Waiting for the period cache…';
+                if (filteredState) filteredState.textContent = data.message || 'Waiting for the period cache…';
                 window.setTimeout(loadMatchSummary, 5000);
                 return;
             }
             if (!response.ok) throw new Error(data.message || 'The match summary could not be loaded.');
+
+            const totals = data.totals || {};
+            if (filteredCount) filteredCount.textContent = Number(totals.transaction_count || 0).toLocaleString('en-CA');
+            if (filteredOutflow) filteredOutflow.textContent = formatMoney(totals.outflow_amount);
+            if (filteredInflow) filteredInflow.textContent = formatMoney(totals.inflow_amount);
+            if (filteredNet) {
+                filteredNet.textContent = formatMoney(totals.net_amount);
+                filteredNet.style.color = Number(totals.net_amount || 0) < 0 ? '#b91c1c' : '#166534';
+            }
+            if (filteredState) {
+                filteredState.textContent = `${data.currency || ''} · All matching rows`;
+                filteredSummary?.removeAttribute('aria-busy');
+            }
 
             const rows = (data.statuses || []).map((summary) => {
                 const row = document.createElement('tr');
@@ -2243,7 +2306,13 @@
         } catch (summaryError) {
             state.textContent = summaryError.message || 'Match summaries unavailable.';
             state.style.color = '#b91c1c';
+            if (filteredState) {
+                filteredState.textContent = 'Filtered totals unavailable.';
+                filteredState.title = summaryError.message || 'The filtered transaction totals could not be loaded.';
+                filteredState.style.color = '#b91c1c';
+            }
             matchSummary.removeAttribute('aria-busy');
+            filteredSummary?.removeAttribute('aria-busy');
         }
     };
     loadMatchSummary();

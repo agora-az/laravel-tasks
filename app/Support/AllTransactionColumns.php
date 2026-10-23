@@ -24,6 +24,7 @@ final class AllTransactionColumns
         'trust_transaction_id' => ['label' => 'Trust Txn ID', 'field' => 'trust_transaction_id'],
         'ledger_relationship' => ['label' => 'Relationship', 'field' => 'ledger_relationship'],
         'source_id' => ['label' => 'Source ID', 'field' => 'source_id'],
+        'fund_id' => ['label' => 'Fund / Unit ID', 'field' => 'fund_id'],
         'customer_name' => ['label' => 'Customer Name', 'field' => 'customer_name'],
         'plan_account_id' => ['label' => 'Plan Account ID', 'field' => 'plan_account_id'],
         'transaction_type' => ['label' => 'Txn Type', 'field' => 'transaction_type'],
@@ -203,7 +204,7 @@ final class AllTransactionColumns
     {
         $visibleFields = array_filter(array_column(self::visible(), 'field'));
         $internalFields = $forExport
-            ? ['cash_transaction_id', 'fund_transaction_id', 'trust_transaction_id', 'transaction_id', 'plan_account_id', 'amount', 'sort_id', 'basis_date']
+            ? ['cash_transaction_id', 'fund_transaction_id', 'trust_transaction_id', 'transaction_id', 'plan_account_id', 'fund_id', 'amount', 'sort_id', 'basis_date']
             : ['cash_transaction_id', 'trust_transaction_id'];
 
         return array_values(array_unique(array_merge($internalFields, $visibleFields)));
@@ -218,6 +219,7 @@ final class AllTransactionColumns
                 'fund_transaction_id',
                 'trust_transaction_id',
                 'transaction_id',
+                'fund_id',
                 'sort_id',
                 'basis_date',
                 'cash_status_id',
