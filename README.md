@@ -131,6 +131,19 @@ route, and view caches, and launches PHP-FPM, the queue worker, and scheduler
 under Supervisor. Early startup diagnostics are written to
 `/home/LogFiles/startup.log`.
 
+If any deployment step fails, the workflow attempts to collect the App Service
+container startup log and per-instance troubleshooting status before logging
+out of Azure. The detailed script log is also available through authenticated
+Kudu at `/api/vfs/LogFiles/startup.log`.
+
+The fund-ID cache migration checks each column and index independently so it
+can resume after interrupted MySQL DDL, which is not rolled back as a unit.
+For a `Duplicate column name 'fund_id'` startup failure on the original
+deployment, deploy the corrected migration and let `migrate --force` finish
+the missing steps. Do not drop the cache tables or manually mark the migration
+complete. Run its isolated regression checks locally with
+`php tests/migrations/fund_id_cache_migration.php` (uses in-memory SQLite).
+
 Avoid deploying while a matching, import, export, or transaction-cache job is
 actively running. Pause transaction caching and allow the current batch to stop
 before pushing. An abruptly terminated database-queue job remains reserved until

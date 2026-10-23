@@ -130,10 +130,17 @@ jobs:
           done
 
           echo "Application did not become healthy after six minutes." >&2
-          echo "Collecting the latest App Service container startup log..." >&2
-          if ! az webapp log startup show \
-            --resource-group rg-php-mysql-prod \
-            --name agora-laravel-mysql; then
-            echo "Unable to retrieve the App Service startup log." >&2
-          fi
           exit 1
+
+      - name: Collect App Service startup diagnostics
+        if: failure()
+        run: |
+          az webapp log startup show \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql \
+            || echo "Unable to retrieve the App Service startup log." >&2
+
+          az webapp troubleshoot status \
+            --resource-group rg-php-mysql-prod \
+            --name agora-laravel-mysql \
+            || echo "Unable to retrieve App Service troubleshoot status." >&2

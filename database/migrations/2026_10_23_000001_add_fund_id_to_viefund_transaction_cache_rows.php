@@ -8,15 +8,30 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
-            $table->string('fund_id', 100)->nullable();
-            $table->index('fund_id', 'viefund_mirror_fund_id_idx');
-        });
+        // MySQL keeps completed DDL when startup interrupts a migration.
+        if (! Schema::hasColumn('viefund_transaction_mirror_rows', 'fund_id')) {
+            Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
+                $table->string('fund_id', 100)->nullable();
+            });
+        }
 
-        Schema::table('viefund_transaction_working_set_rows', function (Blueprint $table): void {
-            $table->string('fund_id', 100)->nullable()->after('source_id');
-            $table->index(['working_set_id', 'generation', 'fund_id'], 'viefund_working_set_fund_idx');
-        });
+        if (! Schema::hasIndex('viefund_transaction_mirror_rows', 'viefund_mirror_fund_id_idx')) {
+            Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
+                $table->index('fund_id', 'viefund_mirror_fund_id_idx');
+            });
+        }
+
+        if (! Schema::hasColumn('viefund_transaction_working_set_rows', 'fund_id')) {
+            Schema::table('viefund_transaction_working_set_rows', function (Blueprint $table): void {
+                $table->string('fund_id', 100)->nullable();
+            });
+        }
+
+        if (! Schema::hasIndex('viefund_transaction_working_set_rows', 'viefund_working_set_fund_idx')) {
+            Schema::table('viefund_transaction_working_set_rows', function (Blueprint $table): void {
+                $table->index(['working_set_id', 'generation', 'fund_id'], 'viefund_working_set_fund_idx');
+            });
+        }
     }
 
     public function down(): void
