@@ -28,6 +28,7 @@ class VieFundTransactionMirrorSync extends Model
         'last_batch_completed_at' => 'datetime',
         'ready_at' => 'datetime',
         'verified_at' => 'datetime',
+        'fund_ids_verified_at' => 'datetime',
         'synced_through_at' => 'datetime',
     ];
 

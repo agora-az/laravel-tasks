@@ -119,6 +119,7 @@
             <div class="mirror-status-card"><span class="settings-description">Rows</span><strong data-mirror-rows>{{ number_format($mirrorStatus['rows_processed'] ?? 0) }} / {{ isset($mirrorStatus['expected_rows']) ? number_format($mirrorStatus['expected_rows']) : 'calculating' }}</strong></div>
             <div class="mirror-status-card"><span class="settings-description">Throughput</span><strong data-mirror-throughput>{{ isset($mirrorStatus['rows_per_second']) ? number_format($mirrorStatus['rows_per_second'], 1).' rows/sec' : 'Calculating...' }}</strong></div>
             <div class="mirror-status-card"><span class="settings-description">ETA</span><strong data-mirror-eta>{{ isset($mirrorStatus['eta_seconds']) ? 'About '.ceil($mirrorStatus['eta_seconds'] / 60).' minutes' : 'Calculating ETA...' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Fund / Unit IDs</span><strong data-mirror-fund-ids>{{ !empty($mirrorStatus['fund_ids_ready']) ? 'Verified' : 'Backfill / verification required' }}</strong></div>
         </div>
         <div class="mirror-progress" aria-label="Mirror population progress"><span data-mirror-progress style="width:{{ $mirrorStatus['progress_pct'] ?? 0 }}%"></span></div>
         <p class="settings-description" data-mirror-detail>
@@ -139,6 +140,9 @@
                 <form method="POST" action="{{ route('admin.settings.mirror.pause') }}">@csrf<button class="mirror-action" type="submit">Pause</button></form>
             @elseif(($mirrorStatus['ready'] ?? false) === true)
                 <form method="POST" action="{{ route('admin.settings.mirror.sync') }}">@csrf<button class="mirror-action" type="submit">Sync now</button></form>
+                @if(empty($mirrorStatus['fund_ids_ready']))
+                    <form method="POST" action="{{ route('admin.settings.mirror.backfill-fund-ids') }}">@csrf<button class="mirror-action" type="submit">Backfill fund/unit IDs</button></form>
+                @endif
             @else
                 <form method="POST" action="{{ route('admin.settings.mirror.start') }}">@csrf<button class="mirror-action" type="submit">Start initial population</button></form>
             @endif
@@ -310,6 +314,8 @@ if (mirrorStatusSection) {
             const status = await response.json();
             mirrorStatusSection.querySelector('[data-mirror-state]').textContent = status.state || 'unavailable';
             mirrorStatusSection.querySelector('[data-mirror-phase]').textContent = status.phase || 'Not started';
+            mirrorStatusSection.querySelector('[data-mirror-fund-ids]').textContent =
+                status.fund_ids_ready ? 'Verified' : 'Backfill / verification required';
             mirrorStatusSection.querySelector('[data-mirror-rows]').textContent =
                 `${Number(status.rows_processed || 0).toLocaleString()} / ${status.expected_rows === null ? 'calculating' : Number(status.expected_rows).toLocaleString()}`;
             mirrorStatusSection.querySelector('[data-mirror-throughput]').textContent =

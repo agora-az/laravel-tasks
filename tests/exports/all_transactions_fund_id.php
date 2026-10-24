@@ -2,6 +2,7 @@
 
 use App\Console\Commands\GenerateVieFundAllTransactionsExportCommand;
 use App\Models\VieFundTransactionWorkingSet;
+use App\Models\VieFundTransactionMirrorSync;
 use App\Services\RuntimeSettings;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Support\AllTransactionColumns;
@@ -62,6 +63,18 @@ try {
         $table->text('payload');
         $table->text('enrichment');
     });
+    $migration = require dirname(__DIR__, 2).'/database/migrations/2026_10_15_193500_create_viefund_transaction_mirror_tables.php';
+    $migration->up();
+    Schema::table('viefund_transaction_mirror_rows', fn(Blueprint $table) => $table->string('fund_id', 100)->nullable());
+    $migration = require dirname(__DIR__, 2).'/database/migrations/2026_10_24_000001_add_fund_id_verification_to_viefund_mirror.php';
+    $migration->up();
+    VieFundTransactionMirrorSync::query()->create([
+        'id' => 1,
+        'state' => 'ready',
+        'ready_at' => now(),
+        'verified_at' => now(),
+        'fund_ids_verified_at' => now(),
+    ]);
 
     foreach (['CASHagch', null, 'VIEFund'] as $index => $fundId) {
         $payload = [
@@ -87,6 +100,31 @@ try {
             'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
             'enrichment' => '{}',
         ]);
+        DB::table('viefund_transaction_mirror_rows')->insert([
+            'cash_transaction_id' => $index + 1,
+            'transaction_id' => $payload['transaction_id'],
+            'source_id' => $payload['source_id'],
+            'fund_id' => $fundId,
+            'fund_id_checked_at' => now(),
+            'created_date' => $payload['created_date'],
+            'settlement_date' => $payload['settlement_date'].' 00:00:00',
+            'currency_code' => '00',
+            'cash_status_id' => 6,
+            'amount' => $payload['amount'],
+            'match_status' => 'Unknown',
+            'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
+            'enrichment' => '{}',
+            'sync_generation' => 'test-generation',
+            'source_fingerprint' => hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR)),
+            'source_synced_at' => now(),
+        ]);
+        if ($fundId !== null) {
+            DB::table('viefund_transaction_mirror_funds')->insert([
+                'cash_transaction_id' => $index + 1,
+                'fund_id' => $fundId,
+                'source_id' => $payload['source_id'],
+            ]);
+        }
     }
 
     $manager = new class($app->make(RuntimeSettings::class)) extends VieFundTransactionWorkingSetManager
@@ -116,20 +154,34 @@ try {
         'fund-filtered' => ['CASHagch', true, 1, -2100.77],
         'fund-hidden' => ['', false, 3, -1700.77],
         'fund-filtered-hidden' => ['CASHagch', false, 1, -2100.77],
+        'secondary-linked-fund' => ['CASHagch', true, 2, -1800.77],
     ] as $scenario => [$fundFilter, $showFund, $expectedCount, $expectedNet]) {
+        $secondaryFundScenario = $scenario === 'secondary-linked-fund';
+        if ($secondaryFundScenario) {
+            DB::table('viefund_transaction_mirror_funds')->insert([
+                'cash_transaction_id' => 3,
+                'fund_id' => 'CASHagch',
+                'source_id' => '12345678901234567890',
+            ]);
+        }
         $columns = array_keys(AllTransactionColumns::availableTransactionColumns());
         if (! $showFund) {
             $columns = array_values(array_diff($columns, ['fund_id']));
         }
         config(['viefund.all_transactions_visible_columns' => $columns]);
 
-        foreach (['single', 'split'] as $layout) {
-            $name = $scenario.'-'.$layout;
+        foreach (['current-single', 'current-split', 'mirror-single', 'mirror-split'] as $exportMode) {
+            [$dataSource, $layout] = explode('-', $exportMode);
+            if ($secondaryFundScenario && $dataSource !== 'mirror') {
+                continue;
+            }
+            $name = $scenario.'-'.$exportMode;
             $statusPath = $testDirectory.'/'.$name.'.json';
             $command = $app->make(GenerateVieFundAllTransactionsExportCommand::class);
             $command->setLaravel($app);
             $tester = new CommandTester($command);
             $exitCode = $tester->execute([
+                '--data-source' => $dataSource,
                 '--fund-id' => $fundFilter,
                 '--date-from' => '2026-10-01',
                 '--date-to' => '2026-10-01',
@@ -169,7 +221,7 @@ try {
             }
             if ($showFund) {
                 $funds = array_column($transactions, $fundIndex);
-                $check($funds === ($fundFilter !== '' ? ['CASHagch'] : ['CASHagch', '', 'VIEFund']), "$name: incorrect fund cells");
+                $check($funds === ($fundFilter !== '' ? array_fill(0, $expectedCount, 'CASHagch') : ['CASHagch', '', 'VIEFund']), "$name: incorrect fund cells");
             }
             $check(abs(array_sum(array_column($transactions, $amountIndex)) - $expectedNet) < 0.00001, "$name: incorrect transaction total");
             $summary = [];
@@ -184,6 +236,21 @@ try {
             echo "PASS: $name\n";
         }
     }
+    VieFundTransactionMirrorSync::singleton()->forceFill(['fund_ids_verified_at' => null])->save();
+    $command = $app->make(GenerateVieFundAllTransactionsExportCommand::class);
+    $command->setLaravel($app);
+    $tester = new CommandTester($command);
+    $statusPath = $testDirectory.'/unverified.json';
+    $exitCode = $tester->execute([
+        '--data-source' => 'mirror',
+        '--fund-id' => 'CASHagch',
+        '--output-base' => 'unverified',
+        '--status-file' => $statusPath,
+    ]);
+    $status = json_decode(file_get_contents($statusPath), true, 512, JSON_THROW_ON_ERROR);
+    $check($exitCode !== 0 && $status['success'] === false, 'Direct fund-filtered mirror export must fail before verification.');
+    $check(str_contains($status['message'], 'backfill'), 'An unverified mirror export must explain how to recover.');
+    echo "PASS: direct mirror export readiness guard\n";
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception->getMessage().PHP_EOL);
     $testExitCode = 1;

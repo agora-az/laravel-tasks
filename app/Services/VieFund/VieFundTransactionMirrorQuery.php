@@ -2,7 +2,6 @@
 
 namespace App\Services\VieFund;
 
-use App\Services\Reconciliation\VieFundMatchStatusSummaryAccumulator;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -61,9 +60,10 @@ class VieFundTransactionMirrorQuery
         $paginator = $query
             ->orderBy($sort, $direction)
             ->orderBy('cash_transaction_id', $direction)
-            ->paginate($perPage, ['payload', 'match_status'], 'page', $page);
-        $paginator->setCollection($paginator->getCollection()->map(function (object $cachedRow): object {
+            ->paginate($perPage, ['payload', 'match_status', 'fund_id', 'fund_transaction_id', 'source_id', 'transaction_type'], 'page', $page);
+        $paginator->setCollection($paginator->getCollection()->map(function (object $cachedRow) use ($filters): object {
             $row = json_decode((string) $cachedRow->payload, false, 512, JSON_THROW_ON_ERROR);
+            $this->applyFundMetadata($row, $cachedRow, $filters);
             $row->cached_match_status = $cachedRow->match_status;
             $row->match_status = $cachedRow->match_status;
 
@@ -173,10 +173,15 @@ class VieFundTransactionMirrorQuery
             'payload',
             'match_status',
             'enrichment',
+            'fund_id',
+            'fund_transaction_id',
+            'source_id',
+            'transaction_type',
             "{$dateColumn} as export_cursor_basis_date",
             'cash_transaction_id as export_cursor_cash_transaction_id',
-        ])->map(function (object $cachedRow): object {
+        ])->map(function (object $cachedRow) use ($filters): object {
             $row = json_decode((string) $cachedRow->payload, false, 512, JSON_THROW_ON_ERROR);
+            $this->applyFundMetadata($row, $cachedRow, $filters);
             $row->cached_match_status = $cachedRow->match_status;
             $row->match_status = $cachedRow->match_status;
             $row->export_cursor_basis_date = (string) $cachedRow->export_cursor_basis_date;
@@ -195,7 +200,7 @@ class VieFundTransactionMirrorQuery
     private function baseQuery(?string $search, array $filters): Builder
     {
         $dateColumn = $this->dateColumn($filters);
-        $query = DB::table('viefund_transaction_mirror_rows')
+        $query = $this->fundFilteredQuery($filters)
             ->whereNotNull($dateColumn)
             ->when(!empty($filters['date_from']), fn(Builder $builder) => $builder
                 ->where($dateColumn, '>=', $filters['date_from'] . ' 00:00:00'))
@@ -223,7 +228,6 @@ class VieFundTransactionMirrorQuery
         $this->applyContains($query, 'plan_account_id', $filters['plan_account_id'] ?? null);
         $this->applyTransactionIds($query, $filters['trx_id'] ?? null);
         $this->applyContains($query, 'source_id', $filters['source_id'] ?? null);
-        $this->applyContains($query, 'fund_id', $filters['fund_id'] ?? null);
 
         if (!empty($filters['trx_type'])) {
             $query->whereIn('transaction_type', (array) $filters['trx_type']);
@@ -243,6 +247,44 @@ class VieFundTransactionMirrorQuery
         }
 
         return $query;
+    }
+
+    private function fundFilteredQuery(array $filters): Builder
+    {
+        $fundId = trim((string) ($filters['fund_id'] ?? ''));
+        if ($fundId === '') {
+            return DB::table('viefund_transaction_mirror_rows');
+        }
+
+        $funds = DB::table('viefund_transaction_mirror_funds')
+            ->where('fund_id', 'like', '%'.$fundId.'%')
+            ->groupBy('cash_transaction_id')
+            ->selectRaw('cash_transaction_id AS fund_cash_id, MIN(fund_id) AS fund_id, MIN(fund_transaction_id) AS fund_transaction_id')
+            ->selectRaw('COALESCE(MIN(source_id), MIN(cash_source_id)) AS source_id')
+            ->selectRaw('COALESCE(MIN(transaction_type), MIN(cash_transaction_type)) AS transaction_type');
+        $rows = DB::table('viefund_transaction_mirror_rows as cash')
+            ->joinSub($funds, 'fund', 'fund.fund_cash_id', '=', 'cash.cash_transaction_id')
+            ->select(array_map(fn(string $column): string => 'cash.'.$column, [
+                'cash_transaction_id', 'transaction_id', 'trust_transaction_id', 'ledger_relationship',
+                'customer_name', 'plan_account_id', 'cash_status_id', 'cash_status', 'trust_status',
+                'notes', 'created_date', 'trade_date', 'processing_date', 'settlement_date', 'currency_code',
+                'amount', 'match_status', 'has_eft_match', 'has_agra_fsp_match', 'has_7960_fsp_match',
+                'has_asm_match', 'payload', 'enrichment',
+            ]))
+            ->selectRaw('fund.fund_id, fund.fund_transaction_id')
+            ->selectRaw('fund.source_id, fund.transaction_type');
+
+        return DB::query()->fromSub($rows, 'viefund_transaction_mirror_rows');
+    }
+
+    private function applyFundMetadata(object $row, object $cachedRow, array $filters): void
+    {
+        if (trim((string) ($filters['fund_id'] ?? '')) === '') {
+            return;
+        }
+        foreach (['fund_id', 'fund_transaction_id', 'source_id', 'transaction_type'] as $column) {
+            $row->{$column} = $cachedRow->{$column};
+        }
     }
 
     private function dateColumn(array $filters): string

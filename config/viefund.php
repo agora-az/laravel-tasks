@@ -31,7 +31,7 @@ return [
             array_filter(explode(',', env('VIEFUND_TRANSACTION_MIRROR_STATUS_IDS', '0,1,2,3,4,5,6')), 'strlen')
         ))),
         'batch_size' => (int) env('VIEFUND_TRANSACTION_MIRROR_BATCH_SIZE', 1000),
-        'incremental_lookback_days' => (int) env('VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS', 90),
+        'incremental_lookback_days' => (int) env('VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS', 180),
         'maintenance_timezone' => env('VIEFUND_MAINTENANCE_TIMEZONE', 'America/Toronto'),
         'maintenance_drain_start' => env('VIEFUND_MAINTENANCE_DRAIN_START', '18:55'),
         'maintenance_start' => env('VIEFUND_MAINTENANCE_START', '19:00'),

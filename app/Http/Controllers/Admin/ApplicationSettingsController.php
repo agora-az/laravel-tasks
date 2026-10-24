@@ -207,6 +207,17 @@ class ApplicationSettingsController extends Controller
         return back()->with('success', 'VieFund transaction mirror incremental synchronization queued.');
     }
 
+    public function backfillMirrorFundIds(VieFundTransactionMirrorManager $mirrorManager): RedirectResponse
+    {
+        try {
+            $mirrorManager->startFundIdBackfill();
+        } catch (InvalidArgumentException $exception) {
+            return back()->withErrors(['mirror' => $exception->getMessage()]);
+        }
+
+        return back()->with('success', 'Mirror fund/unit ID backfill queued. Fund-filtered requests will use the current source until verification completes.');
+    }
+
     private function orderedColumnOptions(string $settingKey, array $selected): array
     {
         $definitions = $this->columnDefinitions($settingKey);

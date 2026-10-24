@@ -93,7 +93,7 @@ VIEFUND_TRANSACTION_MIRROR_INCEPTION_DATE=
 VIEFUND_TRANSACTION_MIRROR_CURRENCIES=00,01
 VIEFUND_TRANSACTION_MIRROR_STATUS_IDS=0,1,2,3,4,5,6
 VIEFUND_TRANSACTION_MIRROR_BATCH_SIZE=1000
-VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS=90
+VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS=180
 VIEFUND_MAINTENANCE_TIMEZONE=America/Toronto
 VIEFUND_MAINTENANCE_DRAIN_START=18:55
 VIEFUND_MAINTENANCE_START=19:00
@@ -116,6 +116,63 @@ stabilization buffer at 7:25 p.m. A scheduled incremental synchronization runs
 at 7:25 p.m.; a second pass at 10:10 p.m. refreshes matching enrichment after
 the nightly EFT, FSP, ASM, and bank imports. During initial population and
 incremental synchronization, users continue reading the last verified source.
+
+Manual **Sync now**, scheduled incremental syncs, and the post-population catchup
+refresh 180 calendar days by transaction creation date, including today, by
+default. This captures status changes on transactions created up to that window
+ago. If Azure already defines `VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS=90`,
+change that App Service setting to `180`; an explicit setting overrides the
+deployed default. Existing in-progress runs retain their selected range.
+
+### Enabling fund-filtered mirror queries and exports
+
+After deploying the fund-ID upgrade, run migrations (the production startup
+script does this automatically). For an existing verified mirror, use **Admin /
+Application Settings / Backfill fund/unit IDs**, or queue the same operation:
+
+```bash
+php artisan viefund:sync-transaction-mirror --backfill-fund-ids
+php artisan viefund:sync-transaction-mirror --status
+```
+
+Let any active mirror synchronization finish before starting the backfill.
+The existing mirror worker processes bounded cash-ID batches across the entire
+local mirror, including history older than 180 days. It updates the indexed fund
+column, transaction payload and fingerprint without rebuilding the mirror or
+recomputing matching enrichment. Separate linked-fund metadata preserves
+transactions linked to more than one fund: a filter can match any linked fund,
+while each cash transaction is still counted/exported once. Displayed fund,
+source, transaction type and fund-transaction ID follow the matching fund group.
+
+Progress, errors and **Fund / Unit IDs: Verified** appear in the mirror status
+panel. Existing **Pause** and **Resume** controls (or `--pause` / `--resume`) retain
+committed progress, including after a failed lookup. The job observes the same
+maintenance window and overlap lock as ordinary mirror synchronization.
+Missing source cash transactions fail explicitly and do not get marked as
+fund-less; cash-only transactions with a verified null fund are valid.
+
+Fund-filtered tables, counts, totals and exports retain the current period-cache
+path until every mirror row has been checked against the source. Once verified,
+they follow the existing data-source setting; verification does **not** switch
+that setting automatically. Validate the relevant fund/date/status filters under
+**Local mirror - administrators only**, then select **Local mirror - all users**.
+New initial populations and subsequent incremental syncs maintain the same
+verification metadata automatically. Direct CLI fund-filtered mirror exports
+are rejected until this verification is complete.
+
+Before production rollout, update an explicit Azure lookback override to `180`
+if present, deploy/migrate, backfill, validate in admin preview, then enable for
+all users. No mirror rebuild or deletion is required. The 180-day refresh is by
+**creation date**, not a guarantee to revisit arbitrarily old transactions.
+
+Isolated regression checks (in-memory SQLite and temporary XLSX files, without
+touching application or remote databases):
+
+```bash
+php tests/mirror/sync_lookback.php
+php tests/mirror/fund_id_backfill.php
+php tests/exports/all_transactions_fund_id.php
+```
 
 The deployment workflow enforces this App Service **Startup Command**:
 

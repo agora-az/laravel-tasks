@@ -12,6 +12,7 @@ class SyncVieFundTransactionMirrorCommand extends Command
         {--initial : Start the inception-to-date population}
         {--pause : Pause at the current committed checkpoint}
         {--resume : Resume a paused or failed synchronization}
+        {--backfill-fund-ids : Populate and verify fund/unit IDs on existing mirror rows}
         {--status : Display the current synchronization state}';
 
     protected $description = 'Populate and incrementally synchronize the canonical VieFund transaction mirror';
@@ -23,6 +24,7 @@ class SyncVieFundTransactionMirrorCommand extends Command
                 (bool) $this->option('initial') => $manager->startInitial(),
                 (bool) $this->option('pause') => $manager->pause(),
                 (bool) $this->option('resume') => $manager->resume(),
+                (bool) $this->option('backfill-fund-ids') => $manager->startFundIdBackfill(),
                 (bool) $this->option('status') => $manager->sync(),
                 default => $manager->startIncremental(),
             };

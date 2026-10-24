@@ -978,8 +978,9 @@ class RemoteVieFundController extends Controller
             'currency_code' => (string) $validated['filter_currency_code'],
             'status_ids' => $statusIds ?: [6],
         ];
-        $useMirror = empty(trim((string) ($validated['filter_fund_id'] ?? '')))
-            && $this->mirrorManager->shouldUseMirror($request->user());
+        $useMirror = $this->shouldUseMirrorForAllTransactions($request, [
+            'fund_id' => trim((string) ($validated['filter_fund_id'] ?? '')),
+        ]);
         $workingSet = $useMirror ? null : $this->workingSetManager->findReady($workingSetFilters);
         if (!$useMirror && !$workingSet) {
             $workingSet = $this->workingSetManager->ensure($workingSetFilters);
@@ -1728,7 +1729,7 @@ class RemoteVieFundController extends Controller
 
     private function shouldUseMirrorForAllTransactions(Request $request, array $filters): bool
     {
-        return empty($filters['fund_id']) && $this->mirrorManager->shouldUseMirror($request->user());
+        return $this->mirrorManager->shouldUseMirror($request->user(), $filters);
     }
 
     private function filteredTransactionTotals(array $summary, array $matchStatuses): array

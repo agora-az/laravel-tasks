@@ -61,6 +61,10 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         $batchStartedAt = microtime(true);
 
         try {
+            if ($sync->mode === 'fund_id_backfill') {
+                $this->backfillFundIds($sync, $remoteService, $manager, $batchStartedAt);
+                return;
+            }
             if ($sync->expected_rows === null) {
                 $expected = $this->countRemoteRows($sync, $remoteService);
                 $sync->forceFill(['expected_rows' => $expected])->save();
@@ -73,6 +77,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 $sync->cursor,
                 max(100, min(5000, (int) config('viefund.mirror.batch_size', 1000)))
             );
+            $fundMetadata = $this->verifiedFundMetadata($rows->pluck('cash_transaction_id'), $remoteService);
         } catch (Throwable $exception) {
             if ($availability->isBlocked()) {
                 $sync->forceFill(['state' => 'maintenance_wait'])->save();
@@ -90,8 +95,9 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         $matches = $matchStatusResolver->resolve($rows);
         $now = now();
         $generation = (string) $sync->sync_generation;
-        $mapped = $rows->map(function (object $row) use ($matches, $now, $generation): array {
+        $mapped = $rows->map(function (object $row) use ($matches, $now, $generation, $fundMetadata): array {
             $cashId = (int) $row->cash_transaction_id;
+            $row->fund_id = $this->nullableString($fundMetadata->get($cashId)->fund_id);
             $match = $matches->get((string) $cashId, [
                 'match_status' => 'Unknown',
                 'has_eft_match' => false,
@@ -110,6 +116,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 'ledger_relationship' => $this->nullableString($row->ledger_relationship ?? null),
                 'source_id' => $this->nullableString($row->source_id ?? null),
                 'fund_id' => $this->nullableString($row->fund_id ?? null),
+                'fund_id_checked_at' => $now,
                 'customer_name' => $this->nullableString($row->customer_name ?? null),
                 'plan_account_id' => $this->nullableString($row->plan_account_id ?? null),
                 'transaction_type' => $this->nullableString($row->transaction_type ?? null),
@@ -146,7 +153,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         ];
         $duration = max(0.001, microtime(true) - $batchStartedAt);
 
-        DB::transaction(function () use ($sync, $mapped, $cursor, $duration): void {
+        DB::transaction(function () use ($sync, $mapped, $cursor, $duration, $fundMetadata): void {
             $locked = VieFundTransactionMirrorSync::query()->lockForUpdate()->findOrFail($sync->id);
             if ($locked->state === 'paused' || $locked->sync_generation !== $sync->sync_generation) {
                 return;
@@ -156,21 +163,120 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 ['cash_transaction_id'],
                 array_values(array_diff(array_keys($chunk->first()), ['cash_transaction_id', 'created_at']))
             ));
-            $metrics = array_slice(array_merge((array) $locked->batch_metrics, [[
-                'rows' => $mapped->count(),
-                'seconds' => round($duration, 3),
-                'completed_at' => now()->toIso8601String(),
-            ]]), -10);
-            $locked->forceFill([
-                'cursor' => $cursor,
-                'rows_processed' => (int) $locked->rows_processed + $mapped->count(),
-                'active_seconds' => (float) $locked->active_seconds + $duration,
-                'batch_metrics' => $metrics,
-                'last_batch_completed_at' => now(),
-            ])->save();
+            $this->saveFundMetadata($fundMetadata);
+            $this->recordBatchProgress($locked, $mapped->count(), $duration, $cursor);
         });
 
         $manager->dispatch();
+    }
+
+    private function backfillFundIds(
+        VieFundTransactionMirrorSync $sync,
+        VieFundRemoteService $remoteService,
+        VieFundTransactionMirrorManager $manager,
+        float $batchStartedAt
+    ): void {
+        $cashIds = DB::table('viefund_transaction_mirror_rows')
+            ->whereNull('fund_id_checked_at')
+            ->orderBy('cash_transaction_id')
+            ->limit(max(100, min(5000, (int) config('viefund.mirror.batch_size', 1000))))
+            ->pluck('cash_transaction_id');
+        $fundIds = $this->verifiedFundMetadata($cashIds, $remoteService);
+
+        DB::transaction(function () use ($sync, $cashIds, $fundIds, $batchStartedAt): void {
+            $locked = VieFundTransactionMirrorSync::query()->lockForUpdate()->findOrFail($sync->id);
+            if ($locked->state !== 'running' || $locked->sync_generation !== $sync->sync_generation) {
+                return;
+            }
+            if ($cashIds->isEmpty()) {
+                if (DB::table('viefund_transaction_mirror_rows')->whereNull('fund_id_checked_at')->exists()) {
+                    return;
+                }
+                $locked->forceFill([
+                    'state' => 'ready',
+                    'phase' => 'ready',
+                    'current_currency' => null,
+                    'fund_ids_verified_at' => now(),
+                    'last_error' => null,
+                ])->save();
+                return;
+            }
+
+            $rows = DB::table('viefund_transaction_mirror_rows')
+                ->whereIn('cash_transaction_id', $cashIds)
+                ->whereNull('fund_id_checked_at')
+                ->lockForUpdate()
+                ->get(['cash_transaction_id', 'payload']);
+            foreach ($rows as $row) {
+                $fundId = $this->nullableString($fundIds->get($row->cash_transaction_id)->fund_id);
+                $payload = json_decode($row->payload, true, 512, JSON_THROW_ON_ERROR);
+                if (!is_array($payload)) {
+                    throw new \RuntimeException("Fund/unit ID backfill found an invalid payload for cash transaction {$row->cash_transaction_id}.");
+                }
+                $payload['fund_id'] = $fundId;
+                $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
+                DB::table('viefund_transaction_mirror_rows')
+                    ->where('cash_transaction_id', $row->cash_transaction_id)
+                    ->update([
+                        'fund_id' => $fundId,
+                        'fund_id_checked_at' => now(),
+                        'payload' => $encodedPayload,
+                        'source_fingerprint' => hash('sha256', $encodedPayload),
+                        'updated_at' => now(),
+                    ]);
+            }
+            $this->saveFundMetadata($fundIds->only($rows->pluck('cash_transaction_id')->all()));
+            $this->recordBatchProgress($locked, $rows->count(), max(0.001, microtime(true) - $batchStartedAt));
+        });
+
+        if ($sync->fresh()->state === 'running') {
+            $manager->dispatch();
+        }
+    }
+
+    private function verifiedFundMetadata(Collection $cashIds, VieFundRemoteService $remoteService): Collection
+    {
+        if ($cashIds->isEmpty()) {
+            return collect();
+        }
+        $metadata = $remoteService->fetchFundIdsForCashTransactions($cashIds->all())->keyBy('cash_transaction_id');
+        foreach ($cashIds as $cashId) {
+            $source = $metadata->get($cashId);
+            if (!$source || !property_exists($source, 'fund_id') || !isset($source->funds)) {
+                throw new \RuntimeException("Fund/unit ID synchronization could not verify source cash transaction $cashId. No checkpoint was committed.");
+            }
+        }
+
+        return $metadata->only($cashIds->all());
+    }
+
+    private function saveFundMetadata(Collection $metadata): void
+    {
+        DB::table('viefund_transaction_mirror_funds')
+            ->whereIn('cash_transaction_id', $metadata->keys())->delete();
+        $metadata->flatMap(fn(object $source): array => $source->funds)
+            ->chunk(500)
+            ->each(fn(Collection $chunk) => DB::table('viefund_transaction_mirror_funds')->insert($chunk->all()));
+    }
+
+    private function recordBatchProgress(
+        VieFundTransactionMirrorSync $sync,
+        int $rows,
+        float $duration,
+        ?array $cursor = null
+    ): void {
+        $metrics = array_slice(array_merge((array) $sync->batch_metrics, [[
+            'rows' => $rows,
+            'seconds' => round($duration, 3),
+            'completed_at' => now()->toIso8601String(),
+        ]]), -10);
+        $sync->forceFill([
+            'cursor' => $cursor,
+            'rows_processed' => (int) $sync->rows_processed + $rows,
+            'active_seconds' => (float) $sync->active_seconds + $duration,
+            'batch_metrics' => $metrics,
+            'last_batch_completed_at' => now(),
+        ])->save();
     }
 
     public function failed(?Throwable $exception): void
@@ -249,7 +355,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
 
         if ($sync->mode === 'initial') {
             $from = now()
-                ->subDays(max(1, (int) config('viefund.mirror.incremental_lookback_days', 90)) - 1)
+                ->subDays(max(1, (int) config('viefund.mirror.incremental_lookback_days', 180)) - 1)
                 ->toDateString();
             $sync->forceFill([
                 'mode' => 'catchup',
@@ -265,6 +371,9 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 'active_seconds' => 0,
                 'batch_metrics' => [],
                 'verified_at' => now(),
+                'fund_ids_verified_at' => DB::table('viefund_transaction_mirror_rows')->whereNull('fund_id_checked_at')->exists()
+                    ? null
+                    : now(),
             ])->save();
             $manager->dispatch();
             return;

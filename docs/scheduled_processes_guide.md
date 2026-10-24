@@ -69,9 +69,25 @@ The report screens may use locally refreshed data for speed, but the chosen repo
 
 ## All Transactions period caches
 
+The separate All Transactions mirror refreshes the last **180 days by transaction
+creation date, including today**, on manual **Sync now** and the scheduled
+7:25 p.m. and 10:10 p.m. syncs. Post-population catchup uses the same window.
+This is independent of the 90-day cash-balance snapshot refreshes above.
+`VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS` can override the mirror window; update
+any existing production value of `90` to `180` when deploying this change.
+
+Existing mirrors need the one-time **Backfill fund/unit IDs** operation in
+Admin / Application Settings before fund-filtered requests can use the mirror.
+It scans the complete mirror, not just the 180-day refresh window, and shares
+the mirror queue, maintenance pauses and Pause/Resume controls. Null funds are
+tracked separately from unchecked rows. Multiple linked funds remain searchable
+without duplicating cash transactions. Until verification finishes, fund-filtered
+requests continue using the current period cache; afterwards they follow the
+selected mirror source mode. The backfill does not change that mode for you.
+
 The **All Transactions** page builds a local period cache on demand. A cache is identified by its date basis, start date, end date, currency, and selected VieFund statuses. Changing any of those criteria creates or reuses a separate cache; it does not overwrite rows belonging to another period. Search text plus customer, plan account, transaction, source, fund/unit ID, transaction-type, and match filters are applied within the applicable period cache and do not start another hydration process. The filtered totals show cash outflows, inflows, and net amount for all matching rows; the separate period balance summary remains unfiltered by those detail criteria. Excel exports use the same detail filters.
 
-When enabled in the column settings, **Fund / Unit ID** is also written as a text column in Excel. Transactions without a linked fund have a blank cell. The workbook Summary records the fund filter, matching transaction count, and exported net amount. Run `php tests/exports/all_transactions_fund_id.php` for isolated workbook regression checks covering filtered/unfiltered results and visible/hidden fund columns in both export layouts.
+When enabled in the column settings, **Fund / Unit ID** is also written as a text column in Excel. Transactions without a linked fund have a blank cell. The workbook Summary records the fund filter, matching transaction count, and exported net amount. Run `php tests/exports/all_transactions_fund_id.php` for isolated workbook regression checks covering filtered/unfiltered results and visible/hidden fund columns in both export layouts and both data sources.
 
 Several different period requests made close together can therefore queue several independent hydration processes. Reusing the same broad period criteria shares the existing process across users. Prefer allowing one useful period to finish before requesting several substantially different periods, especially for long date ranges.
 

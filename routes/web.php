@@ -61,6 +61,8 @@ Route::middleware('auth.check')->group(function () {
             ->name('admin.settings.mirror.resume');
         Route::post('/settings/mirror/sync', [ApplicationSettingsController::class, 'syncMirror'])
             ->name('admin.settings.mirror.sync');
+        Route::post('/settings/mirror/backfill-fund-ids', [ApplicationSettingsController::class, 'backfillMirrorFundIds'])
+            ->name('admin.settings.mirror.backfill-fund-ids');
     });
 
     Route::get('/dashboard', [ReconciliationController::class, 'dashboard'])->name('dashboard');

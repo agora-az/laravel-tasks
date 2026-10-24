@@ -28,6 +28,54 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return true;
     }
 
+    public function fetchFundIdsForCashTransactions(array $cashTransactionIds): Collection
+    {
+        $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
+
+        return DB::connection(self::CONNECTION)
+            ->query()
+            ->fromRaw("OPENJSON(?) WITH ([cash_transaction_id] BIGINT '$') AS requested_cash", [
+                json_encode(array_values($cashTransactionIds), JSON_THROW_ON_ERROR),
+            ])
+            ->join("{$schema}.UB_CashTrx as ct", 'ct.ID', '=', 'requested_cash.cash_transaction_id')
+            ->leftJoin("{$schema}.UB_FundTrxCash as fc", 'fc.iCashTrxID', '=', 'ct.ID')
+            ->leftJoin("{$schema}.UB_FundTrx as ft", 'ft.ID', '=', 'fc.iTrxID')
+            ->leftJoin("{$schema}.UB_FundTrxLookup as fl", 'fl.iTrxID', '=', 'ft.ID')
+            ->leftJoin("{$schema}.UB_Def_TrxType as tt", 'tt.ID', '=', 'fl.iType')
+            ->leftJoin("{$schema}.UB_Def_TrxType as cash_type", 'cash_type.ID', '=', 'ct.iType')
+            ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
+            ->leftJoin("{$schema}.UB_Def_TrustType as trust_type", 'trust_type.ID', '=', 'tr.iType')
+            ->leftJoin("{$schema}.UB_Def_TrustDepositType as deposit_type", 'deposit_type.ID', '=', 'tr.iDepositType')
+            ->selectRaw('ct.ID AS cash_transaction_id, CAST(fl.FundID AS NVARCHAR(100)) AS fund_id')
+            ->selectRaw('MIN(ft.ID) AS fund_transaction_id, MIN(CAST(ft.SourceID AS NVARCHAR(100))) AS source_id')
+            ->selectRaw('MIN(ISNULL(tt.NameEN, CAST(fl.iType AS NVARCHAR(100)))) AS transaction_type')
+            ->selectRaw('MIN(CAST(ct.SourceID AS NVARCHAR(100))) AS cash_source_id')
+            ->selectRaw('MIN(COALESCE(CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN deposit_type.NameEN ELSE trust_type.NameEN END, cash_type.NameEN, CAST(ct.iType AS NVARCHAR(100)))) AS cash_transaction_type')
+            ->groupBy('ct.ID', 'fl.FundID')
+            ->orderBy('ct.ID')
+            ->orderBy('fund_id')
+            ->get()
+            ->groupBy('cash_transaction_id')
+            ->map(function (Collection $rows, int|string $cashId): object {
+                $funds = $rows->filter(fn(object $row): bool => $row->fund_id !== null)->values();
+
+                return (object) [
+                    'cash_transaction_id' => $cashId,
+                    'fund_id' => $funds->first()?->fund_id,
+                    'funds' => $funds->map(fn(object $row): array => [
+                        'cash_transaction_id' => $cashId,
+                        'fund_id' => (string) $row->fund_id,
+                        'fund_transaction_id' => $row->fund_transaction_id,
+                        'source_id' => $row->source_id,
+                        'transaction_type' => $row->transaction_type,
+                        'cash_source_id' => $row->cash_source_id,
+                        'cash_transaction_type' => $row->cash_transaction_type,
+                    ])->all(),
+                ];
+            })
+            ->values();
+    }
+
     public function listTables(?string $schema = null): Collection
     {
         $schemaName = $schema ?: env('VIEFUND_DB_SCHEMA', 'dbo');

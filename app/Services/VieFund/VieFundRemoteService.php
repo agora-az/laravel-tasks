@@ -44,6 +44,11 @@ class VieFundRemoteService
         return $this->repository->fetchFundSourceIdsForCashTransactions($cashTransactionIds);
     }
 
+    public function fetchFundIdsForCashTransactions(array $cashTransactionIds): Collection
+    {
+        return $this->repository->fetchFundIdsForCashTransactions($cashTransactionIds);
+    }
+
     public function countAllTransactions(?string $search = null, array $filters = []): int
     {
         return $this->repository->countAllTransactions($search, $filters);

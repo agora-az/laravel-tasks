@@ -16,6 +16,7 @@ use App\Services\VieFund\VieFundWorkingSetBalanceService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
 use App\Services\VieFund\VieFundTransactionMirrorQuery;
+use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Services\VieFund\Repositories\SqlServerEftRemoteRepository;
 use App\Support\AllTransactionColumns;
 use Carbon\Carbon;
@@ -88,7 +89,8 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         VieFundTransactionWorkingSetManager $workingSetManager,
         VieFundTransactionWorkingSetQuery $workingSetQuery,
         VieFundWorkingSetBalanceService $workingSetBalanceService,
-        VieFundTransactionMirrorQuery $mirrorQuery
+        VieFundTransactionMirrorQuery $mirrorQuery,
+        VieFundTransactionMirrorManager $mirrorManager
     ): int {
         $startedAt = microtime(true);
         $startedAtIso = now()->toIso8601String();
@@ -151,6 +153,9 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 'has_asm_match' => $hasAsmMatch,
                 'match_statuses' => $matchStatuses,
             ]);
+            if ($dataSource === 'mirror' && !empty($filters['fund_id']) && !$mirrorManager->fundIdsReady()) {
+                throw new \RuntimeException('Complete the mirror fund/unit ID backfill before exporting a fund-filtered result from the mirror.');
+            }
             $workingSet = $dataSource === 'mirror' ? null : $workingSetManager->findReady($filters);
             if ($dataSource === 'current' && !$workingSet) {
                 throw new \RuntimeException(

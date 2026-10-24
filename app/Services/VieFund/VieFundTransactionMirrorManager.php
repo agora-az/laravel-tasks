@@ -95,7 +95,7 @@ class VieFundTransactionMirrorManager
             }
 
             $from = now()
-                ->subDays(max(1, (int) config('viefund.mirror.incremental_lookback_days', 90)) - 1)
+                ->subDays(max(1, (int) config('viefund.mirror.incremental_lookback_days', 180)) - 1)
                 ->toDateString();
             $this->initializeRun($sync, 'incremental', $from, now()->toDateString(), 'daily_snapshot_sync');
             $shouldDispatch = true;
@@ -123,6 +123,48 @@ class VieFundTransactionMirrorManager
 
             return $sync->fresh();
         });
+    }
+
+    public function startFundIdBackfill(): VieFundTransactionMirrorSync
+    {
+        if (!$this->available()) {
+            throw new InvalidArgumentException('The transaction mirror tables have not been migrated.');
+        }
+
+        $sync = DB::transaction(function (): VieFundTransactionMirrorSync {
+            $sync = VieFundTransactionMirrorSync::query()
+                ->lockForUpdate()
+                ->find(VieFundTransactionMirrorSync::SINGLETON_ID);
+            if (!$sync?->isReadable()) {
+                throw new InvalidArgumentException('Complete and verify the initial mirror population first.');
+            }
+            if ($sync->state !== 'ready') {
+                throw new InvalidArgumentException('Finish or resume the existing mirror synchronization before starting the fund/unit ID backfill.');
+            }
+            if ($sync->fund_ids_verified_at !== null) {
+                throw new InvalidArgumentException('Mirror fund/unit IDs have already been verified.');
+            }
+
+            $from = DB::table('viefund_transaction_mirror_rows')->min('created_date');
+            $this->initializeRun(
+                $sync,
+                'fund_id_backfill',
+                $from ? CarbonImmutable::parse($from)->toDateString() : now()->toDateString(),
+                now()->toDateString(),
+                'fund_id_backfill'
+            );
+            $sync->forceFill([
+                'expected_rows' => DB::table('viefund_transaction_mirror_rows')->whereNull('fund_id_checked_at')->count(),
+                'current_currency' => null,
+            ])->save();
+
+            return $sync->fresh();
+        });
+        $this->dispatch($this->availabilityWindow->isBlocked()
+            ? $this->availabilityWindow->nextAvailableAt()
+            : null);
+
+        return $sync;
     }
 
     public function resume(): VieFundTransactionMirrorSync
@@ -163,10 +205,13 @@ class VieFundTransactionMirrorManager
             : self::SOURCE_CURRENT;
     }
 
-    public function shouldUseMirror(?User $user): bool
+    public function shouldUseMirror(?User $user, array $filters = []): bool
     {
         $sync = $this->sync();
         if (!$sync?->isReadable()) {
+            return false;
+        }
+        if (trim((string) ($filters['fund_id'] ?? '')) !== '' && $sync->fund_ids_verified_at === null) {
             return false;
         }
 
@@ -175,6 +220,13 @@ class VieFundTransactionMirrorManager
             self::SOURCE_ADMIN_PREVIEW => $user !== null && $this->applicationAdmin->allows($user),
             default => false,
         };
+    }
+
+    public function fundIdsReady(): bool
+    {
+        $sync = $this->sync();
+
+        return $sync?->isReadable() && $sync->fund_ids_verified_at !== null;
     }
 
     public function assertSourceModeAllowed(string $mode): void
@@ -220,6 +272,8 @@ class VieFundTransactionMirrorManager
             'phase' => $sync->phase,
             'ready' => $sync->isReadable(),
             'data_source' => $this->sourceMode(),
+            'fund_ids_ready' => $sync->isReadable() && $sync->fund_ids_verified_at !== null,
+            'fund_ids_verified_at' => optional($sync->fund_ids_verified_at)->toIso8601String(),
             'maintenance_phase' => $this->availabilityWindow->phase(),
             'target_from_date' => optional($sync->target_from_date)->toDateString(),
             'target_through_date' => optional($sync->target_through_date)->toDateString(),
