@@ -566,7 +566,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
             ->leftJoin("{$schema}.UB_Def_TrustStatus as trust_status", 'trust_status.ID', '=', 'tr.iStatus')
             ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
-            ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<=', $filters['date_to'] . ' 23:59:59'))
+            ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $availabilityTo))
             ->whereNotNull($cashDateColumn)
             ->whereNotNull('ct.mAmount')
             ->when($dateBasis === 'trade_date', function ($query) use ($availabilityTo) {
@@ -639,6 +639,10 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
         $cashTransactionIdsJson = $filters['cash_transaction_ids_json'] ?? null;
         $cashTransactionIdsPrevalidated = !empty($filters['cash_transaction_ids_prevalidated']);
+        $fundType = 'ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))';
+        $fundTypeAggregate = !empty($filters['require_unambiguous_fund_type'])
+            ? "CASE WHEN COUNT(DISTINCT ISNULL({$fundType}, 'Unknown')) > 1 THEN 'Multiple fund transaction types' ELSE MIN(ISNULL({$fundType}, 'Unknown')) END"
+            : "MIN({$fundType})";
         $fundMetadata = $cashTransactionIdsJson !== null
             ? DB::connection(self::CONNECTION)
             ->query()
@@ -651,12 +655,18 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_Def_TrxType as fm_tt", 'fm_tt.ID', '=', 'fm_l.iType')
             ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('fm_fc.iCashTrxID', $filters['cash_transaction_ids']))
             ->when(!empty($filters['fund_id']), fn($query) => $query
-                ->where('fm_l.FundID', 'like', '%' . trim((string) $filters['fund_id']) . '%'))
+                ->where(
+                    'fm_l.FundID',
+                    !empty($filters['fund_id_exact']) ? '=' : 'like',
+                    !empty($filters['fund_id_exact'])
+                        ? trim((string) $filters['fund_id'])
+                        : '%' . trim((string) $filters['fund_id']) . '%'
+                ))
             ->selectRaw('fm_fc.iCashTrxID AS cash_id')
             ->selectRaw('MIN(fm_t.ID) AS fund_transaction_id')
             ->selectRaw('MIN(CAST(fm_t.SourceID AS NVARCHAR(100))) AS fund_source_id')
             ->selectRaw('MIN(CAST(fm_l.FundID AS NVARCHAR(100))) AS fund_id')
-            ->selectRaw("MIN(ISNULL(fm_tt.NameEN, CAST(fm_l.iType AS NVARCHAR(100)))) AS fund_transaction_type")
+            ->selectRaw("{$fundTypeAggregate} AS fund_transaction_type")
             ->when(array_key_exists('agra_fsp_source_ids_json', $filters), function ($query) use ($filters) {
                 $query->whereRaw(
                     "EXISTS (SELECT 1 FROM OPENJSON(?) WITH ([source_id] VARCHAR(64) '$') AS agra_fsp WHERE agra_fsp.[source_id] = fm_t.SourceID)",
@@ -694,7 +704,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('ct.ID', $filters['cash_transaction_ids']))
             ->when(!$cashTransactionIdsPrevalidated, fn($query) => $query
                 ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
-                ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<=', $filters['date_to'] . ' 23:59:59'))
+                ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $availabilityTo))
                 ->whereNotNull($cashDateColumn)
                 ->whereNotNull('ct.mAmount'))
             ->when(!$cashTransactionIdsPrevalidated && $dateBasis === 'trade_date', function ($query) use ($availabilityTo) {

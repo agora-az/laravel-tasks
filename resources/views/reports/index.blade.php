@@ -102,6 +102,8 @@
     </div>
 </div>
 
+@include('reports.cashagch')
+
 <div class="card report-card" style="margin-bottom: 20px;">
     <div style="font-size: 16px; font-weight: 700; color: #2d3748; margin-bottom: 6px;">VieFund Daily Net + Running Balance</div>
     <div style="font-size: 13px; color: #4a5568; margin-bottom: 14px;">
@@ -117,6 +119,7 @@
     @endif
 
     <div id="report-feedback" class="report-feedback" style="display:none;">
+        @include('reports.cancel-button', ['cancelId' => 'daily-balance-cancel'])
         <div id="report-run-status-wrap" class="sync-chip sync-chip-progress" style="display:none; width:max-content; align-items:center; gap:8px;">
             <span id="report-run-status-text"></span>
             <button type="button" id="report-run-status-dismiss" aria-label="Dismiss report status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
@@ -283,6 +286,7 @@
         <div class="report-local-notice is-error">{{ session('legacy_report_error') }}</div>
     @endif
     <div id="legacy-report-feedback" class="report-feedback" style="display:none; margin-bottom:12px;">
+        @include('reports.cancel-button', ['cancelId' => 'legacy-daily-balance-cancel'])
         <div id="legacy-report-status-wrap" class="sync-chip sync-chip-progress" style="display:none; width:max-content; align-items:center; gap:8px;">
             <span id="legacy-report-status-text"></span>
             <button type="button" id="legacy-report-status-dismiss" aria-label="Dismiss legacy report status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
@@ -396,6 +400,7 @@
     @endif
 
     <div id="customer-balance-feedback" class="report-feedback" style="display:none;">
+        @include('reports.cancel-button', ['cancelId' => 'customer-balances-cancel'])
         <div id="customer-balance-run-status-wrap" class="sync-chip sync-chip-progress" style="display:none; width:max-content; align-items:center; gap:8px;">
             <span id="customer-balance-run-status-text"></span>
             <button type="button" id="customer-balance-run-status-dismiss" aria-label="Dismiss customer balance report status" style="border:none; background:transparent; color:inherit; font-size:14px; font-weight:700; cursor:pointer; line-height:1; padding:0;">×</button>
@@ -810,6 +815,7 @@
             .then(data => {
                 if (data.run_id !== activeRunId) return;
                 lastStatus = data;
+                window.updateReportCancelButton(document.getElementById('daily-balance-cancel'), data);
                 const reportedPct = Number(data.progress_pct ?? 0);
                 const pct = data.inProgress ? Math.max(lastProgress, reportedPct) : reportedPct;
                 if (data.inProgress) lastProgress = pct;
@@ -1006,6 +1012,7 @@
                 headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
             });
             const data = await response.json();
+            window.updateReportCancelButton(document.getElementById('legacy-daily-balance-cancel'), data);
             if (data.inProgress) {
                 setRunning(true);
                 showStatus(data.message || 'Legacy report in progress...');
@@ -1278,6 +1285,7 @@
             .then(data => {
                 if (data.run_id !== activeRunId) return;
                 lastStatus = data;
+                window.updateReportCancelButton(document.getElementById('customer-balances-cancel'), data);
                 const reportedPct = Number(data.progress_pct ?? 0);
                 const pct = data.inProgress ? Math.max(lastProgress, reportedPct) : reportedPct;
                 if (data.inProgress) lastProgress = pct;

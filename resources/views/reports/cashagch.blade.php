@@ -1,0 +1,195 @@
+<div class="card report-card" style="margin-bottom:20px;">
+    <div style="font-size:16px; font-weight:700; color:#2d3748; margin-bottom:6px;">CASHagch Purchases and Redemptions</div>
+    <p style="font-size:13px; color:#4a5568; margin-bottom:14px;">
+        Exports matching VieFund cash transactions for the selected date range.
+        Leave Start Date blank or choose Use Inception Date to include all available history.
+        The Summary sheet separates purchases, standard redemptions and fee redemptions, and combines both redemption categories into a total.
+        Uses transaction amounts only—no bank amounts or bank match is required. Reversals offset their category totals; other types are listed for review.
+    </p>
+    <form method="POST" action="{{ route('reports.cashagch.run') }}" id="cashagch-report-form"
+          data-status-url="{{ route('reports.cashagch.status', ['runId' => '__RUN_ID__']) }}"
+          data-user-id="{{ auth()->id() }}">
+        @csrf
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; align-items:end;">
+            <div>
+                <label for="cashagch-start-date" style="display:block; font-weight:600; margin-bottom:6px;">Start Date</label>
+                <input id="cashagch-start-date" name="date_from" type="date" max="{{ now()->toDateString() }}" aria-describedby="cashagch-date-scope" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+            </div>
+            <div>
+                <span id="cashagch-date-scope" style="display:block; font-size:12px; margin-bottom:6px;">Since inception (all available history)</span>
+                <button id="cashagch-use-inception" type="button" aria-pressed="true" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">&laquo; Use Inception Date</button>
+            </div>
+            <div>
+                <label for="cashagch-end-date" style="display:block; font-weight:600; margin-bottom:6px;">End Date</label>
+                <input id="cashagch-end-date" name="date_to" type="date" value="{{ now()->toDateString() }}" max="{{ now()->toDateString() }}" required style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+            </div>
+            <div>
+                <label for="cashagch-currency" style="display:block; font-weight:600; margin-bottom:6px;">Currency</label>
+                <select id="cashagch-currency" name="currency_code" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                    <option value="00" selected>CAD</option>
+                    <option value="01">USD</option>
+                </select>
+            </div>
+            <div>
+                <label for="cashagch-date-basis" style="display:block; font-weight:600; margin-bottom:6px;">Date Basis</label>
+                <select id="cashagch-date-basis" name="date_basis" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                    @foreach($dateBasisOptions as $value => $label)
+                        <option value="{{ $value }}" @selected($value === 'settlement_date')>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </div>
+        </div>
+        <fieldset class="report-options" style="border:1px solid; border-radius:6px; margin:14px 0; padding:12px;">
+            <legend style="font-weight:600;">Cash Transaction Status</legend>
+            <div style="display:flex; flex-wrap:wrap; gap:12px;">
+                @foreach($fundStatusOptions as $value => $label)
+                    <label><input type="checkbox" name="status_ids[]" value="{{ $value }}" @checked($value === 6)> {{ $label }}</label>
+                @endforeach
+            </div>
+        </fieldset>
+        <button class="report-action-button" type="submit" style="padding:10px 16px; border:0; border-radius:4px; font-weight:700;">Generate Excel Report</button>
+    </form>
+    <div id="cashagch-feedback" class="report-feedback" hidden aria-live="polite">
+        <span data-cashagch-message></span>
+        @include('reports.cancel-button', ['cancelId' => 'cashagch-report-cancel'])
+        <div data-cashagch-eta hidden style="margin-top:6px; font-size:13px;"></div>
+        <a data-cashagch-download hidden style="margin-left:12px; font-weight:700;">Download Excel report</a>
+        <span data-cashagch-storage-warning hidden> Keep this page open: your browser cannot remember report progress after a refresh.</span>
+    </div>
+</div>
+<script>
+(() => {
+    const form = document.getElementById('cashagch-report-form');
+    const feedback = document.getElementById('cashagch-feedback');
+    const message = feedback.querySelector('[data-cashagch-message]');
+    const download = feedback.querySelector('[data-cashagch-download]');
+    const button = form.querySelector('button[type="submit"]');
+    const storageWarning = feedback.querySelector('[data-cashagch-storage-warning]');
+    const eta = feedback.querySelector('[data-cashagch-eta]');
+    const cancelButton = document.getElementById('cashagch-report-cancel');
+    const startDate = document.getElementById('cashagch-start-date');
+    const endDate = document.getElementById('cashagch-end-date');
+    const inceptionButton = document.getElementById('cashagch-use-inception');
+    const dateScope = document.getElementById('cashagch-date-scope');
+    const syncDateRange = () => {
+        startDate.max = endDate.value || endDate.max;
+        endDate.min = startDate.value;
+        dateScope.textContent = startDate.value ? 'Custom start date selected' : 'Since inception (all available history)';
+        inceptionButton.setAttribute('aria-pressed', startDate.value ? 'false' : 'true');
+    };
+    startDate.addEventListener('input', syncDateRange);
+    endDate.addEventListener('input', syncDateRange);
+    inceptionButton.addEventListener('click', () => {
+        startDate.value = '';
+        syncDateRange();
+        startDate.focus();
+    });
+    syncDateRange();
+    const storageKey = `cashagch-report-run:${form.dataset.userId}`;
+    let timer = null;
+    let activeRunId = null;
+    const formatDuration = (seconds) => {
+        if (seconds < 60) return 'less than a minute';
+        const minutes = Math.ceil(seconds / 60);
+        if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+        const hours = Math.floor(minutes / 60);
+        const remainder = minutes % 60;
+        return `${hours} hour${hours === 1 ? '' : 's'}${remainder ? ` ${remainder} minute${remainder === 1 ? '' : 's'}` : ''}`;
+    };
+    const showEta = (status, active) => {
+        eta.hidden = !active;
+        eta.textContent = '';
+        if (!active) return;
+        if (status.state === 'queued') {
+            eta.textContent = 'ETA: waiting for the report worker.';
+        } else if (status.phase === 'counting') {
+            eta.textContent = 'ETA: calculating the total number of matching transactions...';
+        } else if (status.phase === 'finalizing') {
+            eta.textContent = 'Finalizing workbook. No remaining-time estimate for this step.';
+        } else if (Number.isFinite(status.eta_seconds) && status.eta_seconds > 0) {
+            const completion = status.estimated_completion_at
+                ? ` (around ${new Date(status.estimated_completion_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+                : '';
+            eta.textContent = `Estimated time remaining: ${formatDuration(status.eta_seconds)}${completion}. Excludes final Excel packaging.`;
+        } else if (!status.phase) {
+            eta.textContent = 'ETA is available for newly started reports.';
+        } else if (status.expected_transactions !== null && status.processed_transactions >= status.expected_transactions) {
+            eta.textContent = 'Finishing the transaction read before Excel packaging...';
+        } else {
+            eta.textContent = 'ETA: calculating after the first few batches...';
+        }
+    };
+    const warnStorage = (error) => {
+        feedback.hidden = false;
+        storageWarning.hidden = false;
+        console.warn('Unable to save or restore CASHagch report progress in this browser.', error);
+    };
+    const showError = (error) => {
+        feedback.hidden = false;
+        message.textContent = error.message;
+        download.hidden = true;
+        eta.hidden = true;
+        eta.textContent = '';
+        button.disabled = false;
+    };
+    const poll = async (runId) => {
+        try {
+            const response = await fetch(form.dataset.statusUrl.replace('__RUN_ID__', encodeURIComponent(runId)), {
+                headers: { 'Accept': 'application/json' },
+                cache: 'no-store',
+            });
+            const status = await response.json();
+            if (runId !== activeRunId) return;
+            if (!response.ok) throw new Error(status.message || 'Unable to read report progress.');
+            feedback.hidden = false;
+            message.textContent = status.message;
+            const active = ['queued', 'running', 'cancelling'].includes(status.state);
+            window.updateReportCancelButton(cancelButton, status);
+            showEta(status, active && !status.cancellation_requested && status.state !== 'cancelling');
+            button.disabled = active;
+            download.hidden = !status.download_url;
+            if (status.download_url) download.href = status.download_url;
+            if (active) timer = window.setTimeout(() => poll(runId), 5000);
+        } catch (error) {
+            if (runId === activeRunId) showError(error);
+        }
+    };
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        if (timer) window.clearTimeout(timer);
+        activeRunId = null;
+        window.updateReportCancelButton(cancelButton, {});
+        button.disabled = true;
+        feedback.hidden = false;
+        download.hidden = true;
+        eta.hidden = true;
+        eta.textContent = '';
+        message.textContent = 'Submitting CASHagch report...';
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.errors ? Object.values(result.errors).flat()[0] : result.message);
+            activeRunId = result.run_id;
+            try {
+                localStorage.setItem(storageKey, result.run_id);
+            } catch (error) {
+                warnStorage(error);
+            }
+            poll(result.run_id);
+        } catch (error) {
+            showError(error);
+        }
+    });
+    try {
+        activeRunId = localStorage.getItem(storageKey);
+        if (activeRunId) poll(activeRunId);
+    } catch (error) {
+        warnStorage(error);
+    }
+})();
+</script>

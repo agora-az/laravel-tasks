@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Concerns\CancelsVieFundReports;
 use App\Exports\VieFundDailyBalanceWorkbookExport;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
@@ -11,6 +12,8 @@ use Maatwebsite\Excel\Facades\Excel;
 
 class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
 {
+    use CancelsVieFundReports;
+
     private const FETCH_CHUNK_DAYS = 31;
     private const FETCH_WEIGHT = 0.7;
     private const DATE_BASIS_LABELS = [
@@ -35,6 +38,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
     private const TRUST_STATUS_NAMES = ['Deleted', 'Unsettled', 'Settled'];
 
     protected $signature = 'report:viefund-daily-balance-legacy
+        {--run-id= : Unique report generation identifier}
         {--date-from= : Report start date (YYYY-MM-DD)}
         {--date-to= : Report end date (YYYY-MM-DD)}
         {--date-basis=settlement_date : create_date|trade_date|processing_date|settlement_date}
@@ -44,6 +48,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
+        {--cancel-file= : Cancellation marker for this report run}
         {--lock-file= : Optional lock file path}';
 
     protected $description = 'Generate the legacy VieFund fund + trust daily balance comparison report';
@@ -57,14 +62,18 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
     {
         $lockFile = $this->stringOption('lock-file');
         $statusFile = $this->stringOption('status-file');
+        $this->initializeCancellation($statusFile);
 
-        if ($lockFile) {
-            @file_put_contents($lockFile, date('c'));
+        if ($lockFile && !is_file($lockFile)) {
+            file_put_contents($lockFile, json_encode(['run_id' => $this->stringOption('run-id')], JSON_THROW_ON_ERROR));
         }
 
         try {
             return $this->generate($statusFile);
         } catch (\Throwable $exception) {
+            if ($this->isCancellation($exception)) {
+                return $this->finishCancellation($statusFile);
+            }
             $this->writeStatus($statusFile, [
                 'inProgress' => false,
                 'success' => false,
@@ -74,9 +83,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
             ]);
             throw $exception;
         } finally {
-            if ($lockFile && file_exists($lockFile)) {
-                @unlink($lockFile);
-            }
+            $this->releaseReportLock($lockFile);
         }
     }
 
@@ -118,6 +125,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
             $outputRelativePath = 'reports/' . basename($outputRelativePath);
         }
         $outputAbsolutePath = storage_path('app/' . $outputRelativePath);
+        $this->cancellationOutput = $outputAbsolutePath;
         if (!is_dir(dirname($outputAbsolutePath))) {
             @mkdir(dirname($outputAbsolutePath), 0775, true);
         }
@@ -143,6 +151,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
         while ($fetchCursor->lte($dateTo)) {
             $chunkStart = $fetchCursor->copy();
             $chunkEnd = $chunkStart->copy()->addDays(self::FETCH_CHUNK_DAYS - 1)->min($dateTo);
+            $this->checkForCancellation();
             $chunkRows = $this->remoteService->fetchDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
                 'status_ids' => $statuses,
                 'trust_status_names' => $trustStatuses,
@@ -219,6 +228,7 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
             ['Final Balance', $format === 'excel' ? $runningBalance : $this->formatCurrency($runningBalance)],
         ];
 
+        $this->checkForCancellation();
         if ($format === 'excel') {
             Excel::store(new VieFundDailyBalanceWorkbookExport(
                 [['Report Date', 'Legacy Transactions', 'Daily Net Transactions', 'Running Daily Balance'], ...$rows],
@@ -268,22 +278,12 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
         $dataRows = [['Report Date', 'Transaction Count', 'Daily Net Transactions', 'Running Daily Balance'], ...$rows];
         $maxRows = max(count($dataRows), count($metadataRows));
         for ($index = 0; $index < $maxRows; $index++) {
+            $this->checkForCancellation();
             $data = $dataRows[$index] ?? ['', '', '', ''];
             $metadata = $metadataRows[$index] ?? ['', ''];
             fputcsv($handle, [...$data, '', ...$metadata]);
         }
         fclose($handle);
-    }
-
-    private function writeStatus(?string $path, array $payload): void
-    {
-        if (!$path) {
-            return;
-        }
-        if (!is_dir(dirname($path))) {
-            @mkdir(dirname($path), 0775, true);
-        }
-        @file_put_contents($path, json_encode($payload, JSON_PRETTY_PRINT));
     }
 
     private function stringOption(string $name): ?string

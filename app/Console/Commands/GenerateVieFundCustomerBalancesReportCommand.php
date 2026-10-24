@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Concerns\CancelsVieFundReports;
 use App\Exports\VieFundCustomerBalancesWorkbookExport;
 use App\Services\VieFund\VieFundRemoteService;
 use Carbon\Carbon;
@@ -11,6 +12,8 @@ use Maatwebsite\Excel\Excel as ExcelWriter;
 
 class GenerateVieFundCustomerBalancesReportCommand extends Command
 {
+    use CancelsVieFundReports;
+
     private const DATE_BASIS_LABELS = [
         'create_date' => 'Created date',
         'trade_date' => 'Trade date',
@@ -56,6 +59,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
+        {--cancel-file= : Cancellation marker for this report run}
         {--lock-file= : Optional lock file path}';
 
     protected $description = 'Generate VieFund customer balances report asynchronously';
@@ -73,6 +77,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $lockFile = $this->resolveString($this->option('lock-file'));
         $statusFile = $this->resolveString($this->option('status-file'));
         $this->runId = $this->resolveString($this->option('run-id'));
+        $this->initializeCancellation($statusFile);
 
         if ($lockFile && !is_file($lockFile)) {
             @file_put_contents($lockFile, json_encode([
@@ -86,6 +91,9 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         try {
             return $this->runReport($statusFile);
         } catch (\Throwable $e) {
+            if ($this->isCancellation($e)) {
+                return $this->finishCancellation($statusFile);
+            }
             $this->writeStatus($statusFile, [
                 'inProgress' => false,
                 'success' => false,
@@ -95,9 +103,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             ]);
             throw $e;
         } finally {
-            if ($lockFile && file_exists($lockFile)) {
-                @unlink($lockFile);
-            }
+            $this->releaseReportLock($lockFile);
         }
     }
 
@@ -158,6 +164,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         }
 
         $outputAbsolutePath = storage_path('app/' . $outputRelativePath);
+        $this->cancellationOutput = $outputAbsolutePath;
         $outputDir = dirname($outputAbsolutePath);
         if (!is_dir($outputDir)) {
             @mkdir($outputDir, 0775, true);
@@ -185,6 +192,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'updated_at' => now()->toIso8601String(),
         ]);
 
+        $this->checkForCancellation();
         $balances = $this->vieFundRemoteService->fetchCustomerBalancesByDate($reportDate, $dateBasis, [
             'status_ids' => $statuses,
             'trust_status_names' => $trustStatuses,
@@ -192,6 +200,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'sort' => $sort,
             'sort_dir' => $sortDirection,
         ]);
+        $this->checkForCancellation();
         $cutoffReview = collect();
         if ($balanceSource === 'transaction_rollup' && $simulatedGenerationTime !== '') {
             $cutoffReview = $this->vieFundRemoteService->fetchCustomerBalanceCutoffReview($reportDate, $dateBasis, [
@@ -225,6 +234,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $cashSnapshotByAccountId = collect();
         $cashSnapshotByPlanId = collect();
         if ($balanceSource === 'cash_snapshot') {
+            $this->checkForCancellation();
             $cashSnapshots = $this->vieFundRemoteService->fetchCustomerCashBalancesSnapshot();
             $cashSnapshotByAccountId = $cashSnapshots->keyBy(fn($row) => $this->normalizeAccountIdentifier((string) ($row->account_id ?? '')));
             $cashSnapshotByPlanId = $cashSnapshots->keyBy(fn($row) => $this->normalizeAccountIdentifier((string) ($row->plan_account_id ?? '')));
@@ -238,6 +248,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $lastReportedProgress = -1;
 
         foreach ($balances->values() as $index => $row) {
+            $this->checkForCancellation();
             $computedBalance = (float) ($row->total_balance ?? 0);
             if ($balanceSource === 'cash_snapshot') {
                 $normalizedAccountId = $this->normalizeAccountIdentifier((string) ($row->account_id ?? ''));
@@ -393,6 +404,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             'Clarification Note',
         ];
 
+        $this->checkForCancellation();
         if ($format === 'excel') {
             Excel::store(
                 new VieFundCustomerBalancesWorkbookExport(
@@ -408,6 +420,7 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
             $sheetRows = $this->buildSheetRowsWithSideMetadata($headers, $rows, $metadataRows);
             $writer = $this->openWriter($outputAbsolutePath, $format);
             foreach ($sheetRows as $sheetRow) {
+                $this->checkForCancellation();
                 $writer($sheetRow);
             }
             $writer(null);
@@ -438,32 +451,6 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
         $this->info('Report generated: ' . $outputRelativePath);
 
         return self::SUCCESS;
-    }
-
-    private function writeStatus(?string $statusFile, array $payload): void
-    {
-        if (!$statusFile) {
-            return;
-        }
-
-        $statusDir = dirname($statusFile);
-        if (!is_dir($statusDir)) {
-            @mkdir($statusDir, 0775, true);
-        }
-
-        $encoded = json_encode(array_merge(['run_id' => $this->runId], $payload), JSON_PRETTY_PRINT);
-        if ($encoded === false) {
-            return;
-        }
-
-        $temporaryFile = tempnam($statusDir, basename($statusFile) . '.tmp.');
-        if ($temporaryFile === false) {
-            return;
-        }
-
-        if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $statusFile)) {
-            @unlink($temporaryFile);
-        }
     }
 
     private function openWriter(string $absolutePath, string $format): callable

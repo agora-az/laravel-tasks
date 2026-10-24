@@ -9,6 +9,7 @@ use App\Models\VieFundCashSnapshotRun;
 use App\Jobs\RefreshVieFundReportInceptionDates;
 use App\Services\VieFund\VieFundDailyBalanceService;
 use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundReportCancellation;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -536,6 +537,7 @@ class VieFundReportsController extends Controller
         $userId = (int) auth()->id();
         $lockFile = storage_path('app/reports/viefund-daily-balance.lock');
         $statusFile = $this->dailyBalanceStatusFile($userId, $runId);
+        $cancelFile = VieFundReportCancellation::path('daily-balance', $userId, $runId);
         $logPath = storage_path('logs/viefund-daily-balance-report.log');
         $phpPath = config('app.php_cli_path') ?: '/usr/local/bin/php';
         $artisanPath = base_path('artisan');
@@ -588,6 +590,8 @@ class VieFundReportsController extends Controller
         ], JSON_PRETTY_PRINT));
         file_put_contents($statusFile, json_encode([
             'run_id' => $runId,
+            'user_id' => $userId,
+            'cancellation_supported' => true,
             'inProgress' => true,
             'success' => null,
             'message' => 'VieFund daily balance report queued...',
@@ -622,7 +626,7 @@ class VieFundReportsController extends Controller
         $envPrefix = implode(' ', $envAssignments) . ' ';
 
         $command = sprintf(
-            '%s%s %s report:viefund-daily-balance --run-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-daily-balance --run-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s --cancel-file=%s >> %s 2>&1 &',
             $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
@@ -636,6 +640,7 @@ class VieFundReportsController extends Controller
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
             escapeshellarg($lockFile),
+            escapeshellarg($cancelFile),
             escapeshellarg($logPath)
         );
 
@@ -682,6 +687,9 @@ class VieFundReportsController extends Controller
             'legacy_format' => ['required', 'in:csv,excel'],
         ]);
 
+        $runId = (string) Str::uuid();
+        $userId = (int) auth()->id();
+        $cancelFile = VieFundReportCancellation::path('daily-balance-legacy', $userId, $runId);
         $lockFile = storage_path('app/reports/viefund-daily-balance-legacy.lock');
         $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
         $logPath = storage_path('logs/viefund-daily-balance-legacy-report.log');
@@ -702,18 +710,22 @@ class VieFundReportsController extends Controller
         $format = $validated['legacy_format'];
         $extension = $format === 'excel' ? 'xlsx' : 'csv';
         $outputRelativePath = sprintf(
-            'reports/viefund_legacy_bal_report_%s-%s_%s.%s',
+            'reports/viefund_legacy_bal_report_%s-%s_%s_%s.%s',
             Carbon::parse($dateFrom)->format('Ymd'),
             Carbon::parse($dateTo)->format('Ymd'),
             self::DATE_BASIS_FILE_CODES[$dateBasis],
+            substr(str_replace('-', '', $runId), 0, 8),
             $extension
         );
 
         if (!is_dir(dirname($statusFile))) {
             @mkdir(dirname($statusFile), 0775, true);
         }
-        file_put_contents($lockFile, date('c'));
+        file_put_contents($lockFile, json_encode(['run_id' => $runId, 'user_id' => $userId, 'started_at' => now()->toIso8601String()], JSON_PRETTY_PRINT));
         file_put_contents($statusFile, json_encode([
+            'run_id' => $runId,
+            'user_id' => $userId,
+            'cancellation_supported' => true,
             'inProgress' => true,
             'success' => null,
             'message' => 'Legacy VieFund daily balance report queued...',
@@ -734,9 +746,10 @@ class VieFundReportsController extends Controller
             $trustStatuses
         ));
         $command = sprintf(
-            '%s %s report:viefund-daily-balance-legacy --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s %s report:viefund-daily-balance-legacy --run-id=%s --date-from=%s --date-to=%s --date-basis=%s --output-order=%s %s %s --format=%s --output-file=%s --status-file=%s --lock-file=%s --cancel-file=%s >> %s 2>&1 &',
             escapeshellarg((string) env('PHP_PATH', PHP_BINARY)),
             escapeshellarg(base_path('artisan')),
+            escapeshellarg($runId),
             escapeshellarg($dateFrom),
             escapeshellarg($dateTo),
             escapeshellarg($dateBasis),
@@ -747,6 +760,7 @@ class VieFundReportsController extends Controller
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
             escapeshellarg($lockFile),
+            escapeshellarg($cancelFile),
             escapeshellarg($logPath)
         );
         Log::info('Dispatching background legacy VieFund daily balance report: ' . $command);
@@ -763,7 +777,7 @@ class VieFundReportsController extends Controller
         }
 
         return $request->expectsJson()
-            ? response()->json(['success' => true, 'message' => 'Legacy VieFund daily balance report started.'], 202)
+            ? response()->json(['success' => true, 'message' => 'Legacy VieFund daily balance report started.', 'run_id' => $runId], 202)
             : redirect()->route('reports.index')->with('legacy_report_success', 'Legacy report started in background.');
     }
 
@@ -788,6 +802,7 @@ class VieFundReportsController extends Controller
         $userId = (int) auth()->id();
         $lockFile = storage_path('app/reports/viefund-customer-balances.lock');
         $statusFile = $this->customerBalancesStatusFile($userId, $runId);
+        $cancelFile = VieFundReportCancellation::path('customer-balances', $userId, $runId);
         $logPath = storage_path('logs/viefund-customer-balances-report.log');
         $phpPath = config('app.php_cli_path') ?: '/usr/local/bin/php';
         $artisanPath = base_path('artisan');
@@ -846,6 +861,8 @@ class VieFundReportsController extends Controller
         ], JSON_PRETTY_PRINT));
         file_put_contents($statusFile, json_encode([
             'run_id' => $runId,
+            'user_id' => $userId,
+            'cancellation_supported' => true,
             'inProgress' => true,
             'success' => null,
             'message' => 'VieFund customer balances report queued...',
@@ -887,7 +904,7 @@ class VieFundReportsController extends Controller
         $envPrefix = $envAssignments ? implode(' ', $envAssignments) . ' ' : '';
 
         $command = sprintf(
-            '%s%s %s report:viefund-customer-balances --run-id=%s --report-date=%s --date-basis=%s %s %s --search=%s --sort=%s --sort-dir=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s >> %s 2>&1 &',
+            '%s%s %s report:viefund-customer-balances --run-id=%s --report-date=%s --date-basis=%s %s %s --search=%s --sort=%s --sort-dir=%s --format=%s --output-file=%s --status-file=%s --lock-file=%s --cancel-file=%s >> %s 2>&1 &',
             $envPrefix,
             escapeshellarg($phpPath),
             escapeshellarg($artisanPath),
@@ -903,6 +920,7 @@ class VieFundReportsController extends Controller
             escapeshellarg($outputRelativePath),
             escapeshellarg($statusFile),
             escapeshellarg($lockFile),
+            escapeshellarg($cancelFile),
             escapeshellarg($logPath)
         );
 
@@ -1007,10 +1025,11 @@ class VieFundReportsController extends Controller
             }
         }
 
+        $payload = VieFundReportCancellation::decorate($payload, 'daily-balance', $userId, $runId);
         return response()->json($payload)->withHeaders($this->reportStatusNoCacheHeaders());
     }
 
-    public function legacyDailyBalanceReportStatus(): JsonResponse
+    public function legacyDailyBalanceReportStatus(Request $request): JsonResponse
     {
         $lockFile = storage_path('app/reports/viefund-daily-balance-legacy.lock');
         $statusFile = storage_path('app/reports/viefund-daily-balance-legacy-status.json');
@@ -1029,7 +1048,7 @@ class VieFundReportsController extends Controller
             : null;
         if (is_array($parsed)) {
             $payload = array_merge($payload, $parsed);
-            $payload['inProgress'] = $inProgress;
+            $payload['inProgress'] = $inProgress && ($parsed['inProgress'] ?? false) === true && ($parsed['success'] ?? null) === null;
         }
         if (!$inProgress && is_array($parsed) && ($parsed['inProgress'] ?? false) && ($parsed['success'] ?? null) === null) {
             $payload['success'] = false;
@@ -1042,7 +1061,8 @@ class VieFundReportsController extends Controller
             }
         }
 
-        return response()->json($payload);
+        $payload = VieFundReportCancellation::decorate($payload, 'daily-balance-legacy', (int) $request->user()->id, $payload['run_id'] ?? null);
+        return response()->json($payload)->withHeaders($this->reportStatusNoCacheHeaders());
     }
 
     public function customerBalancesReportStatus(Request $request): JsonResponse
@@ -1111,6 +1131,7 @@ class VieFundReportsController extends Controller
             }
         }
 
+        $payload = VieFundReportCancellation::decorate($payload, 'customer-balances', $userId, $runId);
         return response()->json($payload)->withHeaders($this->reportStatusNoCacheHeaders());
     }
 

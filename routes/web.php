@@ -13,6 +13,8 @@ use App\Http\Controllers\SettlementInstructionController;
 use App\Http\Controllers\AsmSettlementController;
 use App\Http\Controllers\EftFileController;
 use App\Http\Controllers\VieFundReportsController;
+use App\Http\Controllers\VieFundCashAgchReportController;
+use App\Http\Controllers\VieFundReportCancellationController;
 use App\Http\Controllers\DocumentationController;
 use App\Http\Controllers\TransactionReconciliationController;
 use App\Http\Controllers\CustomerBalanceReconciliationController;
@@ -112,6 +114,13 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/api/search-transactions', [ReconciliationController::class, 'searchTransactions'])->name('api.search.transactions');
 
     Route::get('/reports', [VieFundReportsController::class, 'index'])->name('reports.index');
+    Route::post('/reports/{report}/cancel', VieFundReportCancellationController::class)
+        ->whereIn('report', \App\Services\VieFund\VieFundReportCancellation::TYPES)->name('reports.cancel');
+    Route::post('/reports/cashagch/run', [VieFundCashAgchReportController::class, 'run'])->name('reports.cashagch.run');
+    Route::get('/reports/cashagch/{runId}/status', [VieFundCashAgchReportController::class, 'status'])
+        ->whereUuid('runId')->name('reports.cashagch.status');
+    Route::get('/reports/cashagch/{runId}/download', [VieFundCashAgchReportController::class, 'download'])
+        ->whereUuid('runId')->name('reports.cashagch.download');
     Route::get('/reports/viefund-daily-balance/export', [VieFundReportsController::class, 'exportDailyBalance'])->name('reports.viefund-daily-balance.export');
     Route::post('/reports/viefund-daily-balance-legacy/run', [VieFundReportsController::class, 'runLegacyDailyBalanceReport'])->name('reports.viefund-daily-balance-legacy.run');
     Route::get('/reports/viefund-daily-balance-legacy/status', [VieFundReportsController::class, 'legacyDailyBalanceReportStatus'])->name('reports.viefund-daily-balance-legacy.status');

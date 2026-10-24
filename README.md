@@ -412,6 +412,30 @@ Administrators also receive an **Impersonate** selector beneath the header conta
 3. Fill in the report details including title, period start/end dates, and description
 4. View and export reports as needed
 
+### CASHagch purchases and redemptions
+
+On the **Reports** page, use **CASHagch Purchases and Redemptions** to generate an Excel workbook. The default scope is inception through today, CAD, Confirmed cash transactions, by settlement date. Enter an optional **Start Date** for a narrower range, or choose **Use Inception Date** to clear it and include all available history without assuming a fixed historical date. The start date cannot be after the end date; both dates apply to the selected date basis. The end date, date basis, currency and statuses can also be changed. There is no recent-sync-window cutoff, and the Summary and download filename identify the selected period.
+
+The workbook starts with a **Summary** sheet containing separate **Total Purchases**, **Standard Redemptions**, **Fee Redemptions**, and **Total Redemptions (Including Fees)** amounts and transaction counts. Purchases include Purchase, Purchase PAC and Rebalancing purchase; standard redemptions include Redemption and Rebalancing redemption. Purchase totals negate the original signed amounts; redemption totals sum their signed amounts. Opposite-sign reversals reduce the applicable total rather than being counted as additional positive activity.
+
+Amounts come exclusively from the VieFund cash transaction amount (`UB_CashTrx.mAmount`), never bank amounts. No bank match is required. Each cash transaction is counted once. Other, unknown, and conflicting linked fund transaction types are placed in **Other / review required**, with a warning in the Summary rather than being classified by cash direction. The detail sheets preserve original signed amounts, identifiers, transaction types, dates, statuses and summary categories.
+
+The report reads directly from VieFund and does not require period-cache hydration or a completed fund/unit-ID mirror backfill. It retains the application's cash-account eligibility/exclusions. It runs on the existing general `database` queue; keep its queue worker running. The page shows row-count progress and a download link, and remembers the latest run for that user after a refresh. Run/download status expires after 12 hours. Jobs queued during source maintenance wait until VieFund is available; a report that reaches maintenance before finishing fails explicitly without offering a partial workbook and can be generated again afterward.
+
+Progress starts by counting matching transactions using the same source filters as the export; this initial count can take time. After two completed batches, the page estimates the remaining transaction-reading time from measured throughput and shows an approximate local completion time. Estimates update when batches finish and can change with source speed. They exclude queue wait, the initial count and final Excel packaging. The finalizing step is shown separately, and completed/failed reports no longer show an ETA. Reports already running older worker code need a new run to display these estimates.
+
+Details stream to Excel and split using the existing **All Transactions export rows per sheet** setting (up to 1,000,000 transactions per sheet). The Summary always covers the complete result across every detail sheet. Run `php tests/exports/cashagch_report.php` for isolated workbook, calculation, source-query and request-lifecycle regression checks, and `node tests/exports/cashagch_report_ui.js` for the report form's JavaScript lifecycle.
+
+### Cancelling a report
+
+Each report card (CASHagch, Daily Net + Running Balance, Legacy Daily Balance, and Customer Balances) shows **Cancel report** while a supported run belonging to the signed-in user is queued or running. Cancellation is tied to that report's unique run ID; it never terminates a shared worker or another user's report.
+
+Queued CASHagch runs cancel immediately and are skipped by the worker. Running reports show **Stopping...** until the current database operation finishes, then stop before further work, discard partial output, clear their ETA and release their report lock. A database query or Excel packaging operation already executing cannot be interrupted instantly by this cooperative mechanism. No partial report is offered for download. Cancellation and completion use the same per-run state lock so an accepted cancellation cannot subsequently publish a completed report.
+
+Runs launched before cancellation support was installed do not advertise a Cancel button. Reload long-running queue workers after updating the application; new runs include cancellation support. Cancellation markers are retained with report artifacts to prevent delayed jobs from reviving a cancelled run.
+
+Run `php tests/exports/report_cancellation.php` and `node tests/exports/cashagch_report_ui.js` to verify cancellation ownership, queued/running behavior, partial-file cleanup, completion races, status locks and shared button behavior.
+
 ## Settlement Instruction Sync
 
 The Settlement Instructions page can download and import FundSERV FSP files from SFTP. By default it reuses the `BANK_SFTP_*` connection settings. Define any of these variables when the FSP feed uses a different location or credentials:

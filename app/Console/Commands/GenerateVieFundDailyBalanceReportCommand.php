@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Console\Concerns\CancelsVieFundReports;
 use App\Exports\VieFundDailyBalanceWorkbookExport;
 use App\Services\VieFund\VieFundCashSnapshotService;
 use App\Services\VieFund\VieFundRemoteService;
@@ -12,6 +13,8 @@ use Maatwebsite\Excel\Excel as ExcelWriter;
 
 class GenerateVieFundDailyBalanceReportCommand extends Command
 {
+    use CancelsVieFundReports;
+
     private const FETCH_CHUNK_DAYS = 31;
     private const FETCH_WEIGHT = 0.7;
     private const DATE_BASIS_LABELS = [
@@ -66,6 +69,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         {--format=csv : csv|excel}
         {--output-file= : Relative output path under storage/app}
         {--status-file= : Optional status file path}
+        {--cancel-file= : Cancellation marker for this report run}
         {--lock-file= : Optional lock file path}';
 
     protected $description = 'Generate VieFund daily net + running balance report asynchronously';
@@ -84,6 +88,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         $lockFile = $this->resolveString($this->option('lock-file'));
         $statusFile = $this->resolveString($this->option('status-file'));
         $this->runId = $this->resolveString($this->option('run-id'));
+        $this->initializeCancellation($statusFile);
 
         if ($lockFile && !is_file($lockFile)) {
             @file_put_contents($lockFile, json_encode([
@@ -97,6 +102,9 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         try {
             return $this->runReport($statusFile);
         } catch (\Throwable $e) {
+            if ($this->isCancellation($e)) {
+                return $this->finishCancellation($statusFile);
+            }
             $this->writeStatus($statusFile, [
                 'inProgress' => false,
                 'success' => false,
@@ -106,9 +114,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             ]);
             throw $e;
         } finally {
-            if ($lockFile && file_exists($lockFile)) {
-                @unlink($lockFile);
-            }
+            $this->releaseReportLock($lockFile);
         }
     }
 
@@ -160,6 +166,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         }
 
         $outputAbsolutePath = storage_path('app/' . $outputRelativePath);
+        $this->cancellationOutput = $outputAbsolutePath;
         $outputDir = dirname($outputAbsolutePath);
         if (!is_dir($outputDir)) {
             @mkdir($outputDir, 0775, true);
@@ -189,6 +196,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
 
         $simulatedGenerationTime = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_OPENED_BEFORE', ''));
         $currencyCode = trim((string) env('VIEFUND_BALANCE_REPORT_CASH_CURRENCY_CODE', '')) ?: '00';
+        $this->checkForCancellation();
         $snapshotResult = $simulatedGenerationTime === ''
             ? $this->snapshotService->completeSeries($dateFrom, $dateTo, $dateBasis, $currencyCode, $statuses)
             : null;
@@ -216,6 +224,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             while ($fetchCursor->lte($dateTo)) {
                 $chunkStart = $fetchCursor->copy();
                 $chunkEnd = $chunkStart->copy()->addDays(self::FETCH_CHUNK_DAYS - 1)->min($dateTo);
+                $this->checkForCancellation();
                 $chunkRows = $this->vieFundRemoteService->fetchCustomerCashDailyNetTotalsByDateColumn($chunkStart, $chunkEnd, $dateBasis, [
                     'status_ids' => $statuses,
                     'availability_as_of' => $dateTo->toDateString(),
@@ -243,6 +252,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             }
 
             $periodNetTotal = array_sum(array_column($dailyMap, 'net_total'));
+            $this->checkForCancellation();
             $endingBalance = (float) $this->vieFundRemoteService
                 ->fetchCustomerBalancesByDate($dateTo, $dateBasis, ['status_ids' => $statuses])
                 ->sum(fn($row) => (float) ($row->total_balance ?? 0));
@@ -328,6 +338,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             'Running Daily Balance',
         ];
 
+        $this->checkForCancellation();
         if ($format === 'excel') {
             Excel::store(
                 new VieFundDailyBalanceWorkbookExport(
@@ -342,6 +353,7 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
             $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
             $writer = $this->openWriter($outputAbsolutePath, $format);
             foreach ($sheetRows as $sheetRow) {
+                $this->checkForCancellation();
                 $writer($sheetRow);
             }
 
@@ -372,32 +384,6 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
         $this->info('Report generated: ' . $outputRelativePath);
 
         return self::SUCCESS;
-    }
-
-    private function writeStatus(?string $statusFile, array $payload): void
-    {
-        if (!$statusFile) {
-            return;
-        }
-
-        $statusDir = dirname($statusFile);
-        if (!is_dir($statusDir)) {
-            @mkdir($statusDir, 0775, true);
-        }
-
-        $encoded = json_encode(array_merge(['run_id' => $this->runId], $payload), JSON_PRETTY_PRINT);
-        if ($encoded === false) {
-            return;
-        }
-
-        $temporaryFile = tempnam($statusDir, basename($statusFile) . '.tmp.');
-        if ($temporaryFile === false) {
-            return;
-        }
-
-        if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $statusFile)) {
-            @unlink($temporaryFile);
-        }
     }
 
     private function openWriter(string $absolutePath, string $format): callable
