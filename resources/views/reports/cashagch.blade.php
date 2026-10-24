@@ -4,50 +4,57 @@
         Exports matching VieFund cash transactions for the selected date range.
         Leave Start Date blank or choose Use Inception Date to include all available history.
         The Summary sheet separates purchases, standard redemptions and fee redemptions, and combines both redemption categories into a total.
+        Transaction sheets come first, followed by Summary and a Monthly Summary of purchases in and redemptions out, including zero-activity months.
         Uses transaction amounts only—no bank amounts or bank match is required. Reversals offset their category totals; other types are listed for review.
     </p>
     <form method="POST" action="{{ route('reports.cashagch.run') }}" id="cashagch-report-form"
           data-status-url="{{ route('reports.cashagch.status', ['runId' => '__RUN_ID__']) }}"
           data-user-id="{{ auth()->id() }}">
         @csrf
-        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; align-items:end;">
+        <div class="cashagch-report-layout">
+        <div class="cashagch-report-fields">
+        <div class="cashagch-report-filter-grid">
             <div>
-                <label for="cashagch-start-date" style="display:block; font-weight:600; margin-bottom:6px;">Start Date</label>
-                <input id="cashagch-start-date" name="date_from" type="date" max="{{ now()->toDateString() }}" aria-describedby="cashagch-date-scope" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                <label for="cashagch-start-date">Start Date</label>
+                <input id="cashagch-start-date" name="date_from" type="date" max="{{ now()->toDateString() }}" aria-describedby="cashagch-date-scope">
             </div>
             <div>
-                <span id="cashagch-date-scope" style="display:block; font-size:12px; margin-bottom:6px;">Since inception (all available history)</span>
-                <button id="cashagch-use-inception" type="button" aria-pressed="true" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">&laquo; Use Inception Date</button>
+                <span id="cashagch-date-scope" style="display:block; font-size:12px; color:#718096; margin-bottom:4px;">Since inception (all available history)</span>
+                <button id="cashagch-use-inception" type="button" aria-pressed="true" style="width:100%; height:35px; padding:0 10px; border:1px solid #cbd5e0; border-radius:4px; background:#e2e8f0; color:#2d3748; white-space:nowrap; font-size:13px; text-align:left;">&laquo; Use Inception Date</button>
             </div>
             <div>
-                <label for="cashagch-end-date" style="display:block; font-weight:600; margin-bottom:6px;">End Date</label>
-                <input id="cashagch-end-date" name="date_to" type="date" value="{{ now()->toDateString() }}" max="{{ now()->toDateString() }}" required style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                <label for="cashagch-end-date">End Date</label>
+                <input id="cashagch-end-date" name="date_to" type="date" value="{{ now()->toDateString() }}" max="{{ now()->toDateString() }}" required>
             </div>
             <div>
-                <label for="cashagch-currency" style="display:block; font-weight:600; margin-bottom:6px;">Currency</label>
-                <select id="cashagch-currency" name="currency_code" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                <label for="cashagch-currency">Currency</label>
+                <select id="cashagch-currency" name="currency_code">
                     <option value="00" selected>CAD</option>
                     <option value="01">USD</option>
                 </select>
             </div>
             <div>
-                <label for="cashagch-date-basis" style="display:block; font-weight:600; margin-bottom:6px;">Date Basis</label>
-                <select id="cashagch-date-basis" name="date_basis" style="width:100%; padding:10px; border:1px solid; border-radius:4px;">
+                <label for="cashagch-date-basis">Date Basis</label>
+                <select id="cashagch-date-basis" name="date_basis">
                     @foreach($dateBasisOptions as $value => $label)
                         <option value="{{ $value }}" @selected($value === 'settlement_date')>{{ $label }}</option>
                     @endforeach
                 </select>
             </div>
         </div>
-        <fieldset class="report-options" style="border:1px solid; border-radius:6px; margin:14px 0; padding:12px;">
-            <legend style="font-weight:600;">Cash Transaction Status</legend>
+        <fieldset class="report-options" style="border:1px solid; border-radius:6px; margin:10px 0 0; padding:10px 12px; font-size:12px;">
+            <legend style="font-weight:700;">Cash Transaction Status</legend>
             <div style="display:flex; flex-wrap:wrap; gap:12px;">
                 @foreach($fundStatusOptions as $value => $label)
                     <label><input type="checkbox" name="status_ids[]" value="{{ $value }}" @checked($value === 6)> {{ $label }}</label>
                 @endforeach
             </div>
         </fieldset>
-        <button class="report-action-button" type="submit" style="padding:10px 16px; border:0; border-radius:4px; font-weight:700;">Generate Excel Report</button>
+        </div>
+        <div class="report-run-action">
+            <button class="report-action-button" type="submit" style="padding:5px 14px; border:1px solid; border-radius:6px; font-size:13px; font-weight:600; white-space:nowrap;">Run Report</button>
+        </div>
+        </div>
     </form>
     <div id="cashagch-feedback" class="report-feedback" hidden aria-live="polite">
         <span data-cashagch-message></span>
@@ -57,6 +64,7 @@
         <span data-cashagch-storage-warning hidden> Keep this page open: your browser cannot remember report progress after a refresh.</span>
     </div>
 </div>
+@include('reports.download-helper')
 <script>
 (() => {
     const form = document.getElementById('cashagch-report-form');
@@ -88,6 +96,8 @@
     const storageKey = `cashagch-report-run:${form.dataset.userId}`;
     let timer = null;
     let activeRunId = null;
+    let autoDownloadPending = false;
+    let downloadedUrl = null;
     const formatDuration = (seconds) => {
         if (seconds < 60) return 'less than a minute';
         const minutes = Math.ceil(seconds / 60);
@@ -125,6 +135,7 @@
         console.warn('Unable to save or restore CASHagch report progress in this browser.', error);
     };
     const showError = (error) => {
+        autoDownloadPending = false;
         feedback.hidden = false;
         message.textContent = error.message;
         download.hidden = true;
@@ -147,8 +158,26 @@
             window.updateReportCancelButton(cancelButton, status);
             showEta(status, active && !status.cancellation_requested && status.state !== 'cancelling');
             button.disabled = active;
-            download.hidden = !status.download_url;
-            if (status.download_url) download.href = status.download_url;
+            if (active && status.state !== 'cancelling' && !status.cancellation_requested && downloadedUrl === null) {
+                autoDownloadPending = true;
+            }
+            const ready = status.state === 'completed' && status.success === true
+                && !status.cancellation_requested && !status.cancelled && Boolean(status.download_url);
+            download.hidden = !ready;
+            if (ready) {
+                download.href = status.download_url;
+                if (autoDownloadPending && downloadedUrl !== status.download_url) {
+                    autoDownloadPending = false;
+                    downloadedUrl = status.download_url;
+                    try {
+                        window.downloadVieFundReport(status.download_url);
+                    } catch (error) {
+                        console.warn('Unable to start the automatic CASHagch report download.', error);
+                        message.textContent += ' Automatic download could not start. Use the Download Excel report link.';
+                    }
+                }
+            }
+            if (!active) autoDownloadPending = false;
             if (active) timer = window.setTimeout(() => poll(runId), 5000);
         } catch (error) {
             if (runId === activeRunId) showError(error);
@@ -159,6 +188,8 @@
         if (!form.reportValidity()) return;
         if (timer) window.clearTimeout(timer);
         activeRunId = null;
+        autoDownloadPending = false;
+        downloadedUrl = null;
         window.updateReportCancelButton(cancelButton, {});
         button.disabled = true;
         feedback.hidden = false;
@@ -175,6 +206,7 @@
             const result = await response.json();
             if (!response.ok) throw new Error(result.errors ? Object.values(result.errors).flat()[0] : result.message);
             activeRunId = result.run_id;
+            autoDownloadPending = true;
             try {
                 localStorage.setItem(storageKey, result.run_id);
             } catch (error) {

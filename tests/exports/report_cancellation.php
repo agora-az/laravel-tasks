@@ -307,10 +307,49 @@ try {
     }
     $route = $app['router']->getRoutes()->getByName('reports.cancel');
     $check(in_array('auth.check', $route->gatherMiddleware(), true) && $route->methods() === ['POST'], 'Cancellation must be authenticated and POST-only.');
-    foreach (['cashagch', 'cancel-button', 'index'] as $view) {
+    $reportInput = [
+        'date_from' => '2026-09-01', 'date_to' => '2026-09-30', 'date_basis' => 'settlement_date',
+        'output_order' => 'asc', 'status' => [6], 'daily_balance_currency_code' => 'CAD',
+        'legacy_date_from' => '2026-09-01', 'legacy_date_to' => '2026-09-30',
+        'legacy_date_basis' => 'settlement_date', 'legacy_output_order' => 'asc',
+        'legacy_status' => [6], 'legacy_trust_status' => ['Settled'],
+        'customer_balance_date' => '2026-09-30', 'customer_balance_date_basis' => 'settlement_date',
+        'customer_balance_status' => [6], 'customer_balance_currency_code' => 'CAD',
+    ];
+    foreach ([
+        ['exportDailyBalance', 'format', 'date_from'],
+        ['exportLegacyDailyBalance', 'legacy_format', 'legacy_date_from'],
+        ['runDailyBalanceReport', 'format', 'date_from'],
+        ['runLegacyDailyBalanceReport', 'legacy_format', 'legacy_date_from'],
+        ['runCustomerBalancesReport', 'format', 'customer_balance_date'],
+    ] as [$method, $formatField, $dateField]) {
+        foreach (['csv', 'excel'] as $format) {
+            $input = [...$reportInput, $formatField => $format];
+            if ($format === 'excel') $input[$dateField] = 'invalid-date';
+            $request = Request::create('/reports/test', 'POST', $input);
+            $request->headers->set('Accept', 'application/json');
+            $request->setUserResolver(static fn() => $owner);
+            try {
+                $reports->{$method}($request);
+                throw new RuntimeException('Format validation fixtures must not start a real report process.');
+            } catch (\Illuminate\Validation\ValidationException $exception) {
+                $errors = $exception->errors();
+                $check($format === 'csv' ? isset($errors[$formatField]) : !isset($errors[$formatField]),
+                    "$method must reject CSV and allow the Excel format.");
+                if ($format === 'excel') $check(isset($errors[$dateField]), 'Excel format checks must stop at date validation without launching a report.');
+            }
+        }
+    }
+    $index = File::get(base_path('resources/views/reports/index.blade.php'));
+    $check(!str_contains($index, 'data-format=') && !str_contains($index, 'value="csv"')
+        && !str_contains($index, 'Run CSV') && !str_contains($index, 'run-panel'), 'Report cards must not retain CSV menus or obsolete menu handlers.');
+    $check(substr_count($index, 'value="excel"') === 3, 'Every existing report form must default to Excel.');
+    $check(str_contains($index, 'reports.viefund-cash-snapshots.export-unreviewed')
+        && str_contains($index, 'Download CSV'), 'Snapshot Monitor audit CSV must remain available as requested.');
+    foreach (['cashagch', 'cancel-button', 'download-helper', 'index'] as $view) {
         token_get_all($app['blade.compiler']->compileString(File::get(base_path("resources/views/reports/{$view}.blade.php"))), TOKEN_PARSE);
     }
-    echo "PASS: protected cancellation route and Blade compilation of all report cards\n";
+    echo "PASS: protected cancellation route, Excel-only report web formats, preserved snapshot audit CSV and Blade compilation of all report cards\n";
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception->getMessage()."\n".$exception->getTraceAsString()."\n");
     $exitCode = 1;

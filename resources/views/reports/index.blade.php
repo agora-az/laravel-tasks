@@ -52,6 +52,45 @@
         cursor: wait !important;
         opacity: 0.65;
     }
+    .cashagch-report-layout {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+    .cashagch-report-fields {
+        flex: 1 1 820px;
+        min-width: 0;
+    }
+    .cashagch-report-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+        gap: 12px;
+        align-items: end;
+    }
+    .cashagch-report-filter-grid label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: #4a5568;
+        margin-bottom: 4px;
+    }
+    .cashagch-report-filter-grid input,
+    .cashagch-report-filter-grid select {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+    .report-run-action {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex: 0 0 auto;
+        padding-top: 30px;
+        margin-left: auto;
+    }
     .report-feedback {
         margin: 14px 0;
         padding: 12px 14px;
@@ -102,6 +141,7 @@
     </div>
 </div>
 
+@include('reports.download-helper')
 @include('reports.cashagch')
 
 <div class="card report-card" style="margin-bottom: 20px;">
@@ -234,38 +274,12 @@
             </div>
 
             <div style="display: flex; gap: 8px; justify-content: flex-end; flex: 0 0 auto; padding-top: 30px;">
-                <input type="hidden" name="format" value="csv" id="report-format-input">
+                <input type="hidden" name="format" value="excel" id="report-format-input">
                 <div style="position: relative;" id="report-run-wrap">
                     <button type="button" id="report-run-btn" class="report-action-button"
                             style="background: #fff; border: 1px solid #90cdf4; color: #2b6cb0; border-radius: 6px; padding: 5px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px;">
                         <span>Run Report</span>
-                        <span>▾</span>
                     </button>
-                    <div id="report-run-panel" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 160px; overflow: hidden;">
-                        <button type="button" data-format="csv" class="report-format-option" style="display: block; width: 100%; text-align: left; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; background: #fff; border: none; border-bottom: 1px solid #f0f4f8; cursor: pointer;"
-                                onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
-                            <span style="display:inline-flex; align-items:center; gap:8px;">
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
-                                    <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M5 9.25h6M5 11.75h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
-                                <span>CSV</span>
-                            </span>
-                        </button>
-                        <button type="button" data-format="excel" class="report-format-option" style="display: block; width: 100%; text-align: left; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; background: #fff; border: none; cursor: pointer;"
-                                onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
-                            <span style="display:inline-flex; align-items:center; gap:8px;">
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
-                                    <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M4.75 9.25h6.5M4.75 11.75h6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                    <path d="M6 7.75h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
-                                <span>Excel</span>
-                            </span>
-                        </button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -377,9 +391,8 @@
         </div>
 
         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
-            <input type="hidden" name="legacy_format" value="csv" id="legacy-report-format-input">
-            <button type="button" data-legacy-format="csv" class="legacy-report-run-button report-action-button" style="border:1px solid #90cdf4; border-radius:6px; padding:7px 12px; font-size:13px; font-weight:600; cursor:pointer;">Run CSV</button>
-            <button type="button" data-legacy-format="excel" class="legacy-report-run-button report-action-button" style="border:1px solid #9ae6b4; border-radius:6px; padding:7px 12px; font-size:13px; font-weight:600; cursor:pointer;">Run Excel</button>
+            <input type="hidden" name="legacy_format" value="excel" id="legacy-report-format-input">
+            <button type="button" class="legacy-report-run-button report-action-button" style="border:1px solid #9ae6b4; border-radius:6px; padding:7px 12px; font-size:13px; font-weight:600; cursor:pointer;">Run Report</button>
         </div>
     </form>
 </div>
@@ -497,38 +510,12 @@
             </div>
 
             <div style="display: flex; gap: 8px; justify-content: flex-end; flex: 0 0 auto; padding-top: 30px;">
-                <input type="hidden" name="format" value="csv" id="customer-balance-format-input">
+                <input type="hidden" name="format" value="excel" id="customer-balance-format-input">
                 <div style="position: relative;" id="customer-balance-run-wrap">
                     <button type="button" id="customer-balance-run-btn" class="report-action-button"
                             style="background: #fff; border: 1px solid #90cdf4; color: #2b6cb0; border-radius: 6px; padding: 5px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 8px;">
                         <span>Run Report</span>
-                        <span>▾</span>
                     </button>
-                    <div id="customer-balance-run-panel" style="display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 160px; overflow: hidden;">
-                        <button type="button" data-format="csv" class="customer-balance-format-option" style="display: block; width: 100%; text-align: left; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #2b6cb0; background: #fff; border: none; border-bottom: 1px solid #f0f4f8; cursor: pointer;"
-                                onmouseover="this.style.background='#ebf8ff'" onmouseout="this.style.background=''">
-                            <span style="display:inline-flex; align-items:center; gap:8px;">
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
-                                    <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M5 9.25h6M5 11.75h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
-                                <span>CSV</span>
-                            </span>
-                        </button>
-                        <button type="button" data-format="excel" class="customer-balance-format-option" style="display: block; width: 100%; text-align: left; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #276749; background: #fff; border: none; cursor: pointer;"
-                                onmouseover="this.style.background='#f0fff4'" onmouseout="this.style.background=''">
-                            <span style="display:inline-flex; align-items:center; gap:8px;">
-                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false" style="flex:0 0 auto;">
-                                    <path d="M3 1.75h6l3.5 3.5V14.25H3V1.75Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M9 1.75V5.25H12.5" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
-                                    <path d="M4.75 9.25h6.5M4.75 11.75h6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                    <path d="M6 7.75h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
-                                <span>Excel</span>
-                            </span>
-                        </button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -635,8 +622,7 @@
     const downloadLink = document.getElementById('report-download-link');
     const runWrap = document.getElementById('report-run-wrap');
     const runBtn = document.getElementById('report-run-btn');
-    const runPanel = document.getElementById('report-run-panel');
-    if (!form || !dateBasis || !dateFrom || !button || !note || !runWrap || !runBtn || !runPanel) return;
+    if (!form || !dateBasis || !dateFrom || !button || !note || !runWrap || !runBtn) return;
 
     const inceptionDates = JSON.parse(form.dataset.inceptionDates || '{}');
     const DISMISS_KEY = 'viefundReportRunDismissedMessage';
@@ -677,11 +663,7 @@
     const triggerDownload = (url) => {
         if (!url || downloadedUrl === url) return;
         downloadedUrl = url;
-        const frame = document.createElement('iframe');
-        frame.hidden = true;
-        frame.src = url;
-        document.body.appendChild(frame);
-        window.setTimeout(() => frame.remove(), 60000);
+        window.downloadVieFundReport(url);
     };
 
     const showStartError = (message) => {
@@ -693,12 +675,11 @@
         if (downloadWrap) downloadWrap.style.display = 'none';
     };
 
-    const startReport = async (format) => {
+    const startReport = async () => {
         if (!form.reportValidity()) return;
 
         const formatInput = document.getElementById('report-format-input');
-        if (formatInput) formatInput.value = format || 'csv';
-        runPanel.style.display = 'none';
+        if (formatInput) formatInput.value = 'excel';
         runBtn.disabled = true;
         cleanupRequested = false;
         autoDownloadPending = true;
@@ -709,7 +690,7 @@
         }
         localStorage.removeItem(DISMISS_KEY);
         runStatusWrap.className = 'sync-chip sync-chip-progress';
-        setRunMessage(`Starting ${String(format || 'csv').toUpperCase()} report...`);
+        setRunMessage('Starting Excel report...');
         if (progressWrap) progressWrap.style.display = 'block';
         if (progressBar) progressBar.style.width = '3%';
         if (progressMeta) progressMeta.textContent = 'Submitting report job...';
@@ -911,27 +892,11 @@
     dateBasis.addEventListener('change', refreshNote);
     refreshNote();
 
-    runBtn.addEventListener('click', function (event) {
-        event.stopPropagation();
-        runPanel.style.display = runPanel.style.display === 'block' ? 'none' : 'block';
-    });
-
-    runPanel.querySelectorAll('.report-format-option').forEach((option) => {
-        option.addEventListener('click', function () {
-            startReport(this.getAttribute('data-format') || 'csv');
-        });
-    });
+    runBtn.addEventListener('click', startReport);
 
     form.addEventListener('submit', function (event) {
         event.preventDefault();
-        const formatInput = document.getElementById('report-format-input');
-        startReport(formatInput ? formatInput.value : 'csv');
-    });
-
-    document.addEventListener('click', function (event) {
-        if (!runWrap.contains(event.target)) {
-            runPanel.style.display = 'none';
-        }
+        startReport();
     });
 
     if (window.__reportJustStarted) {
@@ -1000,11 +965,7 @@
     const triggerDownload = (url) => {
         if (!url || downloadedUrl === url) return;
         downloadedUrl = url;
-        const frame = document.createElement('iframe');
-        frame.hidden = true;
-        frame.src = url;
-        document.body.appendChild(frame);
-        window.setTimeout(() => frame.remove(), 60000);
+        window.downloadVieFundReport(url);
     };
     const poll = async () => {
         try {
@@ -1048,12 +1009,12 @@
             setRunning(false);
         }
     };
-    const startReport = async (format) => {
+    const startReport = async () => {
         if (!form.reportValidity()) return;
-        formatInput.value = format;
+        formatInput.value = 'excel';
         downloadedUrl = null;
         setRunning(true);
-        showStatus(`Starting legacy ${format.toUpperCase()} report...`);
+        showStatus('Starting legacy Excel report...');
         if (progressWrap) progressWrap.style.display = 'block';
         if (progressBar) progressBar.style.width = '2%';
         if (downloadWrap) downloadWrap.style.display = 'none';
@@ -1078,9 +1039,12 @@
         }
     };
     runButtons.forEach((runButton) => runButton.addEventListener('click', () => {
-        startReport(runButton.dataset.legacyFormat || 'csv');
+        startReport();
     }));
-    form.addEventListener('submit', (event) => event.preventDefault());
+    form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        startReport();
+    });
     if (statusDismiss) statusDismiss.addEventListener('click', async () => {
         statusWrap.style.display = 'none';
         if (feedback) feedback.style.display = 'none';
@@ -1109,9 +1073,8 @@
     const downloadLink = document.getElementById('customer-balance-download-link');
     const runWrap = document.getElementById('customer-balance-run-wrap');
     const runBtn = document.getElementById('customer-balance-run-btn');
-    const runPanel = document.getElementById('customer-balance-run-panel');
     const formatInput = document.getElementById('customer-balance-format-input');
-    if (!form || !runStatusWrap || !runStatusText || !runWrap || !runBtn || !runPanel || !formatInput) return;
+    if (!form || !runStatusWrap || !runStatusText || !runWrap || !runBtn || !formatInput) return;
 
     const DISMISS_KEY = 'viefundCustomerBalanceRunDismissedMessage';
     const ACTIVE_RUN_KEY = 'viefundCustomerBalanceActiveRunId';
@@ -1132,11 +1095,7 @@
     const triggerDownload = (url) => {
         if (!url || downloadedUrl === url) return;
         downloadedUrl = url;
-        const frame = document.createElement('iframe');
-        frame.hidden = true;
-        frame.src = url;
-        document.body.appendChild(frame);
-        window.setTimeout(() => frame.remove(), 60000);
+        window.downloadVieFundReport(url);
     };
 
     const showStartError = (message) => {
@@ -1148,11 +1107,10 @@
         if (downloadWrap) downloadWrap.style.display = 'none';
     };
 
-    const startReport = async (format) => {
+    const startReport = async () => {
         if (!form.reportValidity()) return;
 
-        formatInput.value = format || 'csv';
-        runPanel.style.display = 'none';
+        formatInput.value = 'excel';
         runBtn.disabled = true;
         cleanupRequested = false;
         autoDownloadPending = true;
@@ -1163,7 +1121,7 @@
         }
         localStorage.removeItem(DISMISS_KEY);
         runStatusWrap.className = 'sync-chip sync-chip-progress';
-        setRunMessage(`Starting ${String(format || 'csv').toUpperCase()} report...`);
+        setRunMessage('Starting Excel report...');
         if (progressWrap) progressWrap.style.display = 'block';
         if (progressBar) progressBar.style.width = '3%';
         if (progressMeta) progressMeta.textContent = 'Submitting report job...';
@@ -1203,22 +1161,7 @@
         setRunStatusVisible(dismissed !== message);
     };
 
-    runBtn.addEventListener('click', function (event) {
-        event.stopPropagation();
-        runPanel.style.display = runPanel.style.display === 'block' ? 'none' : 'block';
-    });
-
-    runPanel.querySelectorAll('.customer-balance-format-option').forEach((option) => {
-        option.addEventListener('click', function () {
-            startReport(this.getAttribute('data-format') || 'csv');
-        });
-    });
-
-    document.addEventListener('click', function (event) {
-        if (!runWrap.contains(event.target)) {
-            runPanel.style.display = 'none';
-        }
-    });
+    runBtn.addEventListener('click', startReport);
 
     const cleanupLatestReportArtifacts = async () => {
         if (cleanupRequested) return;
@@ -1344,7 +1287,7 @@
 
     form.addEventListener('submit', (event) => {
         event.preventDefault();
-        startReport(formatInput.value || 'csv');
+        startReport();
     });
 
     poll();

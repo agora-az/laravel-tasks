@@ -7,10 +7,12 @@ const view = fs.readFileSync(path.join(__dirname, '../../resources/views/reports
 const script = new vm.Script(view.match(/<script>([\s\S]*?)<\/script>/)[1]);
 const cancellationView = fs.readFileSync(path.join(__dirname, '../../resources/views/reports/cancel-button.blade.php'), 'utf8');
 const cancellationScript = new vm.Script(cancellationView.match(/<script>([\s\S]*?)<\/script>/)[1]);
+const downloadView = fs.readFileSync(path.join(__dirname, '../../resources/views/reports/download-helper.blade.php'), 'utf8');
+const downloadScript = new vm.Script(downloadView.match(/<script>([\s\S]*?)<\/script>/)[1]);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function createPage(responses, { previousRun = null, blockedStorage = false, initialStart = '' } = {}) {
-    const state = { requests: [], timers: [], handlers: {}, documentHandlers: {}, warnings: [], storedRun: previousRun };
+function createPage(responses, { previousRun = null, blockedStorage = false, blockedDownload = false, initialStart = '' } = {}) {
+    const state = { requests: [], timers: [], cleanupTimers: [], frames: [], nextTimer: 1, handlers: {}, documentHandlers: {}, warnings: [], storedRun: previousRun };
     const message = { textContent: '' };
     const download = { hidden: true };
     const warning = { hidden: true };
@@ -50,6 +52,12 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     };
     const context = vm.createContext({
         document: {
+            createElement: tag => {
+                assert.equal(tag, 'iframe');
+                if (blockedDownload) throw new Error('Automatic download blocked');
+                return { hidden: false, remove() { this.removed = true; } };
+            },
+            body: { appendChild: frame => state.frames.push(frame) },
             addEventListener: (event, handler) => { state.documentHandlers[event] = handler; },
             querySelector: () => ({ getAttribute: () => 'test-csrf-token' }),
             getElementById: id => ({
@@ -83,12 +91,13 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
         },
         window: {
             setTimeout: (callback, delay) => {
-                state.timers.push({ callback, delay });
-                return state.timers.length;
+                (delay === 60000 ? state.cleanupTimers : state.timers).push({ callback, delay });
+                return state.nextTimer++;
             },
             clearTimeout: () => {},
         },
     });
+    downloadScript.runInContext(context);
     cancellationScript.runInContext(context);
     script.runInContext(context);
     return { ...state, message, download, warning, eta, button, feedback, startDate, endDate, dateScope, inception, cancelButton, cancelMessage, state };
@@ -98,7 +107,8 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     const page = createPage([
         { data: { run_id: 'run-1' } },
         { data: { state: 'running', phase: 'exporting', message: '3 transactions written.', eta_seconds: 125, estimated_completion_at: '2026-10-24T21:00:00Z', download_url: null } },
-        { data: { state: 'completed', message: 'Report ready.', eta_seconds: 125, download_url: '/reports/cashagch/run-1/download' } },
+        { data: { state: 'completed', success: true, message: 'Report ready.', eta_seconds: 125, download_url: '/reports/cashagch/run-1/download' } },
+        { data: { state: 'completed', success: true, message: 'Report ready.', download_url: '/reports/cashagch/run-1/download' } },
     ]);
     assert.equal(page.startDate.value, '');
     assert.equal(page.inception.attributes['aria-pressed'], 'true');
@@ -133,6 +143,65 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     assert.equal(page.requests.length, 3);
     assert.equal(page.eta.hidden, true);
     assert.equal(page.eta.textContent, '');
+    assert.equal(page.frames.length, 1);
+    assert.equal(page.frames[0].hidden, true);
+    assert.equal(page.frames[0].src, '/reports/cashagch/run-1/download');
+    assert.equal(page.cleanupTimers[0].delay, 60000);
+    await page.timers[0].callback();
+    await flush();
+    assert.equal(page.frames.length, 1, 'Repeated completion polls must not download another copy.');
+    page.cleanupTimers[0].callback();
+    assert.equal(page.frames[0].removed, true);
+
+    const resumed = createPage([
+        { data: { state: 'running', message: 'Still running.', download_url: null } },
+        { data: { state: 'completed', success: true, message: 'Report ready.', download_url: '/resumed-download' } },
+    ], { previousRun: 'resumed-run' });
+    await flush();
+    assert.equal(resumed.frames.length, 0);
+    await resumed.timers[0].callback();
+    await flush();
+    assert.equal(resumed.frames[0].src, '/resumed-download');
+    const completedVisit = createPage([
+        { data: { state: 'completed', success: true, message: 'Report ready.', download_url: '/resumed-download' } },
+    ], { previousRun: 'resumed-run' });
+    await flush();
+    assert.equal(completedVisit.frames.length, 0, 'Revisiting an already-completed run must not automatically download it again.');
+    assert.equal(completedVisit.download.hidden, false);
+
+    const successive = createPage([
+        { data: { run_id: 'first-run' } },
+        { data: { state: 'completed', success: true, message: 'Ready.', download_url: '/first-download' } },
+        { data: { run_id: 'second-run' } },
+        { data: { state: 'completed', success: true, message: 'Ready.', download_url: '/second-download' } },
+    ]);
+    await successive.handlers.submit({ preventDefault() {} });
+    await flush();
+    await successive.handlers.submit({ preventDefault() {} });
+    await flush();
+    assert.deepEqual(successive.frames.map(frame => frame.src), ['/first-download', '/second-download']);
+
+    const blocked = createPage([
+        { data: { run_id: 'blocked-run' } },
+        { data: { state: 'completed', success: true, message: 'Report ready.', download_url: '/manual-download' } },
+    ], { blockedDownload: true });
+    await blocked.handlers.submit({ preventDefault() {} });
+    await flush();
+    assert.equal(blocked.download.hidden, false);
+    assert.equal(blocked.download.href, '/manual-download');
+    assert.ok(blocked.message.textContent.includes('Automatic download could not start'));
+    assert.equal(blocked.warnings.length, 1);
+
+    for (const state of ['queued', 'running', 'cancelling', 'cancelled', 'failed', 'completed']) {
+        const unavailable = createPage([
+            { data: { run_id: 'unavailable-run' } },
+            { data: { state, success: false, message: 'Unavailable.', download_url: '/must-not-download' } },
+        ]);
+        await unavailable.handlers.submit({ preventDefault() {} });
+        await flush();
+        assert.equal(unavailable.frames.length, 0);
+        assert.equal(unavailable.download.hidden, true, `${state} must not offer a completed workbook.`);
+    }
 
     for (const [status, expected] of [
         [{ state: 'queued', phase: 'queued' }, 'waiting for the report worker'],
@@ -161,7 +230,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
 
     const privacy = createPage([
         { data: { run_id: 'private-run' } },
-        { data: { state: 'completed', message: 'Report ready.', download_url: '/private-download' } },
+        { data: { state: 'completed', success: true, message: 'Report ready.', download_url: '/private-download' } },
     ], { blockedStorage: true });
     await privacy.handlers.submit({ preventDefault() {} });
     await flush();
@@ -169,6 +238,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     assert.equal(privacy.warnings.length, 2);
     assert.equal(privacy.download.href, '/private-download');
     assert.equal(privacy.message.textContent, 'Report ready.');
+    assert.equal(privacy.frames[0].src, '/private-download', 'Blocked browser storage must not prevent automatic downloads.');
 
     const invalid = createPage([{ ok: false, data: { errors: { status_ids: ['Select at least one status.'] } } }]);
     await invalid.handlers.submit({ preventDefault() {} });
@@ -189,17 +259,18 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     const race = createPage([
         oldPoll,
         { data: { run_id: 'new-run' } },
-        { data: { state: 'completed', message: 'New report ready.', download_url: '/new-download' } },
+        { data: { state: 'completed', success: true, message: 'New report ready.', download_url: '/new-download' } },
     ], { previousRun: 'old-run' });
     await race.handlers.submit({ preventDefault() {} });
     await flush();
-    finishOldPoll({ data: { state: 'running', message: 'Old report is running.', download_url: null } });
+    finishOldPoll({ data: { state: 'completed', success: true, message: 'Old report ready.', download_url: '/stale-download' } });
     await flush();
     assert.equal(race.message.textContent, 'New report ready.');
     assert.equal(race.download.href, '/new-download');
     assert.equal(race.button.disabled, false);
     assert.equal(race.timers.length, 0);
     assert.equal(race.eta.hidden, true);
+    assert.deepEqual(race.frames.map(frame => frame.src), ['/new-download'], 'A stale completion response must never trigger a download.');
     const cancelling = createPage([
         { data: { run_id: 'cancel-run' } },
         { data: { state: 'running', phase: 'exporting', message: 'Writing...', cancel_url: '/reports/cashagch/cancel?run_id=cancel-run', download_url: null } },
@@ -224,6 +295,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
     assert.equal(cancelling.button.disabled, false);
     assert.equal(cancelling.cancelButton.hidden, true);
     assert.equal(cancelling.download.hidden, true);
+    assert.equal(cancelling.frames.length, 0);
     for (const report of ['daily-balance', 'daily-balance-legacy', 'customer-balances']) {
         const denied = createPage([
             { data: { state: 'running', phase: 'exporting', message: 'Writing...', cancel_url: `/reports/${report}/cancel?run_id=run-1` } },
@@ -236,6 +308,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, ini
         assert.ok(denied.cancelMessage.textContent.includes('Cancellation failed: This report has already finished.'));
     }
     console.log('PASS: report submission, progress polling, download, user-scoped resume, blocked browser storage, validation/expiry errors and stale-response protection');
+    console.log('PASS: automatic downloads once per run, active-run resume, no completed-run redownload, stale/failed/cancelled protection, frame cleanup and manual fallback');
     console.log('PASS: ETA phases, duration formatting, estimated local completion, warm-up, finalization and terminal-state clearing');
     console.log('PASS: inception default/reset, optional custom start date, inclusive date boundaries and accessible date-range state');
     console.log('PASS: shared cancellation POST/CSRF, stopping state, terminal cleanup, hidden ETA/download and explicit cancellation errors for every report type');

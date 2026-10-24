@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use OpenSpout\Reader\XLSX\Reader;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
@@ -37,6 +38,69 @@ $check = static function (bool $condition, string $message): void {
     if (!$condition) {
         throw new RuntimeException($message);
     }
+};
+$readWorkbook = static function (string $path): array {
+    $reader = new Reader();
+    $reader->open($path);
+    $sheets = [];
+    try {
+        foreach ($reader->getSheetIterator() as $sheet) {
+            $sheets[$sheet->getName()] = [];
+            foreach ($sheet->getRowIterator() as $row) {
+                $sheets[$sheet->getName()][] = $row->toArray();
+            }
+        }
+    } finally {
+        $reader->close();
+    }
+
+    return $sheets;
+};
+$verifyMonthly = static function (array $sheets) use ($check): array {
+    $detailNames = array_values(array_filter(array_keys($sheets), static fn(string $name): bool => str_starts_with($name, 'Transactions ')));
+    $check(($detailNames[0] ?? null) === 'Transactions 1'
+        && array_keys($sheets) === [...$detailNames, 'Summary', 'Monthly Summary'], 'All transaction sheets must come first, followed by Summary and Monthly Summary.');
+    $columns = [
+        'Total Purchases', 'Standard Redemptions', 'Fee Redemptions',
+        'Total Redemptions (Including Fees)', 'Other / Review Required Signed Amount',
+        'Net Signed Transaction Amount', 'Total Cash Transactions', 'Purchase Transaction Count',
+        'Standard Redemption Transaction Count', 'Fee Redemption Transaction Count',
+        'All Redemption Transaction Count', 'Other / Review Required Transaction Count',
+    ];
+    $check($sheets['Monthly Summary'][0] === [
+        'Month', 'Purchases (In)', 'Standard Redemptions (Out)', 'Fee Redemptions (Out)',
+        'Total Redemptions (Out, Including Fees)', 'Other / Review Required Signed Amount',
+        'Net Signed Transaction Amount', 'Total Cash Transactions', 'Purchase Transaction Count',
+        'Standard Redemption Transaction Count', 'Fee Redemption Transaction Count',
+        'All Redemption Transaction Count', 'Other / Review Required Transaction Count',
+    ], 'Monthly headers must distinguish purchases, both redemption types, review amounts, net signed cash and counts.');
+    $months = [];
+    $grandTotal = null;
+    foreach (array_slice($sheets['Monthly Summary'], 1) as $row) {
+        if (preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', (string) $row[0])) {
+            $check(!isset($months[$row[0]]) && count($row) === 13, 'Each month must have exactly one complete summary row.');
+            $check(BigDecimal::of((string) $row[4])->minus((string) $row[1])->plus((string) $row[5])->isEqualTo((string) $row[6]), 'Every month must preserve the signed cash accounting identity.');
+            $check($row[7] === $row[8] + $row[9] + $row[10] + $row[12]
+                && $row[11] === $row[9] + $row[10], 'Monthly counts must include each transaction once and combine fee redemptions.');
+            $months[$row[0]] = $row;
+        } elseif ($row[0] === 'Grand Total') {
+            $check($grandTotal === null && count($row) === 13, 'Monthly Summary needs exactly one complete Grand Total row.');
+            $grandTotal = $row;
+        }
+    }
+    $check($grandTotal !== null, 'Monthly Summary must include a Grand Total row.');
+    $summary = array_column($sheets['Summary'], 1, 0);
+    foreach ($columns as $index => $label) {
+        $sum = BigDecimal::zero();
+        foreach ($months as $row) {
+            $check(is_numeric($row[$index + 1]), 'Monthly amounts and counts must be numeric cells.');
+            $sum = $sum->plus((string) $row[$index + 1]);
+        }
+        $check($sum->isEqualTo((string) $grandTotal[$index + 1])
+            && $sum->isEqualTo((string) $summary[$label]), "$label must reconcile across all months, the Grand Total and the overall Summary.");
+    }
+
+    return $months;
 };
 $exitCode = 0;
 
@@ -177,19 +241,15 @@ try {
         $check(!isset($filters['has_reconciliation_match']) && !isset($filters['match_statuses']), 'Bank matches must never restrict this report.');
     }
     $reader = new Reader();
-    $reader->open($path);
-    $sheets = [];
-    try {
-        foreach ($reader->getSheetIterator() as $sheet) {
-            $sheets[$sheet->getName()] = [];
-            foreach ($sheet->getRowIterator() as $row) {
-                $sheets[$sheet->getName()][] = $row->toArray();
-            }
+    $sheets = $readWorkbook($path);
+    $months = $verifyMonthly($sheets);
+    $check(count($months) === 87 && array_key_first($months) === '2019-08'
+        && array_key_last($months) === '2026-10', 'Inception reporting must include every month through the selected end month.');
+    foreach ($months as $month => $values) {
+        if ($month !== '2019-08') {
+            $check(array_slice($values, 1) === array_fill(0, 12, 0), 'Months without matching transactions must contain numeric zeros.');
         }
-    } finally {
-        $reader->close();
     }
-    $check(array_key_first($sheets) === 'Summary' && count($sheets) === 2, 'Summary must come first, followed by the transaction details.');
     $summary = [];
     foreach ($sheets['Summary'] as $row) {
         if (isset($row[0], $row[1])) $summary[(string) $row[0]] = $row[1];
@@ -208,7 +268,8 @@ try {
     $check($summary['First Included Transaction Date'] === '2019-08-09', 'History since inception must not be truncated.');
     $check(str_contains($summary['Review'], 'need') || str_contains($summary['Review'], 'Review'), 'Ambiguous types must trigger an explicit review warning.');
     $details = [];
-    foreach (array_slice($sheets, 1) as $rows) {
+    foreach ($sheets as $name => $rows) {
+        if (!str_starts_with($name, 'Transactions ')) continue;
         $header = array_shift($rows);
         $check(count($rows) <= 5000, 'Worksheet split limit must apply to every detail sheet.');
         foreach ($rows as $row) {
@@ -221,12 +282,67 @@ try {
     $check(count($details) === 13 && $details[0][13] === -1000.1234, 'Details must retain original signed amounts.');
     $zip = new ZipArchive();
     $check($zip->open($path) === true, 'The workbook must be a valid XLSX archive.');
-    $summaryXml = simplexml_load_string($zip->getFromName('xl/worksheets/sheet1.xml'));
+    $summaryXml = simplexml_load_string($zip->getFromName('xl/worksheets/sheet2.xml'));
     $zip->close();
     $labelColumn = $summaryXml->xpath('//*[local-name()="col"][@min="1"]')[0];
     $valueColumn = $summaryXml->xpath('//*[local-name()="col"][@min="2"]')[0];
     $check((float) $labelColumn['width'] >= 46 && (float) $valueColumn['width'] >= 30, 'Summary labels and monetary totals must be readable without resizing columns.');
     echo "PASS: inception, exact fund/currency/status/end date, separate purchase/redemption/fee totals, reversals, review types and text precision\n";
+
+    $accountingFormat = '$#,##0.00;[Red]($#,##0.00);$0.00';
+    $formattedTotals = [
+        'Total Purchases' => '$1,225.10',
+        'Standard Redemptions' => '$750.30',
+        'Fee Redemptions' => '$15.12',
+        'Total Redemptions (Including Fees)' => '$765.42',
+        'Other / Review Required Signed Amount' => '($1.33)',
+        'Net Signed Transaction Amount' => '($461.01)',
+    ];
+    $formattedWorkbook = IOFactory::load($path);
+    try {
+        $summarySheet = $formattedWorkbook->getSheetByName('Summary');
+        $detailSheet = $formattedWorkbook->getSheetByName('Transactions 1');
+        $monthlySheet = $formattedWorkbook->getSheetByName('Monthly Summary');
+        $check($summarySheet !== null && $detailSheet !== null && $monthlySheet !== null, 'Formatting checks require all three workbook sheets.');
+        $check($formattedWorkbook->getActiveSheetIndex() === 0 && $formattedWorkbook->getActiveSheet()->getTitle() === 'Transactions 1', 'The workbook must open on its first transaction sheet.');
+        $check($monthlySheet->getRowDimension(1)->getRowHeight() >= 30
+            && $monthlySheet->getStyle('E1')->getAlignment()->getWrapText(), 'Monthly headers must wrap with sufficient height to remain readable.');
+        foreach ($sheets['Summary'] as $index => $row) {
+            $cell = $summarySheet->getCell('B'.($index + 1));
+            if (isset($formattedTotals[$row[0]])) {
+                $check($cell->getStyle()->getNumberFormat()->getFormatCode() === $accountingFormat, $row[0].' must use dollar accounting formatting.');
+                $check($cell->getFormattedValue() === $formattedTotals[$row[0]], $row[0].' must display dollars, grouped thousands, two decimals and parenthesized negatives.');
+                $check(is_numeric($cell->getValue()), 'Summary amounts must remain numeric, not formatted text.');
+            } elseif ($row[0] === 'Total Cash Transactions' || str_contains($row[0], 'Transaction Count')) {
+                $check($cell->getStyle()->getNumberFormat()->getFormatCode() === 'General', 'Transaction counts must not receive monetary formatting.');
+            }
+        }
+        foreach ($details as $index => $row) {
+            $cell = $detailSheet->getCell('N'.($index + 2));
+            $check($cell->getStyle()->getNumberFormat()->getFormatCode() === $accountingFormat, 'Every signed transaction amount must use dollar accounting formatting.');
+            $check($cell->getValue() === $row[13], 'Accounting display must not round or otherwise change the original signed transaction value.');
+        }
+        $check($detailSheet->getCell('N2')->getFormattedValue() === '($1,000.12)', 'Negative detail amounts must display dollars, grouped thousands and parentheses.');
+        $check($detailSheet->getCell('N5')->getFormattedValue() === '$25.12', 'Positive detail amounts must display dollars and two decimals.');
+        $check($detailSheet->getCell('N14')->getFormattedValue() === '$0.00', 'Zero detail amounts must display as monetary values.');
+        foreach ($sheets['Monthly Summary'] as $index => $row) {
+            if (!isset($months[$row[0]]) && $row[0] !== 'Grand Total') continue;
+            foreach (range('B', 'G') as $column) {
+                $cell = $monthlySheet->getCell($column.($index + 1));
+                $check($cell->getStyle()->getNumberFormat()->getFormatCode() === $accountingFormat, 'Every monthly amount, including zero and Grand Total values, must use dollar accounting formatting.');
+                $check(is_numeric($cell->getValue()), 'Monthly monetary values must remain numeric.');
+            }
+            foreach (range('H', 'M') as $column) {
+                $check($monthlySheet->getCell($column.($index + 1))->getStyle()->getNumberFormat()->getFormatCode() === 'General', 'Monthly counts must not receive monetary formatting.');
+            }
+        }
+        $check($monthlySheet->getCell('B2')->getFormattedValue() === '$1,225.10'
+            && $monthlySheet->getCell('G2')->getFormattedValue() === '($461.01)'
+            && $monthlySheet->getCell('B3')->getFormattedValue() === '$0.00', 'Monthly positive, negative and zero monetary displays must use accounting formatting.');
+    } finally {
+        $formattedWorkbook->disconnectWorksheets();
+    }
+    echo "PASS: transaction-first sheet order, monthly reconciliation, dollar accounting formats throughout, numeric precision, negative/positive/zero displays and non-monetary counts\n";
 
     foreach (array_keys(VieFundCashAgchReport::DATE_BASES) as $basis) {
         $rangeCriteria = [...$criteria, 'date_from' => '2019-08-13', 'date_to' => '2019-08-17', 'date_basis' => $basis];
@@ -245,7 +361,7 @@ try {
                     $values = $row->toArray();
                     if ($sheet->getName() === 'Summary') {
                         if (isset($values[0], $values[1])) $rangeSummary[(string) $values[0]] = $values[1];
-                    } else {
+                    } elseif (str_starts_with($sheet->getName(), 'Transactions ')) {
                         $rangeDetails[] = $values;
                     }
                 }
@@ -259,8 +375,93 @@ try {
         $check((float) $rangeSummary['Total Purchases'] === 0.0
             && BigDecimal::of((string) $rangeSummary['Total Redemptions (Including Fees)'])->isEqualTo('765.4233'), 'Custom-range totals must cover only included cash amounts.');
         $check(count($rangeDetails) === 6 && $rangeDetails[1][0] === 'C-5' && $rangeDetails[5][0] === 'C-9', 'Only the five selected transactions and one header belong in range details.');
+        $rangeMonths = $verifyMonthly($readWorkbook($testDirectory.'/range.xlsx'));
+        $check(array_keys($rangeMonths) === ['2019-08'], 'Partial-month reports must not add months outside the selected range.');
     }
     echo "PASS: optional custom start date, inclusive range details, Summary metadata/totals and matching ETA counts for all four date bases\n";
+
+    $monthlySource = clone $source;
+    $monthlySource->rows = [];
+    $monthlySource->pageSize = 2;
+    foreach ([
+        ['Purchase', '-100.1234', ['2025-12-15 00:00:00', '2026-01-01', '2026-03-01', '2026-04-15 23:59:59.999999']],
+        ['Redemption', '40.2500', ['2025-12-31 23:59:59.999999', '2026-01-31', '2026-03-31', '2026-04-15']],
+        ['Fee Redemption', '3.3333', ['2026-01-01', '2026-03-01', '2026-04-01', '2026-04-15']],
+        ['Purchase', '20.0001', ['2026-03-31', '2026-04-01', '2026-04-15', '2026-04-15']],
+        ['Redemption', '-5.0001', ['2026-04-15 23:59:59.999999', '2025-12-15', '2025-12-31', '2026-04-15']],
+        ['Fee Redemption', '-0.3333', ['2026-04-15', '2025-12-16', '2025-12-31', '2026-04-15']],
+        ['Automatic/Systematic', '-2.1111', ['2026-01-15', '2026-03-15', '2026-03-31', '2026-04-15']],
+        ['Unknown type', '0.0001', ['2026-03-01', '2026-04-15', '2026-04-15', '2026-04-15']],
+        ['Purchase', '-9999', array_fill(0, 4, '2025-12-14 23:59:59.999999')],
+        ['Redemption', '9999', array_fill(0, 4, '2026-04-16 00:00:00')],
+    ] as $index => [$type, $amount, $dates]) {
+        $row = clone $source->rows[0];
+        $row->cash_transaction_id = $row->sort_id = 1000 + $index;
+        $row->transaction_id = 'M-'.$index;
+        $row->transaction_type = $type;
+        $row->amount = $amount;
+        [$row->created_date, $row->trade_date, $row->processing_date, $row->settlement_date] = $dates;
+        $monthlySource->rows[] = $row;
+    }
+    $monthlyReport = new VieFundCashAgchReport($monthlySource, $app->make(RuntimeSettings::class));
+    $monthlyCriteria = [...$criteria, 'date_from' => '2025-12-15', 'date_to' => '2026-04-15'];
+    foreach ([
+        'create_date' => ['2025-12' => '100.1234', '2026-03' => '-20.0001'],
+        'trade_date' => ['2026-01' => '100.1234', '2026-04' => '-20.0001'],
+        'processing_date' => ['2026-03' => '100.1234', '2026-04' => '-20.0001'],
+        'settlement_date' => ['2026-04' => '80.1233'],
+    ] as $basis => $expectedPurchases) {
+        $monthlySource->requests = $monthlySource->countRequests = [];
+        $monthlyResult = $monthlyReport->generate([...$monthlyCriteria, 'date_basis' => $basis], $testDirectory.'/monthly.xlsx', static fn(int $count) => null);
+        $monthlySheets = $readWorkbook($testDirectory.'/monthly.xlsx');
+        $monthlyRows = $verifyMonthly($monthlySheets);
+        $monthlyMetadata = array_column($monthlySheets['Monthly Summary'], 1, 0);
+        $check($monthlyMetadata['Period'] === '2025-12-15 through 2026-04-15'
+            && $monthlyMetadata['Date Basis'] === VieFundCashAgchReport::DATE_BASES[$basis]
+            && $monthlyMetadata['Currency'] === 'CAD' && $monthlyMetadata['Cash Status IDs'] === '6'
+            && $monthlyMetadata['Fund / Unit ID'] === 'CASHagch', 'Monthly metadata must identify the exact report scope.');
+        $check($monthlyResult === ['processed_transactions' => 8, 'review_transactions' => 2], 'Monthly grouping must retain the exact date scope, including fractional end-of-day amounts.');
+        $check(count($monthlySource->countRequests) === 1 && count($monthlySource->requests) === 5, 'Monthly summaries must reuse the source stream, not run additional count or transaction queries.');
+        $check(array_keys($monthlyRows) === ['2025-12', '2026-01', '2026-02', '2026-03', '2026-04'], 'Monthly rows must cross the year boundary in order, retain empty months, and include both partial boundary months.');
+        foreach ($monthlyRows as $month => $row) {
+            $check(BigDecimal::of((string) $row[1])->isEqualTo($expectedPurchases[$month] ?? '0'), 'Purchases and later reversals must use their selected date-basis month, not cash direction or another date.');
+        }
+        $check(array_slice($monthlyRows['2026-02'], 1) === array_fill(0, 12, 0), 'The missing February must contain zero amounts and counts.');
+        $monthlySummary = array_column($monthlySheets['Summary'], 1, 0);
+        foreach ([
+            'Total Purchases' => '80.1233', 'Standard Redemptions' => '35.2499',
+            'Fee Redemptions' => '3', 'Total Redemptions (Including Fees)' => '38.2499',
+            'Other / Review Required Signed Amount' => '-2.1110', 'Net Signed Transaction Amount' => '-43.9844',
+        ] as $label => $value) {
+            $check(BigDecimal::of((string) $monthlySummary[$label])->isEqualTo($value), 'Multi-month totals must retain exact signed amounts and reversals.');
+        }
+        if ($basis === 'create_date') {
+            $check(BigDecimal::of((string) $monthlyRows['2026-01'][3])->isEqualTo('3.3333')
+                && BigDecimal::of((string) $monthlyRows['2026-04'][2])->isEqualTo('-5.0001')
+                && BigDecimal::of((string) $monthlyRows['2026-04'][3])->isEqualTo('-0.3333')
+                && BigDecimal::of((string) $monthlyRows['2026-03'][5])->isEqualTo('0.0001'), 'Fee, standard-redemption and review amounts must be assigned to their own months, including reversals.');
+        }
+    }
+    $monthlySource->rows = [clone $monthlySource->rows[0]];
+    foreach (['created_date', 'trade_date', 'processing_date', 'settlement_date'] as $field) {
+        $monthlySource->rows[0]->{$field} = '2024-02-29 23:59:59.999999';
+    }
+    $monthlySource->rows[0]->amount = '-0.0001';
+    $monthlyReport->generate([...$criteria, 'date_from' => '2024-01-31', 'date_to' => '2024-03-01'], $testDirectory.'/leap.xlsx', static fn(int $count) => null);
+    $leapMonths = $verifyMonthly($readWorkbook($testDirectory.'/leap.xlsx'));
+    $check(array_keys($leapMonths) === ['2024-01', '2024-02', '2024-03']
+        && BigDecimal::of((string) $leapMonths['2024-02'][1])->isEqualTo('0.0001'), 'Month iteration must retain leap day and not skip months after a 31st-day start.');
+    $monthlyReport->generate([...$criteria, 'date_from' => '', 'date_to' => '2024-03-01'], $testDirectory.'/blank-start.xlsx', static fn(int $count) => null);
+    $check(array_keys($verifyMonthly($readWorkbook($testDirectory.'/blank-start.xlsx'))) === ['2024-02', '2024-03'], 'A blank start date must use the first matching transaction month, just like inception.');
+    $monthlySource->rows[0]->currency_code = '01';
+    $monthlySource->rows[0]->cash_status_id = 3;
+    $monthlyReport->generate([...$criteria, 'date_from' => '2024-01-31', 'date_to' => '2024-03-01', 'currency_code' => '01', 'status_ids' => [3]], $testDirectory.'/usd-monthly.xlsx', static fn(int $count) => null);
+    $usdSheets = $readWorkbook($testDirectory.'/usd-monthly.xlsx');
+    $usdMonths = $verifyMonthly($usdSheets);
+    $usdMetadata = array_column($usdSheets['Monthly Summary'], 1, 0);
+    $check($usdMetadata['Currency'] === 'USD' && $usdMetadata['Cash Status IDs'] === '3'
+        && BigDecimal::of((string) $usdMonths['2024-02'][1])->isEqualTo('0.0001'), 'Monthly summaries must respect and identify selected non-default currency and statuses.');
+    echo "PASS: multi-year monthly ins/outs, cross-month reversals, separate fees/review, all date bases, partial-month bounds, zero months, leap day, exact reconciliation and no additional source queries\n";
 
     foreach (range(14, 5001) as $id) {
         $row = clone $source->rows[12];
@@ -283,7 +484,7 @@ try {
                     $values = $row->toArray();
                     if (isset($values[0], $values[1])) $splitSummary[(string) $values[0]] = $values[1];
                 }
-            } else {
+            } elseif (str_starts_with($sheet->getName(), 'Transactions ')) {
                 $detailCounts[] = count($rows) - 1;
             }
         }
@@ -292,11 +493,20 @@ try {
     }
     $check($detailCounts === [5000, 1], 'The transaction after the configured worksheet limit must move to the next sheet.');
     $check(BigDecimal::of((string) $splitSummary['Total Purchases'])->isEqualTo('1225.1002'), 'Summary totals must include amounts on later detail sheets.');
-    echo "PASS: exact 5,000-row worksheet boundary, next-sheet overflow and complete-result Summary totals\n";
+    $splitMonths = $verifyMonthly($readWorkbook($testDirectory.'/split.xlsx'));
+    $check(BigDecimal::of((string) $splitMonths['2019-08'][1])->isEqualTo('1225.1002')
+        && $splitMonths['2019-08'][7] === 5001, 'Monthly totals and counts must include transactions on every detail sheet.');
+    echo "PASS: exact 5,000-row worksheet boundary, next-sheet overflow, transaction-first order and complete-result Summary/monthly totals\n";
 
     $source->rows = [];
     $empty = $report->generate($criteria, $testDirectory.'/empty.xlsx', static fn(int $count) => null);
     $check($empty['processed_transactions'] === 0, 'An empty report must complete with zero transactions.');
+    $emptySheets = $readWorkbook($testDirectory.'/empty.xlsx');
+    $check($verifyMonthly($emptySheets) === [], 'An empty inception report must not invent a historical starting month.');
+    $check(str_contains(array_column($emptySheets['Monthly Summary'], 1, 0)['Activity'], 'No matching transactions'), 'An empty monthly sheet must explicitly explain the lack of activity.');
+    $report->generate($monthlyCriteria, $testDirectory.'/empty-range.xlsx', static fn(int $count) => null);
+    $emptyRangeMonths = $verifyMonthly($readWorkbook($testDirectory.'/empty-range.xlsx'));
+    $check(array_keys($emptyRangeMonths) === ['2025-12', '2026-01', '2026-02', '2026-03', '2026-04'], 'An empty custom range must still include every selected month as numeric zeros.');
     $reader->open($testDirectory.'/empty.xlsx');
     try {
         foreach ($reader->getSheetIterator() as $sheet) {
@@ -541,8 +751,20 @@ try {
     }
     $app['auth']->guard()->setUser($user);
     $html = view('reports.cashagch', ['dateBasisOptions' => VieFundCashAgchReport::DATE_BASES, 'fundStatusOptions' => VieFundReportsController::FUND_STATUS_OPTIONS])->render();
-    $check(str_contains($html, 'Generate Excel Report') && str_contains($html, 'Use Inception Date')
+    $check(str_contains($html, 'Run Report') && str_contains($html, 'Use Inception Date')
         && str_contains($html, 'name="date_from"'), 'Reports page must expose optional start-date and inception controls.');
+    $document = new DOMDocument();
+    $check($document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET), 'The report form must render as usable HTML.');
+    $xpath = new DOMXPath($document);
+    $check($xpath->query('//form[@id="cashagch-report-form"]//div[@class="report-run-action"]/button[@type="submit"]')->length === 1,
+        'The CASHagch Run Report action must be in the right-aligned action column.');
+    $previewPath = getenv('REPORT_UI_PREVIEW');
+    if ($previewPath !== false && $previewPath !== '') {
+        preg_match('/<style>([\s\S]*?)<\/style>/', file_get_contents(base_path('resources/views/reports/index.blade.php')), $styles);
+        $check(file_put_contents($previewPath, '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'
+            . '*{box-sizing:border-box}body{font:14px Arial,sans-serif;margin:0;padding:24px;background:#f3f6f7}.card{padding:24px;border-radius:6px;background:white}'
+            . $styles[1].'</style></head><body><div class="reports-page">'.$html.'</div></body></html>') !== false, 'Unable to write the requested browser preview.');
+    }
     echo "PASS: queue lifecycle, progress/download, owner isolation, explicit worker failure, authenticated routes and rendered report form\n";
     echo "PASS: criteria validation, maintenance submission/start deferral, post-maintenance completion and partial-report rejection\n";
 } catch (Throwable $exception) {

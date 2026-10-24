@@ -91,6 +91,8 @@ class VieFundCashAgchReport
             $totals[$category] = BigDecimal::zero();
             $counts[$category] = 0;
         }
+        $emptyMonth = ['totals' => $totals, 'counts' => $counts, 'net' => BigDecimal::zero()];
+        $monthly = [];
         $net = BigDecimal::zero();
         $count = 0;
         $firstDate = null;
@@ -99,7 +101,7 @@ class VieFundCashAgchReport
         $sheetNumber = 1;
         $sheetRows = 0;
         $headerStyle = (new Style())->setFontBold();
-        $moneyStyle = (new Style())->setFormat('#,##0.0000;[Red](#,##0.0000);0.0000');
+        $moneyStyle = (new Style())->setFormat('$#,##0.00;[Red]($#,##0.00);$0.00');
         $options = new Options();
         $options->DEFAULT_COLUMN_WIDTH = 24;
         $writer = new Writer($options);
@@ -114,11 +116,7 @@ class VieFundCashAgchReport
             File::ensureDirectoryExists(dirname($path));
             $writer->openToFile($path);
             $open = true;
-            $summary = $writer->getCurrentSheet();
-            $summary->setName('Summary');
-            $summary->setColumnWidth(46, 1);
-            $summary->setColumnWidth(30, 2);
-            $writer->addNewSheetAndMakeItCurrent()->setName('Transactions 1');
+            $writer->getCurrentSheet()->setName('Transactions 1');
             $writer->addRow(Row::fromValues([...array_values(self::DETAIL_FIELDS), 'Summary Category'], $headerStyle));
 
             do {
@@ -133,13 +131,19 @@ class VieFundCashAgchReport
                     $amount = BigDecimal::of((string) $row->amount);
                     $category = self::CATEGORIES[mb_strtolower(trim((string) ($row->transaction_type ?? '')))]
                         ?? 'Other / review required';
-                    $totals[$category] = $totals[$category]->plus($category === 'Purchases' ? $amount->negated() : $amount);
+                    $categoryAmount = $category === 'Purchases' ? $amount->negated() : $amount;
+                    $totals[$category] = $totals[$category]->plus($categoryAmount);
                     ++$counts[$category];
                     $net = $net->plus($amount);
                     ++$count;
                     $basisDate = CarbonImmutable::parse($row->basis_date)->toDateString();
                     $firstDate ??= $basisDate;
                     $lastDate = $basisDate;
+                    $month = substr($basisDate, 0, 7);
+                    $monthly[$month] ??= $emptyMonth;
+                    $monthly[$month]['totals'][$category] = $monthly[$month]['totals'][$category]->plus($categoryAmount);
+                    ++$monthly[$month]['counts'][$category];
+                    $monthly[$month]['net'] = $monthly[$month]['net']->plus($amount);
 
                     if ($sheetRows >= $rowsPerSheet) {
                         $writer->addNewSheetAndMakeItCurrent()->setName('Transactions '.++$sheetNumber);
@@ -173,11 +177,15 @@ class VieFundCashAgchReport
             } while ($rows->isNotEmpty());
 
             $progress($count, $expectedRows, 'finalizing');
-            $writer->setCurrentSheet($summary);
+            $period = (!empty($criteria['date_from']) ? $criteria['date_from'] : 'Since inception').' through '.$criteria['date_to'];
+            $summary = $writer->addNewSheetAndMakeItCurrent();
+            $summary->setName('Summary');
+            $summary->setColumnWidth(46, 1);
+            $summary->setColumnWidth(30, 2);
             $writer->addRow(Row::fromValues(['CASHagch Purchases and Redemptions', ''], $headerStyle));
             foreach ([
                 ['Fund / Unit ID', self::FUND_ID],
-                ['Period', (!empty($criteria['date_from']) ? $criteria['date_from'] : 'Since inception').' through '.$criteria['date_to']],
+                ['Period', $period],
                 ['First Included Transaction Date', $firstDate ?? 'No transactions'],
                 ['Last Included Transaction Date', $lastDate ?? 'No transactions'],
                 ['Date Basis', self::DATE_BASES[$criteria['date_basis']]],
@@ -210,6 +218,41 @@ class VieFundCashAgchReport
             $writer->addRow(Row::fromValues(['Review', $counts['Other / review required'] > 0
                 ? 'Other or ambiguous transaction types are present. Review the detail categories before treating purchase/redemption totals as complete.'
                 : 'No unclassified transaction types.']));
+
+            $monthlySheet = $writer->addNewSheetAndMakeItCurrent();
+            $monthlySheet->setName('Monthly Summary');
+            $monthlySheet->setColumnWidth(16, 1);
+            $monthlySheet->setColumnWidth(28, 2, 3, 4, 5, 6, 7);
+            $writer->addRow(Row::fromValues([
+                'Month', 'Purchases (In)', 'Standard Redemptions (Out)', 'Fee Redemptions (Out)',
+                'Total Redemptions (Out, Including Fees)', 'Other / Review Required Signed Amount',
+                'Net Signed Transaction Amount', 'Total Cash Transactions', 'Purchase Transaction Count',
+                'Standard Redemption Transaction Count', 'Fee Redemption Transaction Count',
+                'All Redemption Transaction Count', 'Other / Review Required Transaction Count',
+            ], (clone $headerStyle)->setShouldWrapText())->setHeight(32));
+            $start = !empty($criteria['date_from']) ? $criteria['date_from'] : $firstDate;
+            $lastMonth = CarbonImmutable::parse($criteria['date_to'])->startOfMonth();
+            for ($month = $start !== null ? CarbonImmutable::parse($start)->startOfMonth() : null;
+                $month !== null && $month->lessThanOrEqualTo($lastMonth);
+                $month = $month->addMonth()) {
+                $label = $month->format('Y-m');
+                $data = $monthly[$label] ?? $emptyMonth;
+                $writer->addRow($this->monthlyRow($label, $data['totals'], $data['counts'], $data['net'], $moneyStyle));
+            }
+            $writer->addRow($this->monthlyRow('Grand Total', $totals, $counts, $net, $moneyStyle)->setStyle($headerStyle));
+            foreach ([
+                ['Fund / Unit ID', self::FUND_ID],
+                ['Period', $period],
+                ['Date Basis', self::DATE_BASES[$criteria['date_basis']]],
+                ['Currency', $criteria['currency_code'] === '00' ? 'CAD' : 'USD'],
+                ['Cash Status IDs', implode(', ', $criteria['status_ids'])],
+                ['Calculation', 'Ins are purchases; outs are redemptions, including fees. Reversals reduce their category totals in their transaction month. Net signed amount = total redemptions - purchases + other/review signed amount.'],
+            ] as $metadata) {
+                $writer->addRow(Row::fromValues($metadata));
+            }
+            if ($count === 0) {
+                $writer->addRow(Row::fromValues(['Activity', 'No matching transactions in the selected scope.']));
+            }
             $open = false;
             $writer->close();
             $completed = true;
@@ -226,6 +269,38 @@ class VieFundCashAgchReport
                     File::delete($path);
                 }
             }
+
         }
+    }
+
+    /**
+     * @param array<string, BigDecimal> $totals
+     * @param array<string, int> $counts
+     */
+    private function monthlyRow(string $month, array $totals, array $counts, BigDecimal $net, Style $moneyStyle): Row
+    {
+        $cells = [new StringCell($month, null)];
+        foreach ([
+            $totals['Purchases'],
+            $totals['Standard redemptions'],
+            $totals['Fee redemptions'],
+            $totals['Standard redemptions']->plus($totals['Fee redemptions']),
+            $totals['Other / review required'],
+            $net,
+        ] as $amount) {
+            $cells[] = new NumericCell($amount->toFloat(), $moneyStyle);
+        }
+        foreach ([
+            array_sum($counts),
+            $counts['Purchases'],
+            $counts['Standard redemptions'],
+            $counts['Fee redemptions'],
+            $counts['Standard redemptions'] + $counts['Fee redemptions'],
+            $counts['Other / review required'],
+        ] as $count) {
+            $cells[] = new NumericCell($count, null);
+        }
+
+        return new Row($cells);
     }
 }

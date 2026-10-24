@@ -301,7 +301,7 @@ class VieFundReportsController extends Controller
         return Cache::get("viefund:legacy-inception-date:{$dateBasis}");
     }
 
-    public function exportDailyBalance(Request $request): BinaryFileResponse|StreamedResponse
+    public function exportDailyBalance(Request $request): BinaryFileResponse
     {
         $validated = $request->validate([
             'date_from' => ['required', 'date', 'before_or_equal:today'],
@@ -312,7 +312,7 @@ class VieFundReportsController extends Controller
             'status.*' => ['integer', 'between:0,6'],
             'daily_balance_currency_code' => ['required', 'in:CAD,USD'],
             'daily_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
-            'format' => ['required', 'in:csv,excel'],
+            'format' => ['required', 'in:excel'],
         ]);
 
         $dateFrom = Carbon::parse($validated['date_from'])->startOfDay();
@@ -320,8 +320,6 @@ class VieFundReportsController extends Controller
         $dateBasis = $validated['date_basis'];
         $outputOrder = $validated['output_order'];
         $statuses = $this->resolveStatuses($validated['status'] ?? null);
-        $format = $validated['format'];
-
         config([
             'viefund.balance_report_cash_account_scope.currency_code' => $this->normalizeCustomerBalanceCurrencyCode($validated['daily_balance_currency_code']),
             'viefund.balance_report_cash_account_scope.opened_before' => !empty($validated['daily_balance_opened_before'])
@@ -381,26 +379,22 @@ class VieFundReportsController extends Controller
             ['Final Balance', $finalBalance],
         ];
 
-        if ($format === 'excel') {
-            return Excel::download(
-                new VieFundDailyBalanceWorkbookExport(
-                    [[
-                        'Report Date',
-                        'Cash Transactions',
-                        'Daily Net Transactions',
-                        'Running Daily Balance',
-                    ], ...array_map(fn(array $row) => array_values($row), $rows)],
-                    [['Summary Item', 'Value'], ...$metadataRows]
-                ),
-                $baseName . '.xlsx',
-                ExcelWriter::XLSX
-            );
-        }
-
-        return $this->streamCsv($rows, $baseName . '.csv', $metadataRows);
+        return Excel::download(
+            new VieFundDailyBalanceWorkbookExport(
+                [[
+                    'Report Date',
+                    'Cash Transactions',
+                    'Daily Net Transactions',
+                    'Running Daily Balance',
+                ], ...array_map(fn(array $row) => array_values($row), $rows)],
+                [['Summary Item', 'Value'], ...$metadataRows]
+            ),
+            $baseName . '.xlsx',
+            ExcelWriter::XLSX
+        );
     }
 
-    public function exportLegacyDailyBalance(Request $request): BinaryFileResponse|StreamedResponse
+    public function exportLegacyDailyBalance(Request $request): BinaryFileResponse
     {
         $validated = $request->validate([
             'legacy_date_from' => ['required', 'date', 'before_or_equal:today'],
@@ -411,7 +405,7 @@ class VieFundReportsController extends Controller
             'legacy_status.*' => ['integer', 'between:0,6'],
             'legacy_trust_status' => ['sometimes', 'array'],
             'legacy_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
-            'legacy_format' => ['required', 'in:csv,excel'],
+            'legacy_format' => ['required', 'in:excel'],
         ]);
 
         $dateFrom = Carbon::parse($validated['legacy_date_from'])->startOfDay();
@@ -420,7 +414,6 @@ class VieFundReportsController extends Controller
         $outputOrder = $validated['legacy_output_order'];
         $statuses = $this->resolveStatuses($validated['legacy_status'] ?? null);
         $trustStatuses = $this->resolveTrustStatuses($validated['legacy_trust_status'] ?? null, []);
-        $format = $validated['legacy_format'];
 
         $byDate = [];
         $fetchCursor = $dateFrom->copy();
@@ -500,23 +493,19 @@ class VieFundReportsController extends Controller
             ['Final Balance', $runningBalance],
         ];
 
-        if ($format === 'excel') {
-            return Excel::download(
-                new VieFundDailyBalanceWorkbookExport(
-                    [[
-                        'Report Date',
-                        'Legacy Transactions',
-                        'Daily Net Transactions',
-                        'Running Daily Balance',
-                    ], ...array_map(fn(array $row) => array_values($row), $rows)],
-                    [['Summary Item', 'Value'], ...$metadataRows]
-                ),
-                $baseName . '.xlsx',
-                ExcelWriter::XLSX
-            );
-        }
-
-        return $this->streamCsv($rows, $baseName . '.csv', $metadataRows);
+        return Excel::download(
+            new VieFundDailyBalanceWorkbookExport(
+                [[
+                    'Report Date',
+                    'Legacy Transactions',
+                    'Daily Net Transactions',
+                    'Running Daily Balance',
+                ], ...array_map(fn(array $row) => array_values($row), $rows)],
+                [['Summary Item', 'Value'], ...$metadataRows]
+            ),
+            $baseName . '.xlsx',
+            ExcelWriter::XLSX
+        );
     }
 
     public function runDailyBalanceReport(Request $request): JsonResponse|RedirectResponse
@@ -530,7 +519,7 @@ class VieFundReportsController extends Controller
             'status.*' => ['integer', 'between:0,6'],
             'daily_balance_currency_code' => ['required', 'in:CAD,USD'],
             'daily_balance_opened_before' => ['nullable', 'date', 'before_or_equal:now'],
-            'format' => ['required', 'in:csv,excel'],
+            'format' => ['required', 'in:excel'],
         ]);
 
         $runId = (string) Str::uuid();
@@ -567,7 +556,7 @@ class VieFundReportsController extends Controller
             : null;
         $format = $validated['format'];
 
-        $extension = $format === 'excel' ? 'xlsx' : 'csv';
+        $extension = 'xlsx';
         $outputFileName = sprintf(
             'viefund_bal_report_%s-%s_%s_%s.%s',
             Carbon::parse($dateFrom)->format('Ymd'),
@@ -684,7 +673,7 @@ class VieFundReportsController extends Controller
             'legacy_status.*' => ['integer', 'between:0,6'],
             'legacy_trust_status' => ['sometimes', 'array'],
             'legacy_trust_status.*' => ['in:' . implode(',', self::TRUST_STATUS_OPTIONS)],
-            'legacy_format' => ['required', 'in:csv,excel'],
+            'legacy_format' => ['required', 'in:excel'],
         ]);
 
         $runId = (string) Str::uuid();
@@ -708,7 +697,7 @@ class VieFundReportsController extends Controller
         $statuses = $this->resolveStatuses($validated['legacy_status'] ?? null);
         $trustStatuses = $this->resolveTrustStatuses($validated['legacy_trust_status'] ?? null, []);
         $format = $validated['legacy_format'];
-        $extension = $format === 'excel' ? 'xlsx' : 'csv';
+        $extension = 'xlsx';
         $outputRelativePath = sprintf(
             'reports/viefund_legacy_bal_report_%s-%s_%s_%s.%s',
             Carbon::parse($dateFrom)->format('Ymd'),
@@ -795,7 +784,7 @@ class VieFundReportsController extends Controller
             'customer_balance_search' => ['nullable', 'string', 'max:120'],
             'customer_balance_sort' => ['nullable', 'in:' . implode(',', array_keys(self::CUSTOMER_BALANCE_SORT_OPTIONS))],
             'customer_balance_sort_dir' => ['nullable', 'in:asc,desc'],
-            'format' => ['required', 'in:csv,excel'],
+            'format' => ['required', 'in:excel'],
         ]);
 
         $runId = (string) Str::uuid();
@@ -839,7 +828,7 @@ class VieFundReportsController extends Controller
         $sort = (string) ($validated['customer_balance_sort'] ?? 'plan_account_id');
         $sortDirection = (string) ($validated['customer_balance_sort_dir'] ?? 'asc');
 
-        $extension = $format === 'excel' ? 'xlsx' : 'csv';
+        $extension = 'xlsx';
         $outputFileName = sprintf(
             'viefund_customer_balances_%s_%s_%s.%s',
             Carbon::parse($reportDate)->format('Ymd'),
