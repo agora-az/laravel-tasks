@@ -762,6 +762,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                         'ledger_relationship' => new StringCell((string) ($row->ledger_relationship ?? ''), null),
                         // Source IDs can exceed Excel's 15-digit numeric precision.
                         'source_id' => new StringCell((string) ($row->source_id ?? ''), null),
+                        'fund_id' => new StringCell((string) ($row->fund_id ?? ''), null),
                         'customer_name' => new StringCell(trim((string) ($row->customer_name ?? '')), null),
                         'plan_account_id' => new StringCell((string) ($row->plan_account_id ?? ''), null),
                         'transaction_type' => new StringCell((string) ($row->transaction_type ?? ''), null),
