@@ -1,11 +1,7 @@
 <div class="card report-card" style="margin-bottom:20px;">
     <div style="font-size:16px; font-weight:700; color:#2d3748; margin-bottom:6px;">CASHagch Purchases and Redemptions</div>
     <p style="font-size:13px; color:#4a5568; margin-bottom:14px;">
-        Exports matching VieFund cash transactions for the selected date range.
-        Leave Start Date blank or choose Use Inception Date to include all available history.
-        The Summary sheet separates purchases, standard redemptions and fee redemptions, and combines both redemption categories into a total.
-        Transaction sheets come first, followed by Summary and a Monthly Summary of purchases in and redemptions out, including zero-activity months.
-        Uses transaction amounts only—no bank amounts or bank match is required. Reversals offset their category totals; other types are listed for review.
+        Exports CASHagch transaction details with overall and monthly purchase and redemption totals, using VieFund cash amounts.
     </p>
     <form method="POST" action="{{ route('reports.cashagch.run') }}" id="cashagch-report-form"
           data-status-url="{{ route('reports.cashagch.status', ['runId' => '__RUN_ID__']) }}"
