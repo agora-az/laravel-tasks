@@ -133,6 +133,11 @@ try {
             $this->calls[] = ['count', $filters];
             return $this->matching($filters)->count();
         }
+        public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+        {
+            $this->calls[] = ['first_date', $filters];
+            return $this->matching($filters)->min('basis_date');
+        }
         public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
         {
             $this->calls[] = ['read', $filters, $limit];
@@ -276,6 +281,30 @@ try {
         if ($call[0] === 'metadata') $check(count($call[1]) <= 100, 'Metadata upgrade exceeded its bounded source batch.');
         if ($call[0] === 'count') $check(substr($call[1]['date_from'], 0, 7) === substr($call[1]['date_to'], 0, 7), 'Coverage verification attempted an unbounded count.');
     }
+    $check(collect($source->calls)->where(0, 'read')->isEmpty(), 'Coverage discovery must not hydrate ordered report rows.');
+    $sync->forceFill([
+        'state' => 'running', 'phase' => 'cashagch_verification',
+        'cashagch_verified_at' => null, 'rows_processed' => 100, 'expected_rows' => 100,
+        'cashagch_verification' => ['basis' => 0, 'currency' => 1, 'month' => null],
+        'batch_metrics' => array_fill(0, 3, ['rows' => 100, 'seconds' => 1]),
+    ])->save();
+    $status = $manager->status($sync);
+    $check($status['fund_ids_ready'] && !$status['cashagch_ready']
+        && $status['eta_seconds'] === null && $status['estimated_completion_at'] === null
+        && $status['rows_per_second'] === null
+        && $status['verification']['completed_scopes'] === 1
+        && $status['verification']['total_scopes'] === 8
+        && str_contains($status['activity_message'], 'USD')
+        && str_contains($status['cashagch_status_label'], 'in progress'),
+        'Completed metadata rows must not imply completed verification or a rolling zero-second ETA.');
+    $check(str_contains($selector->select($criteria)['source_fallback_reason'], 'Fund/unit IDs are verified'),
+        'Report fallback must distinguish verified fund IDs from incomplete historical coverage.');
+    $sync->forceFill([
+        'state' => 'ready', 'phase' => 'ready', 'cashagch_verified_at' => now(),
+    ])->save();
+    $check($manager->status($sync)['eta_label'] === 'Complete'
+        && $manager->status($sync)['estimated_completion_at'] === null,
+        'Completed runs must not continually move their estimated finish time.');
     echo "PASS: legacy metadata upgrade, exact CASHagch links, strict ambiguity, fractional dates and bounded all-basis historical coverage verification\n";
 
     $report = new VieFundCashAgchReport($source, new RuntimeSettings());

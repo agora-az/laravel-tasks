@@ -271,7 +271,10 @@ class VieFundTransactionMirrorManager
         $remainingRows = $sync->expected_rows !== null
             ? max(0, (int) $sync->expected_rows - (int) $sync->rows_processed)
             : null;
-        $etaSeconds = $rowsPerSecond && $metrics->count() >= 3 && $remainingRows !== null
+        $coveragePhase = $sync->phase === 'cashagch_verification';
+        $estimatingRows = in_array($sync->state, ['queued', 'running', 'maintenance_wait', 'catching_up'], true)
+            && !in_array($sync->phase, ['verification', 'cashagch_verification'], true);
+        $etaSeconds = $estimatingRows && $rowsPerSecond && $metrics->count() >= 3 && $remainingRows !== null
             ? (int) ceil($remainingRows / $rowsPerSecond)
             : null;
         $estimatedCompletion = $etaSeconds !== null
@@ -282,19 +285,70 @@ class VieFundTransactionMirrorManager
                 ? 100.0
                 : round(min(1, (int) $sync->rows_processed / (int) $sync->expected_rows) * 100, 1))
             : null;
+        $verification = null;
+        $activity = null;
+        if ($coveragePhase) {
+            $audit = (array) $sync->cashagch_verification;
+            $basisIndex = (int) ($audit['basis'] ?? 0);
+            $currencyIndex = (int) ($audit['currency'] ?? 0);
+            $basis = array_keys(VieFundCashAgchReport::DATE_BASES)[$basisIndex] ?? null;
+            $currency = $sync->currencies[$currencyIndex] ?? null;
+            $verification = [
+                'date_basis' => $basis,
+                'currency_code' => $currency,
+                'month' => $audit['month'] ?? null,
+                'completed_scopes' => $basisIndex * count((array) $sync->currencies) + $currencyIndex,
+                'total_scopes' => count(VieFundCashAgchReport::DATE_BASES) * count((array) $sync->currencies),
+            ];
+            $basisLabel = VieFundCashAgchReport::DATE_BASES[$basis] ?? 'date basis';
+            $currencyLabel = match ($currency) {
+                '00' => 'CAD',
+                '01' => 'USD',
+                default => (string) $currency,
+            };
+            $activity = $verification['month'] === null
+                ? "Backfill complete. Finding the first CASHagch transaction for {$basisLabel} / {$currencyLabel}."
+                : "Backfill complete. Checking CASHagch historical coverage for {$basisLabel} / {$currencyLabel} / ".substr($verification['month'], 0, 7).'.';
+            if (in_array($sync->state, ['paused', 'failed'], true)) {
+                $activity = ($sync->state === 'paused' ? 'Verification paused. ' : 'Verification stopped. ').$activity;
+            }
+        }
+        $etaLabel = match (true) {
+            $sync->state === 'ready' => 'Complete',
+            $sync->state === 'paused' => 'Paused',
+            $sync->state === 'failed' => 'Stopped',
+            $coveragePhase => 'Coverage verification (ETA unavailable)',
+            $sync->phase === 'verification' => 'Verifying row coverage (ETA unavailable)',
+            default => null,
+        };
+        $cashAgchReady = $sync->cashagch_verified_at !== null
+            && $sync->cashagch_scope_hash === VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids)
+            && !self::pendingFundMetadata(1)->exists();
+        $cashAgchLabel = $cashAgchReady ? 'Verified' : ($sync->cashagch_verification_error ?: (
+            $coveragePhase ? match ($sync->state) {
+                'paused' => 'Coverage verification paused',
+                'failed' => 'Coverage verification stopped',
+                default => 'Historical coverage verification in progress',
+            } : 'Upgrade / verification required'
+        ));
 
         return [
             'available' => true,
             'state' => $sync->state,
             'mode' => $sync->mode,
             'phase' => $sync->phase,
+            'phase_label' => $coveragePhase ? 'CASHagch historical coverage' : $sync->phase,
+            'verification' => $verification,
+            'activity_message' => $activity,
+            'rows_label' => $coveragePhase ? 'Backfill rows (complete)' : 'Rows',
+            'throughput_label' => $coveragePhase ? 'Row backfill complete' : null,
+            'eta_label' => $etaLabel,
             'ready' => $sync->isReadable(),
             'data_source' => $this->sourceMode(),
             'fund_ids_ready' => $sync->isReadable() && $sync->fund_ids_verified_at !== null,
             'fund_ids_verified_at' => optional($sync->fund_ids_verified_at)->toIso8601String(),
-            'cashagch_ready' => $sync->cashagch_verified_at !== null
-                && $sync->cashagch_scope_hash === VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids)
-                && !self::pendingFundMetadata(1)->exists(),
+            'cashagch_ready' => $cashAgchReady,
+            'cashagch_status_label' => $cashAgchLabel,
             'cashagch_verification_error' => $sync->cashagch_verification_error,
             'maintenance_phase' => $this->availabilityWindow->phase(),
             'target_from_date' => optional($sync->target_from_date)->toDateString(),
@@ -303,7 +357,7 @@ class VieFundTransactionMirrorManager
             'rows_processed' => (int) $sync->rows_processed,
             'expected_rows' => $sync->expected_rows !== null ? (int) $sync->expected_rows : null,
             'progress_pct' => $progress,
-            'rows_per_second' => $rowsPerSecond !== null ? round($rowsPerSecond, 1) : null,
+            'rows_per_second' => !$coveragePhase && $rowsPerSecond !== null ? round($rowsPerSecond, 1) : null,
             'eta_seconds' => $etaSeconds,
             'estimated_completion_at' => $estimatedCompletion?->toIso8601String(),
             'started_at' => optional($sync->started_at)->toIso8601String(),

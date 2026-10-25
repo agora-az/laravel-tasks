@@ -451,8 +451,8 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         $error = null;
         try {
             if ($audit['month'] === null) {
-                $firstRemote = $remote->fetchAllTransactionExportRowsAfter(null, VieFundCashAgchReport::filters($criteria), null, 1)->first()?->basis_date;
-                $firstLocal = $local->rows($criteria, null, 1)->first()?->basis_date;
+                $firstRemote = $remote->firstAllTransactionDate(null, VieFundCashAgchReport::filters($criteria));
+                $firstLocal = $local->firstDate($criteria);
                 $first = array_filter([$firstRemote, $firstLocal]);
                 $audit['month'] = $first !== [] ? CarbonImmutable::parse(min($first))->startOfMonth()->toDateString() : null;
             } else {
@@ -487,6 +487,7 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 'cashagch_verified_at' => $complete && $error === null ? now() : null,
                 'cashagch_scope_hash' => $complete && $error === null ? $hash : null,
                 'cashagch_verification_error' => $error,
+                'last_batch_completed_at' => now(),
                 'state' => $complete || $error !== null ? 'ready' : 'running',
                 'phase' => $complete || $error !== null ? 'ready' : 'cashagch_verification',
                 'ready_at' => $locked->ready_at ?? now(),

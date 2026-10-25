@@ -162,7 +162,7 @@
             message.textContent = status.message;
             source.hidden = !status.source_label;
             source.textContent = status.source_label
-                ? `Source: ${status.source_label}.${status.mirror_synced_at ? ` Mirror last data sync: ${new Date(status.mirror_synced_at).toLocaleString()}.` : ''}${status.source_fallback_reason ? ` ${status.source_fallback_reason}` : ''}`
+                ? `Source: ${status.source_label}.${status.mirror_synced_at ? ` Mirror last data sync: ${new Date(status.mirror_synced_at).toLocaleString()}.` : ''}${status.source_fallback_reason ? ` Fallback reason for this run: ${status.source_fallback_reason}` : ''}`
                 : '';
             const active = ['queued', 'running', 'cancelling'].includes(status.state);
             window.updateReportCancelButton(cancelButton, status);

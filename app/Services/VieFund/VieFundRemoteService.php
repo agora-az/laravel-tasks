@@ -54,6 +54,11 @@ class VieFundRemoteService
         return $this->repository->countAllTransactions($search, $filters);
     }
 
+    public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+    {
+        return $this->repository->firstAllTransactionDate($search, $filters);
+    }
+
     public function latestEftMatchedTransactionPage(int $perPage = 100): ?array
     {
         return $this->repository->latestEftMatchedTransactionPage($perPage);

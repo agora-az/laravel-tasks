@@ -590,11 +590,18 @@ try {
             $repository = $app->make(SqlServerVieFundRemoteRepository::class);
             $repository->countAllTransactions(null, $filters);
             $repository->fetchAllTransactionExportRowsAfter(null, $filters, null, 100);
+            $repository->firstAllTransactionDate(null, $filters);
         });
         foreach ($rangeQueries as $query) {
             $check(str_contains($query['query'], "[ct].[{$column}] >= '2019-08-13 00:00:00'")
                 && str_contains($query['query'], "[ct].[{$column}] < '2019-08-18 00:00:00'"), 'Actual count and export SQL must share inclusive start/end day boundaries for every date basis.');
         }
+        $firstQuery = $rangeQueries[2]['query'];
+        $check(str_contains($firstQuery, "min([ct].[{$column}]) as aggregate")
+            && !str_contains(strtolower($firstQuery), 'top ') && !str_contains(strtolower($firstQuery), 'order by')
+            && !str_contains($firstQuery, 'fund_meta')
+            && in_array('CASHagch', $rangeQueries[2]['bindings'], true),
+            'First-date discovery must use an exact-fund MIN aggregate without ordered row goals or metadata hydration.');
     }
     $existingQueries = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)
         ->fetchAllTransactionExportRowsAfter(null, ['fund_id' => 'CASHagch', 'mirror_fields' => true, ...$criteria], null, 100));

@@ -30,6 +30,8 @@ interface VieFundRemoteRepositoryInterface
 
     public function fetchAllTransactionExportDailyStats(?string $search = null, array $filters = []): Collection;
 
+    public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string;
+
     public function fetchAllTransactionExportRowsAfter(
         ?string $search,
         array $filters,

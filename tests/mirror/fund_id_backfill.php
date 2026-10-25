@@ -173,6 +173,10 @@ try {
         {
             return 1;
         }
+        public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+        {
+            return null;
+        }
         public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
         {
             return collect();

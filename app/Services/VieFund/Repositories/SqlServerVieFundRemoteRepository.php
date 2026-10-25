@@ -372,6 +372,25 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return (int) $this->buildAllTransactionCashLedgerQuery($search, $filters)->count();
     }
 
+    public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+    {
+        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
+            $dateColumn = match ($this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null)) {
+                'create_date' => 'ct.dtCreated',
+                'trade_date' => 'ct.dtTrade',
+                'processing_date' => 'ct.dtProcessing',
+                'settlement_date' => 'ct.dtSettlement',
+                default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
+            };
+            // MIN avoids the ordered TOP(1) row goal that can scan history for an empty currency.
+            $date = $this->buildAllTransactionPageCandidateQuery($filters, false)->min($dateColumn);
+        } else {
+            $date = $this->buildAllTransactionCashLedgerQuery($search, $filters)->min('basis_date');
+        }
+
+        return $date === null ? null : (string) $date;
+    }
+
     /**
      * Return one row per selected report date for planning a bounded Excel export.
      */

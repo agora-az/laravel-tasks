@@ -115,12 +115,12 @@
         <p class="settings-group-intro">The initial population and daily snapshot synchronization run in the background. Local cutover options remain unavailable until verification succeeds.</p>
         <div class="mirror-status-grid">
             <div class="mirror-status-card"><span class="settings-description">State</span><strong data-mirror-state>{{ $mirrorStatus['state'] ?? 'unavailable' }}</strong></div>
-            <div class="mirror-status-card"><span class="settings-description">Phase</span><strong data-mirror-phase>{{ $mirrorStatus['phase'] ?? 'Not started' }}</strong></div>
-            <div class="mirror-status-card"><span class="settings-description">Rows</span><strong data-mirror-rows>{{ number_format($mirrorStatus['rows_processed'] ?? 0) }} / {{ isset($mirrorStatus['expected_rows']) ? number_format($mirrorStatus['expected_rows']) : 'calculating' }}</strong></div>
-            <div class="mirror-status-card"><span class="settings-description">Throughput</span><strong data-mirror-throughput>{{ isset($mirrorStatus['rows_per_second']) ? number_format($mirrorStatus['rows_per_second'], 1).' rows/sec' : 'Calculating...' }}</strong></div>
-            <div class="mirror-status-card"><span class="settings-description">ETA</span><strong data-mirror-eta>{{ isset($mirrorStatus['eta_seconds']) ? 'About '.ceil($mirrorStatus['eta_seconds'] / 60).' minutes' : 'Calculating ETA...' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Phase</span><strong data-mirror-phase>{{ $mirrorStatus['phase_label'] ?? $mirrorStatus['phase'] ?? 'Not started' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description" data-mirror-rows-label>{{ $mirrorStatus['rows_label'] ?? 'Rows' }}</span><strong data-mirror-rows>{{ number_format($mirrorStatus['rows_processed'] ?? 0) }} / {{ isset($mirrorStatus['expected_rows']) ? number_format($mirrorStatus['expected_rows']) : 'calculating' }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">Throughput</span><strong data-mirror-throughput>{{ $mirrorStatus['throughput_label'] ?? (isset($mirrorStatus['rows_per_second']) ? number_format($mirrorStatus['rows_per_second'], 1).' rows/sec' : 'Calculating...') }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">ETA</span><strong data-mirror-eta>{{ $mirrorStatus['eta_label'] ?? (isset($mirrorStatus['eta_seconds']) ? 'About '.ceil($mirrorStatus['eta_seconds'] / 60).' minutes' : 'Calculating ETA...') }}</strong></div>
             <div class="mirror-status-card"><span class="settings-description">Fund / Unit IDs</span><strong data-mirror-fund-ids>{{ !empty($mirrorStatus['fund_ids_ready']) ? 'Verified' : 'Backfill / verification required' }}</strong></div>
-            <div class="mirror-status-card"><span class="settings-description">CASHagch Metadata / Coverage</span><strong data-mirror-cashagch>{{ !empty($mirrorStatus['cashagch_ready']) ? 'Verified' : ($mirrorStatus['cashagch_verification_error'] ?? 'Upgrade / verification required') }}</strong></div>
+            <div class="mirror-status-card"><span class="settings-description">CASHagch Metadata / Coverage</span><strong data-mirror-cashagch>{{ $mirrorStatus['cashagch_status_label'] ?? (!empty($mirrorStatus['cashagch_ready']) ? 'Verified' : ($mirrorStatus['cashagch_verification_error'] ?? 'Upgrade / verification required')) }}</strong></div>
         </div>
         <div class="mirror-progress" aria-label="Mirror population progress"><span data-mirror-progress style="width:{{ $mirrorStatus['progress_pct'] ?? 0 }}%"></span></div>
         <p class="settings-description" data-mirror-detail>
@@ -128,6 +128,8 @@
                 Last error: {{ $mirrorStatus['last_error'] }}
             @elseif(($mirrorStatus['maintenance_phase'] ?? 'available') !== 'available')
                 VieFund is in its scheduled {{ str_replace('_', ' ', $mirrorStatus['maintenance_phase']) }} window.
+            @elseif(!empty($mirrorStatus['activity_message']))
+                {{ $mirrorStatus['activity_message'] }}
             @elseif(!empty($mirrorStatus['synced_through_at']))
                 Last verified synchronization: {{ $mirrorStatus['synced_through_at'] }}.
             @else
@@ -314,22 +316,25 @@ if (mirrorStatusSection) {
             if (!response.ok) return;
             const status = await response.json();
             mirrorStatusSection.querySelector('[data-mirror-state]').textContent = status.state || 'unavailable';
-            mirrorStatusSection.querySelector('[data-mirror-phase]').textContent = status.phase || 'Not started';
+            mirrorStatusSection.querySelector('[data-mirror-phase]').textContent = status.phase_label || status.phase || 'Not started';
+            mirrorStatusSection.querySelector('[data-mirror-rows-label]').textContent = status.rows_label || 'Rows';
             mirrorStatusSection.querySelector('[data-mirror-fund-ids]').textContent =
                 status.fund_ids_ready ? 'Verified' : 'Backfill / verification required';
             mirrorStatusSection.querySelector('[data-mirror-cashagch]').textContent =
-                status.cashagch_ready ? 'Verified' : (status.cashagch_verification_error || 'Upgrade / verification required');
+                status.cashagch_status_label || (status.cashagch_ready ? 'Verified' : (status.cashagch_verification_error || 'Upgrade / verification required'));
             mirrorStatusSection.querySelector('[data-mirror-rows]').textContent =
                 `${Number(status.rows_processed || 0).toLocaleString()} / ${status.expected_rows === null ? 'calculating' : Number(status.expected_rows).toLocaleString()}`;
             mirrorStatusSection.querySelector('[data-mirror-throughput]').textContent =
-                status.rows_per_second === null ? 'Calculating...' : `${Number(status.rows_per_second).toLocaleString()} rows/sec`;
-            mirrorStatusSection.querySelector('[data-mirror-eta]').textContent = formatDuration(status.eta_seconds);
+                status.throughput_label || (status.rows_per_second === null ? 'Calculating...' : `${Number(status.rows_per_second).toLocaleString()} rows/sec`);
+            mirrorStatusSection.querySelector('[data-mirror-eta]').textContent = status.eta_label || formatDuration(status.eta_seconds);
             mirrorStatusSection.querySelector('[data-mirror-progress]').style.width = `${status.progress_pct || 0}%`;
             mirrorStatusSection.querySelector('[data-mirror-detail]').textContent =
                 status.last_error
                     ? `Last error: ${status.last_error}`
                     : status.maintenance_phase !== 'available'
                     ? `VieFund is in its scheduled ${String(status.maintenance_phase).replaceAll('_', ' ')} window.`
+                    : status.activity_message
+                    ? status.activity_message
                     : status.estimated_completion_at
                         ? `Estimated completion: ${new Date(status.estimated_completion_at).toLocaleString()}.`
                         : status.synced_through_at

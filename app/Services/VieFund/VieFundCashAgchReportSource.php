@@ -36,6 +36,8 @@ class VieFundCashAgchReportSource
         $asOf = $sync?->synced_through_at?->toIso8601String();
         $reason = match (true) {
             !$sync?->isReadable() => 'The local mirror has not completed its initial population.',
+            $sync->state !== 'ready' && $sync->phase === 'cashagch_verification' && $sync->fund_ids_verified_at !== null
+                => 'Fund/unit IDs are verified, but CASHagch historical coverage verification has not finished.',
             $sync->state !== 'ready' => 'The local mirror is being synchronized or is not ready.',
             !empty(config('viefund.balance_report_cash_account_scope.opened_before'))
                 => 'The mirror cash-account cutoff cannot guarantee full CASHagch history.',
@@ -95,6 +97,13 @@ class VieFundCashAgchReportSource
     public function count(array $criteria): int
     {
         return $this->query($criteria)->count();
+    }
+
+    public function firstDate(array $criteria): ?string
+    {
+        $date = $this->query($criteria)->min($this->dateColumn($criteria));
+
+        return $date === null ? null : (string) $date;
     }
 
     public function rows(array $criteria, ?array $cursor, int $limit): Collection

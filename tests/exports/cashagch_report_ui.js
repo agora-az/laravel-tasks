@@ -123,6 +123,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     sourcePage.timers.shift().callback();
     await flush();
     assert.match(sourcePage.source.textContent, /^Source: Direct VieFund\./);
+    assert.match(sourcePage.source.textContent, /Fallback reason for this run:/);
     assert.match(sourcePage.source.textContent, /avoid mixing snapshots/);
     sourcePage.timers.shift().callback();
     await flush();
