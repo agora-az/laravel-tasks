@@ -29,6 +29,8 @@ class VieFundTransactionMirrorSync extends Model
         'ready_at' => 'datetime',
         'verified_at' => 'datetime',
         'fund_ids_verified_at' => 'datetime',
+        'cashagch_verified_at' => 'datetime',
+        'cashagch_verification' => 'array',
         'synced_through_at' => 'datetime',
     ];
 

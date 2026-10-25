@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\RuntimeSettings;
 use App\Services\VieFund\VieFundAvailabilityWindow;
 use App\Services\VieFund\VieFundCashAgchReport;
+use App\Services\VieFund\VieFundCashAgchReportRun;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundReportCancellation as Cancellation;
 use Carbon\Carbon;
@@ -257,12 +258,12 @@ try {
             $report = new class($cancel, $cancelRequest) extends VieFundCashAgchReport
             {
                 public function __construct(private object $cancel, private Request $request) {}
-                public function generate(array $criteria, string $path, callable $progress): array
+                public function writeWorkbook(array $criteria, string $path, iterable $batches, int $expectedRows, callable $progress, ?string $tempFolder = null): array
                 {
                     $progress(0, 1, 'exporting');
                     File::put($path, 'finished but not yet published');
                     ($this->cancel)($this->request, 'cashagch');
-                    return ['processed_transactions' => 1, 'review_transactions' => 0];
+                    return ['processed_transactions' => 0, 'review_transactions' => 0];
                 }
             };
         } else {
@@ -272,11 +273,20 @@ try {
                 }
             };
         }
-        $job->handle($report, $availability);
+        $runService = new VieFundCashAgchReportRun($source, $app->make(RuntimeSettings::class), $report);
+        if ($mode === 'completed-race') {
+            $directory = VieFundCashAgchReportRun::directory(17, $runId);
+            $state = $runService->load($directory, $job->criteria);
+            $runService->save($directory, [...$state, 'phase' => 'finalizing', 'expected_transactions' => 0]);
+        }
+        if ($mode === 'counting') $job->handle($runService, $availability);
+        $job->handle($runService, $availability);
         $status = $cashController->status($cancelRequest, $runId)->getData(true);
         $check($status['state'] === 'cancelled' && $status['success'] === false && $status['eta_seconds'] === null, 'CASHagch cancellation must clear ETA and stay terminal.');
         $check($status['download_url'] === null && !is_file(VieFundCashAgchReport::outputPath(17, $runId)), 'CASHagch cancellation must never publish partial or racing output.');
-        $check(count($source->calls) === match ($mode) { 'queued', 'queued-expired', 'completed-race' => 0, 'counting' => 1, 'running' => 2 }, 'Cancellation must stop CASHagch before any additional source batch.');
+        $check(count($source->calls) === match ($mode) { 'queued', 'queued-expired', 'completed-race' => 0, 'counting' => 2, 'running' => 1 }, 'Cancellation must stop CASHagch before any additional source batch.');
+        $check(glob(VieFundCashAgchReportRun::directory(17, $runId).'/batch-*') === []
+            && !is_file(VieFundCashAgchReportRun::buildingPath(17, $runId)), 'Cancellation must discard staged batches and partial packaging.');
         $check($cancel($cancelRequest, 'cashagch')->getData(true)['cancelled'] === true, 'Repeated cancellation must be idempotent.');
         echo "PASS: CASHagch {$mode}, terminal state, no further batches and partial-output rejection\n";
     }

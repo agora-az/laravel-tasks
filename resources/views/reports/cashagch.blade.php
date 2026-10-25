@@ -5,6 +5,7 @@
     </p>
     <form method="POST" action="{{ route('reports.cashagch.run') }}" id="cashagch-report-form"
           data-status-url="{{ route('reports.cashagch.status', ['runId' => '__RUN_ID__']) }}"
+          data-inception-dates='@json($inceptionDates)'
           data-user-id="{{ auth()->id() }}">
         @csrf
         <div class="cashagch-report-layout">
@@ -15,7 +16,7 @@
                 <input id="cashagch-start-date" name="date_from" type="date" max="{{ now()->toDateString() }}" aria-describedby="cashagch-date-scope">
             </div>
             <div>
-                <span id="cashagch-date-scope" style="display:block; font-size:12px; color:#718096; margin-bottom:4px;">Since inception (all available history)</span>
+                <span id="cashagch-date-scope" style="display:block; font-size:12px; color:#718096; margin-bottom:4px;">Inception Date: {{ $inceptionDates['settlement_date'] ?? 'N/A' }}</span>
                 <button id="cashagch-use-inception" type="button" aria-pressed="true" style="width:100%; height:35px; padding:0 10px; border:1px solid #cbd5e0; border-radius:4px; background:#e2e8f0; color:#2d3748; white-space:nowrap; font-size:13px; text-align:left;">&laquo; Use Inception Date</button>
             </div>
             <div>
@@ -56,6 +57,7 @@
         <span data-cashagch-message></span>
         @include('reports.cancel-button', ['cancelId' => 'cashagch-report-cancel'])
         <div data-cashagch-eta hidden style="margin-top:6px; font-size:13px;"></div>
+        <div data-cashagch-source hidden style="margin-top:6px; font-size:13px;"></div>
         <a data-cashagch-download hidden style="margin-left:12px; font-weight:700;">Download Excel report</a>
         <span data-cashagch-storage-warning hidden> Keep this page open: your browser cannot remember report progress after a refresh.</span>
     </div>
@@ -70,21 +72,29 @@
     const button = form.querySelector('button[type="submit"]');
     const storageWarning = feedback.querySelector('[data-cashagch-storage-warning]');
     const eta = feedback.querySelector('[data-cashagch-eta]');
+    const source = feedback.querySelector('[data-cashagch-source]');
     const cancelButton = document.getElementById('cashagch-report-cancel');
     const startDate = document.getElementById('cashagch-start-date');
     const endDate = document.getElementById('cashagch-end-date');
+    const dateBasis = document.getElementById('cashagch-date-basis');
     const inceptionButton = document.getElementById('cashagch-use-inception');
     const dateScope = document.getElementById('cashagch-date-scope');
+    const inceptionDates = JSON.parse(form.dataset.inceptionDates || '{}');
     const syncDateRange = () => {
+        const inception = inceptionDates[dateBasis.value] || null;
         startDate.max = endDate.value || endDate.max;
         endDate.min = startDate.value;
-        dateScope.textContent = startDate.value ? 'Custom start date selected' : 'Since inception (all available history)';
-        inceptionButton.setAttribute('aria-pressed', startDate.value ? 'false' : 'true');
+        dateScope.textContent = inception ? `Inception Date: ${inception}` : 'Inception Date: N/A';
+        inceptionButton.disabled = !inception;
+        inceptionButton.setAttribute('aria-pressed', !startDate.value || startDate.value === inception ? 'true' : 'false');
     };
     startDate.addEventListener('input', syncDateRange);
     endDate.addEventListener('input', syncDateRange);
+    dateBasis.addEventListener('change', syncDateRange);
     inceptionButton.addEventListener('click', () => {
-        startDate.value = '';
+        const inception = inceptionDates[dateBasis.value] || null;
+        if (!inception) return;
+        startDate.value = inception;
         syncDateRange();
         startDate.focus();
     });
@@ -150,6 +160,10 @@
             if (!response.ok) throw new Error(status.message || 'Unable to read report progress.');
             feedback.hidden = false;
             message.textContent = status.message;
+            source.hidden = !status.source_label;
+            source.textContent = status.source_label
+                ? `Source: ${status.source_label}.${status.mirror_synced_at ? ` Mirror last data sync: ${new Date(status.mirror_synced_at).toLocaleString()}.` : ''}${status.source_fallback_reason ? ` ${status.source_fallback_reason}` : ''}`
+                : '';
             const active = ['queued', 'running', 'cancelling'].includes(status.state);
             window.updateReportCancelButton(cancelButton, status);
             showEta(status, active && !status.cancellation_requested && status.state !== 'cancelling');
@@ -192,6 +206,8 @@
         download.hidden = true;
         eta.hidden = true;
         eta.textContent = '';
+        source.hidden = true;
+        source.textContent = '';
         message.textContent = 'Submitting CASHagch report...';
         try {
             const response = await fetch(form.action, {

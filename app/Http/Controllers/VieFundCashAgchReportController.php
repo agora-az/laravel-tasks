@@ -47,17 +47,13 @@ class VieFundCashAgchReportController extends Controller
             'expected_transactions' => null,
             'eta_seconds' => null,
             'estimated_completion_at' => null,
-            'message' => $availability->isBlocked()
-                ? 'Queued until the VieFund maintenance window ends.'
-                : 'CASHagch report queued...',
+            'message' => 'CASHagch report queued. Selecting the verified data source...',
             'criteria' => $criteria,
             'started_at' => now()->toIso8601String(),
         ], now()->addHours(12));
         try {
-            $job = GenerateVieFundCashAgchReport::dispatch($userId, $runId, $criteria)->onConnection('database');
-            if ($availability->isBlocked()) {
-                $job->delay($availability->nextAvailableAt());
-            }
+            $job = GenerateVieFundCashAgchReport::dispatch($userId, $runId, $criteria)
+                ->onConnection('database_reports')->onQueue('cashagch-reports');
             unset($job);
         } catch (\Throwable $exception) {
             Cache::put($key, ['state' => 'failed', 'success' => false, 'message' => 'Report could not be queued.'], now()->addHours(12));

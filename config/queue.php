@@ -17,6 +17,15 @@ return [
             'after_commit' => false,
         ],
 
+        'database_reports' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => 'cashagch-reports',
+            'retry_after' => 660,
+            'after_commit' => false,
+        ],
+
         'database_viefund_cache' => [
             'driver' => 'database',
             'connection' => env('DB_QUEUE_CONNECTION'),

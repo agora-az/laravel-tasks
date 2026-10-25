@@ -6,12 +6,16 @@ use App\Models\VieFundTransactionMirrorSync;
 use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
 use App\Services\VieFund\VieFundAvailabilityWindow;
 use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundCashAgchReport;
+use App\Services\VieFund\VieFundCashAgchReportSource;
 use App\Services\VieFund\VieFundTransactionMirrorManager;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Carbon\CarbonImmutable;
 use Throwable;
 
 class SyncVieFundTransactionMirror implements ShouldQueue
@@ -61,6 +65,10 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         $batchStartedAt = microtime(true);
 
         try {
+            if ($sync->phase === 'cashagch_verification') {
+                $this->verifyCashAgch($sync, $remoteService, $manager);
+                return;
+            }
             if ($sync->mode === 'fund_id_backfill') {
                 $this->backfillFundIds($sync, $remoteService, $manager, $batchStartedAt);
                 return;
@@ -123,6 +131,8 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 'cash_status_id' => isset($row->cash_status_id) ? (int) $row->cash_status_id : null,
                 'cash_status' => $this->nullableString($row->status ?? null),
                 'trust_status' => $this->nullableString($row->trust_status ?? null),
+                'trust_amount_used' => $fundMetadata->get($cashId)->trust_amount_used,
+                'trust_amount_left' => $fundMetadata->get($cashId)->trust_amount_left,
                 'notes' => $this->nullableString($row->notes ?? null),
                 'created_date' => $row->created_date ?? null,
                 'trade_date' => $row->trade_date ?? null,
@@ -176,10 +186,10 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         VieFundTransactionMirrorManager $manager,
         float $batchStartedAt
     ): void {
-        $cashIds = DB::table('viefund_transaction_mirror_rows')
-            ->whereNull('fund_id_checked_at')
+        $limit = max(100, min(5000, (int) config('viefund.mirror.batch_size', 1000)));
+        $cashIds = $manager::pendingFundMetadata($limit)
             ->orderBy('cash_transaction_id')
-            ->limit(max(100, min(5000, (int) config('viefund.mirror.batch_size', 1000))))
+            ->limit($limit)
             ->pluck('cash_transaction_id');
         $fundIds = $this->verifiedFundMetadata($cashIds, $remoteService);
 
@@ -189,12 +199,11 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                 return;
             }
             if ($cashIds->isEmpty()) {
-                if (DB::table('viefund_transaction_mirror_rows')->whereNull('fund_id_checked_at')->exists()) {
+                if (VieFundTransactionMirrorManager::pendingFundMetadata(1)->exists()) {
                     return;
                 }
                 $locked->forceFill([
-                    'state' => 'ready',
-                    'phase' => 'ready',
+                    'phase' => 'cashagch_verification',
                     'current_currency' => null,
                     'fund_ids_verified_at' => now(),
                     'last_error' => null,
@@ -204,7 +213,6 @@ class SyncVieFundTransactionMirror implements ShouldQueue
 
             $rows = DB::table('viefund_transaction_mirror_rows')
                 ->whereIn('cash_transaction_id', $cashIds)
-                ->whereNull('fund_id_checked_at')
                 ->lockForUpdate()
                 ->get(['cash_transaction_id', 'payload']);
             foreach ($rows as $row) {
@@ -214,12 +222,22 @@ class SyncVieFundTransactionMirror implements ShouldQueue
                     throw new \RuntimeException("Fund/unit ID backfill found an invalid payload for cash transaction {$row->cash_transaction_id}.");
                 }
                 $payload['fund_id'] = $fundId;
+                $source = $fundIds->get($row->cash_transaction_id);
+                $payload['trust_amount_used'] = $source->trust_amount_used;
+                $payload['trust_amount_left'] = $source->trust_amount_left;
                 $encodedPayload = json_encode($payload, JSON_THROW_ON_ERROR);
+                $dates = [];
+                foreach (['created_date', 'trade_date', 'processing_date', 'settlement_date'] as $date) {
+                    $dates[$date] = $payload[$date] ?? null;
+                }
                 DB::table('viefund_transaction_mirror_rows')
                     ->where('cash_transaction_id', $row->cash_transaction_id)
                     ->update([
                         'fund_id' => $fundId,
                         'fund_id_checked_at' => now(),
+                        ...$dates,
+                        'trust_amount_used' => $source->trust_amount_used,
+                        'trust_amount_left' => $source->trust_amount_left,
                         'payload' => $encodedPayload,
                         'source_fingerprint' => hash('sha256', $encodedPayload),
                         'updated_at' => now(),
@@ -244,6 +262,14 @@ class SyncVieFundTransactionMirror implements ShouldQueue
             $source = $metadata->get($cashId);
             if (!$source || !property_exists($source, 'fund_id') || !isset($source->funds)) {
                 throw new \RuntimeException("Fund/unit ID synchronization could not verify source cash transaction $cashId. No checkpoint was committed.");
+            }
+            if (!property_exists($source, 'trust_amount_used') || !property_exists($source, 'trust_amount_left')) {
+                throw new \RuntimeException("Cash availability metadata is missing for source cash transaction $cashId.");
+            }
+            foreach ($source->funds as $fund) {
+                if ((int) ($fund['transaction_type_count'] ?? 0) < 1) {
+                    throw new \RuntimeException("Fund transaction types are not verified for source cash transaction $cashId.");
+                }
             }
         }
 
@@ -389,6 +415,89 @@ class SyncVieFundTransactionMirror implements ShouldQueue
             'synced_through_at' => now(),
             'last_error' => null,
         ])->save();
+        if ($sync->cashagch_verified_at === null || VieFundTransactionMirrorManager::pendingFundMetadata(1)->exists()) {
+            $sync->forceFill([
+                'state' => 'running', 'mode' => 'fund_id_backfill', 'phase' => 'fund_id_backfill',
+                'cashagch_verified_at' => null, 'cashagch_verification' => null,
+                'expected_rows' => VieFundTransactionMirrorManager::pendingFundMetadata()->count(),
+                'rows_processed' => 0,
+            ])->save();
+            $manager->dispatch();
+        }
+    }
+
+    private function verifyCashAgch(
+        VieFundTransactionMirrorSync $sync,
+        VieFundRemoteService $remote,
+        VieFundTransactionMirrorManager $manager
+    ): void {
+        $audit = $sync->cashagch_verification ?? [
+            'basis' => 0, 'currency' => 0, 'month' => null, 'date_to' => now()->toDateString(),
+            'scope_hash' => VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids),
+        ];
+        $hash = VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids);
+        if ($audit['scope_hash'] !== $hash) {
+            throw new \RuntimeException('The mirror accounting scope changed during CASHagch verification. Start the metadata upgrade again.');
+        }
+        $criteria = [
+            'date_basis' => array_keys(VieFundCashAgchReport::DATE_BASES)[$audit['basis']],
+            'currency_code' => $sync->currencies[$audit['currency']],
+            'status_ids' => (array) $sync->status_ids, 'date_to' => $audit['date_to'],
+            'availability_date_to' => $audit['date_to'],
+        ];
+        $local = app(VieFundCashAgchReportSource::class);
+        $previous = config('viefund.balance_report_cash_account_scope.opened_before');
+        config(['viefund.balance_report_cash_account_scope.opened_before' => null]);
+        $error = null;
+        try {
+            if ($audit['month'] === null) {
+                $firstRemote = $remote->fetchAllTransactionExportRowsAfter(null, VieFundCashAgchReport::filters($criteria), null, 1)->first()?->basis_date;
+                $firstLocal = $local->rows($criteria, null, 1)->first()?->basis_date;
+                $first = array_filter([$firstRemote, $firstLocal]);
+                $audit['month'] = $first !== [] ? CarbonImmutable::parse(min($first))->startOfMonth()->toDateString() : null;
+            } else {
+                $criteria['date_from'] = $audit['month'];
+                $criteria['date_to'] = min(CarbonImmutable::parse($audit['month'])->endOfMonth()->toDateString(), $audit['date_to']);
+                $expected = $remote->countAllTransactions(null, VieFundCashAgchReport::filters($criteria));
+                $actual = $local->count($criteria);
+                if ($expected !== $actual) {
+                    $error = "CASHagch mirror coverage verification failed for {$criteria['date_basis']}, {$criteria['currency_code']}, {$audit['month']}: VieFund has $expected transactions; the mirror has $actual. Refresh the mirror before retrying verification.";
+                }
+                $audit['month'] = CarbonImmutable::parse($audit['month'])->addMonth()->toDateString();
+            }
+        } finally {
+            config(['viefund.balance_report_cash_account_scope.opened_before' => $previous]);
+        }
+        if ($audit['month'] === null || $audit['month'] > $audit['date_to']) {
+            $audit['month'] = null;
+            ++$audit['currency'];
+            if ($audit['currency'] >= count($sync->currencies)) {
+                $audit['currency'] = 0;
+                ++$audit['basis'];
+            }
+        }
+        DB::transaction(function () use ($sync, $audit, $error, $hash): void {
+            $locked = VieFundTransactionMirrorSync::query()->lockForUpdate()->findOrFail($sync->id);
+            if ($locked->state !== 'running' || $locked->sync_generation !== $sync->sync_generation) {
+                return;
+            }
+            $complete = $audit['basis'] >= count(VieFundCashAgchReport::DATE_BASES);
+            $locked->forceFill([
+                'cashagch_verification' => $audit,
+                'cashagch_verified_at' => $complete && $error === null ? now() : null,
+                'cashagch_scope_hash' => $complete && $error === null ? $hash : null,
+                'cashagch_verification_error' => $error,
+                'state' => $complete || $error !== null ? 'ready' : 'running',
+                'phase' => $complete || $error !== null ? 'ready' : 'cashagch_verification',
+                'ready_at' => $locked->ready_at ?? now(),
+            ])->save();
+        });
+        if ($error !== null) {
+            Log::warning($error);
+        }
+        if ($sync->fresh()->state === 'running') {
+            $manager->dispatch();
+        }
     }
 
     private function countRemoteRows(

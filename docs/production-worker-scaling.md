@@ -2,16 +2,38 @@
 
 ## Queue ownership
 
-Production uses two independent database-queue worker pools:
+Production uses three independent database-queue worker pools:
 
 | Queue             | Connection               | Workloads                                                    | Default workers |
 | ----------------- | ------------------------ | ------------------------------------------------------------ | --------------: |
-| `viefund-cache`   | `database_viefund_cache` | All Transactions working-set hydration                       |               1 |
+| `viefund-cache`   | `database_viefund_cache` | Working-set hydration, transaction mirror sync and metadata verification |        1 |
 | `imports,default` | `database`               | File imports, dashboard refreshes, report metadata, matching |               1 |
+| `cashagch-reports` | `database_reports`       | Resumable CASHagch source batches, monthly counts and Excel assembly |          1 |
 
 Hydration jobs for one working-set generation form a cursor-based serial chain.
 Keep one cache worker unless concurrent remote VieFund queries have been tested.
 The general pool can scale independently without changing cache ordering.
+The report pool remains one worker per instance, with a 600-second stage timeout,
+660-second reservation and up to three attempts per stage. Checkpoints and per-run
+execution locks make retries and duplicate deliveries safe; the whole report has
+no one-hour lifetime limit. Report reads can overlap cache hydration, so include
+both pools when assessing remote SQL Server load.
+
+CASHagch prefers a ready, report-verified transaction mirror with a completed
+data sync within 24 hours. It falls back visibly to VieFund when that gate fails.
+Only the remote path consumes SQL Server capacity or waits for its maintenance
+window. Mirror synchronization can invalidate a report's pinned local source;
+that run then discards local batches and restarts against VieFund.
+
+For an existing populated mirror, run migrations and gracefully refresh workers
+before queuing `php artisan viefund:sync-transaction-mirror --backfill-fund-ids`.
+The cache worker upgrades missing CASHagch type/availability metadata, then
+verifies history in separate monthly stages for all date bases and configured
+currencies. It shares capacity with hydration. The migration widens indexed
+timestamps to retain fractional seconds and adds cursor indexes, so allow for
+DDL time on a large mirror. Fund-ID verification alone does not enable the
+report's local source. Check `cashagch_ready` and any verification error in the
+mirror status; the last **data** sync must also meet the freshness rule.
 
 ## App Service settings
 
@@ -81,4 +103,4 @@ tail -100 /home/LogFiles/startup.log
 ```
 
 Expected Supervisor programs are `laravel-queue-cache-00`,
-`laravel-queue-general-00`, and `laravel-scheduler`.
+`laravel-queue-general-00`, `laravel-queue-reports-00`, and `laravel-scheduler`.

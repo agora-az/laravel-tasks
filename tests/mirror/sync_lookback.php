@@ -37,6 +37,8 @@ $migration = require dirname(__DIR__, 2).'/database/migrations/2026_10_15_193500
 $migration->up();
 $verificationMigration = require dirname(__DIR__, 2).'/database/migrations/2026_10_24_000001_add_fund_id_verification_to_viefund_mirror.php';
 $verificationMigration->up();
+$reportMigration = require dirname(__DIR__, 2).'/database/migrations/2026_10_25_000001_add_cashagch_mirror_verification.php';
+$reportMigration->up();
 Carbon::setTestNow(Carbon::parse('2026-10-24 12:00:00', 'UTC'));
 CarbonImmutable::setTestNow(CarbonImmutable::parse('2026-10-24 12:00:00', 'UTC'));
 

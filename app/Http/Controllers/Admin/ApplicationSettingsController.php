@@ -215,7 +215,7 @@ class ApplicationSettingsController extends Controller
             return back()->withErrors(['mirror' => $exception->getMessage()]);
         }
 
-        return back()->with('success', 'Mirror fund/unit ID backfill queued. Fund-filtered requests will use the current source until verification completes.');
+        return back()->with('success', 'Mirror fund metadata upgrade queued. CASHagch uses VieFund until report metadata and historical coverage are verified.');
     }
 
     private function orderedColumnOptions(string $settingKey, array $selected): array

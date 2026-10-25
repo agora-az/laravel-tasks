@@ -49,6 +49,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->selectRaw('ct.ID AS cash_transaction_id, CAST(fl.FundID AS NVARCHAR(100)) AS fund_id')
             ->selectRaw('MIN(ft.ID) AS fund_transaction_id, MIN(CAST(ft.SourceID AS NVARCHAR(100))) AS source_id')
             ->selectRaw('MIN(ISNULL(tt.NameEN, CAST(fl.iType AS NVARCHAR(100)))) AS transaction_type')
+            ->selectRaw("COUNT(DISTINCT ISNULL(ISNULL(tt.NameEN, CAST(fl.iType AS NVARCHAR(100))), 'Unknown')) AS transaction_type_count")
+            ->selectRaw('MIN(tr.mAmountUsed) AS trust_amount_used, MIN(tr.mAmountLeft) AS trust_amount_left')
             ->selectRaw('MIN(CAST(ct.SourceID AS NVARCHAR(100))) AS cash_source_id')
             ->selectRaw('MIN(COALESCE(CASE WHEN ISNULL(tr.iDepositType, 0) > 0 THEN deposit_type.NameEN ELSE trust_type.NameEN END, cash_type.NameEN, CAST(ct.iType AS NVARCHAR(100)))) AS cash_transaction_type')
             ->groupBy('ct.ID', 'fl.FundID')
@@ -62,12 +64,15 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 return (object) [
                     'cash_transaction_id' => $cashId,
                     'fund_id' => $funds->first()?->fund_id,
+                    'trust_amount_used' => $rows->first()->trust_amount_used,
+                    'trust_amount_left' => $rows->first()->trust_amount_left,
                     'funds' => $funds->map(fn(object $row): array => [
                         'cash_transaction_id' => $cashId,
                         'fund_id' => (string) $row->fund_id,
                         'fund_transaction_id' => $row->fund_transaction_id,
                         'source_id' => $row->source_id,
                         'transaction_type' => $row->transaction_type,
+                        'transaction_type_count' => (int) $row->transaction_type_count,
                         'cash_source_id' => $row->cash_source_id,
                         'cash_transaction_type' => $row->cash_transaction_type,
                     ])->all(),
@@ -527,7 +532,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return empty($search)
             && empty($filters['trx_id'])
             && empty($filters['source_id'])
-            && empty($filters['fund_id'])
+            && (empty($filters['fund_id']) || !empty($filters['fund_id_exact']))
             && empty($filters['trx_type'])
             && !array_key_exists('agra_fsp_source_ids_json', $filters)
             && !array_key_exists('fsp_7960_source_ids_json', $filters);
@@ -551,10 +556,13 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         };
         $statusIds = array_values(array_unique(array_map('intval', (array) ($filters['status_ids'] ?? [6]))));
         $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
-        $availabilityTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
+        $rangeTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
             ->addDay()
             ->startOfDay()
             ->toDateTimeString();
+        $availabilityTo = !empty($filters['availability_date_to'])
+            ? Carbon::parse($filters['availability_date_to'])->addDay()->startOfDay()->toDateTimeString()
+            : $rangeTo;
         if (!empty($filters['currency_code'])) {
             $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
         }
@@ -566,7 +574,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->leftJoin("{$schema}.UB_TrustTrx as tr", 'tr.ID', '=', 'ct.iTrustTrxID')
             ->leftJoin("{$schema}.UB_Def_TrustStatus as trust_status", 'trust_status.ID', '=', 'tr.iStatus')
             ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
-            ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $availabilityTo))
+            ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $rangeTo))
             ->whereNotNull($cashDateColumn)
             ->whereNotNull('ct.mAmount')
             ->when($dateBasis === 'trade_date', function ($query) use ($availabilityTo) {
@@ -604,6 +612,16 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 });
             })
             ->when(!empty($filters['plan_account_id']), fn($query) => $query->where('p.DealerAccountID', 'like', '%' . $filters['plan_account_id'] . '%'))
+            ->when(!empty($filters['fund_id']), function ($query) use ($schema, $filters) {
+                $query->whereExists(function ($fund) use ($schema, $filters) {
+                    $fund->selectRaw('1')
+                        ->from("{$schema}.UB_FundTrxCash as page_fc")
+                        ->join("{$schema}.UB_FundTrx as page_ft", 'page_ft.ID', '=', 'page_fc.iTrxID')
+                        ->join("{$schema}.UB_FundTrxLookup as page_fl", 'page_fl.iTrxID', '=', 'page_ft.ID')
+                        ->whereColumn('page_fc.iCashTrxID', 'ct.ID')
+                        ->where('page_fl.FundID', '=', trim((string) $filters['fund_id']));
+                });
+            })
             ->when(!empty($filters['has_reconciliation_match']), function ($query) use ($schema) {
                 $query->whereExists(function ($eft) use ($schema) {
                     $eft->selectRaw('1')
@@ -629,10 +647,13 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         $transactionIds = $this->parseAllTransactionIds($rawTransactionIds);
         $statusIds = array_values(array_unique(array_map('intval', (array) ($filters['status_ids'] ?? [6]))));
         $cashAccountScope = $this->resolveBalanceReportCashAccountScope();
-        $availabilityTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
+        $rangeTo = Carbon::parse($filters['date_to'] ?? now()->toDateString())
             ->addDay()
             ->startOfDay()
             ->toDateTimeString();
+        $availabilityTo = !empty($filters['availability_date_to'])
+            ? Carbon::parse($filters['availability_date_to'])->addDay()->startOfDay()->toDateTimeString()
+            : $rangeTo;
         if (!empty($filters['currency_code'])) {
             $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
         }
@@ -704,7 +725,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->when(!empty($filters['cash_transaction_ids']), fn($query) => $query->whereIn('ct.ID', $filters['cash_transaction_ids']))
             ->when(!$cashTransactionIdsPrevalidated, fn($query) => $query
                 ->where($cashDateColumn, '>=', ($filters['date_from'] ?? '1900-01-01') . ' 00:00:00')
-                ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $availabilityTo))
+                ->when(!empty($filters['date_to']), fn($query) => $query->where($cashDateColumn, '<', $rangeTo))
                 ->whereNotNull($cashDateColumn)
                 ->whereNotNull('ct.mAmount'))
             ->when(!$cashTransactionIdsPrevalidated && $dateBasis === 'trade_date', function ($query) use ($availabilityTo) {
@@ -763,6 +784,8 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 'cash_status.NameEN AS status',
                 'ct.iStatus AS cash_status_id',
                 'trust_status.NameEN AS trust_status',
+                'tr.mAmountUsed AS trust_amount_used',
+                'tr.mAmountLeft AS trust_amount_left',
                 'CAST(tr.Notes AS NVARCHAR(1000)) AS notes',
                 'ct.dtCreated AS created_date',
                 'ct.dtTrade AS trade_date',

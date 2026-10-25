@@ -8,6 +8,7 @@ use App\Services\RuntimeSettings;
 use App\Services\VieFund\Repositories\SqlServerVieFundRemoteRepository;
 use App\Services\VieFund\VieFundAvailabilityWindow;
 use App\Services\VieFund\VieFundCashAgchReport;
+use App\Services\VieFund\VieFundCashAgchReportRun;
 use App\Services\VieFund\VieFundRemoteService;
 use Brick\Math\BigDecimal;
 use Carbon\Carbon;
@@ -557,16 +558,28 @@ try {
     $connection = DB::connection('viefund_sqlsrv');
     $connection->setPdo(DB::connection('sqlite')->getPdo());
     $connection->setReadPdo(DB::connection('sqlite')->getPdo());
+    $metadataSql = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)->fetchFundIdsForCashTransactions([1, 2]))[0]['query'];
+    $check(str_contains($metadataSql, 'COUNT(DISTINCT ISNULL(ISNULL(tt.NameEN, CAST(fl.iType AS NVARCHAR(100))),')
+        && str_contains($metadataSql, 'AS transaction_type_count') && str_contains($metadataSql, 'MIN(tr.mAmountUsed)')
+        && str_contains($metadataSql, 'MIN(tr.mAmountLeft)') && str_contains($metadataSql, 'MIN(ISNULL(tt.NameEN'),
+        'Mirror metadata must retain strict type ambiguity and trade availability without changing existing representative types.');
     $queries = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)
         ->fetchAllTransactionExportRowsAfter(null, $queryFilters, null, 100));
     $sql = $queries[0]['query'];
-    $check(str_contains($sql, "[fm_l].[FundID] = 'CASHagch'") && in_array('CASHagch', $queries[0]['bindings'], true), 'The actual SQL source query must use exact FundID matching.');
-    $check(str_contains($sql, 'ct.mAmount AS amount') && !str_contains($sql, 'UB_EFTItem'), 'The actual SQL amount source must be the cash ledger without an EFT/bank match.');
+    $check(str_contains($sql, "[page_fl].[FundID] = 'CASHagch'") && in_array('CASHagch', $queries[0]['bindings'], true), 'The candidate SQL must use exact FundID matching.');
+    $check(!str_contains($sql, 'group by') && !str_contains($sql, 'UB_EFTItem'), 'Candidate selection must avoid full-history fund aggregation and EFT/bank matching.');
     $check(str_contains($sql, "[ct].[dtSettlement] < '2026-10-25 00:00:00'"), 'The full selected end date must include fractional seconds before the next midnight.');
-    $check(str_contains($sql, 'COUNT(DISTINCT') && str_contains($sql, 'Multiple fund transaction types'), 'The source must flag conflicting linked types while counting each cash row once.');
+    $ledger = new ReflectionMethod(SqlServerVieFundRemoteRepository::class, 'buildAllTransactionCashLedgerQuery');
+    $hydration = $ledger->invoke($app->make(SqlServerVieFundRemoteRepository::class), null, [
+        ...$queryFilters, 'cash_transaction_ids_json' => '[1,2]', 'cash_transaction_ids_prevalidated' => true,
+    ])->toSql();
+    $check(str_contains($hydration, 'COUNT(DISTINCT') && str_contains($hydration, 'Multiple fund transaction types')
+        && substr_count($hydration, 'OPENJSON(?)') === 2
+        && str_contains($hydration, 'ct.mAmount AS amount'), 'Hydration must preserve ambiguous types and cash amounts, aggregating only the selected batch IDs.');
     $countQueries = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)->countAllTransactions(null, $queryFilters));
     $check(str_contains($countQueries[0]['query'], 'count(*) as aggregate')
-        && str_contains($countQueries[0]['query'], "[fm_l].[FundID] = 'CASHagch'")
+        && str_contains($countQueries[0]['query'], "[page_fl].[FundID] = 'CASHagch'")
+        && !str_contains($countQueries[0]['query'], 'group by')
         && !str_contains($countQueries[0]['query'], 'UB_EFTItem'), 'The real ETA count must count cash rows with the same exact-fund scope and no bank requirement.');
     foreach ([
         'create_date' => 'dtCreated', 'trade_date' => 'dtTrade',
@@ -587,6 +600,14 @@ try {
         ->fetchAllTransactionExportRowsAfter(null, ['fund_id' => 'CASHagch', 'mirror_fields' => true, ...$criteria], null, 100));
     $check(str_contains($existingQueries[0]['query'], "[fm_l].[FundID] like '%CASHagch%'")
         && !str_contains($existingQueries[0]['query'], 'Multiple fund transaction types'), 'Existing All Transactions contains-filter and representative-type behavior must remain unchanged.');
+    $monthlyCountFilters = VieFundCashAgchReport::filters([
+        ...$criteria, 'date_basis' => 'trade_date', 'date_from' => '2019-08-09',
+        'date_to' => '2019-08-31', 'availability_date_to' => $criteria['date_to'],
+    ]);
+    $monthlyCount = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)->countAllTransactions(null, $monthlyCountFilters))[0]['query'];
+    $check(str_contains($monthlyCount, "[ct].[dtTrade] < '2019-09-01 00:00:00'")
+        && str_contains($monthlyCount, "[ct].[dtSettlement] < '2026-10-25 00:00:00'"),
+        'Monthly trade-date counts must use the full report end for settlement availability, not narrow availability to the counted month.');
     $candidate = new ReflectionMethod(SqlServerVieFundRemoteRepository::class, 'buildAllTransactionPageCandidateQuery');
     $candidateQuery = $candidate->invoke($app->make(SqlServerVieFundRemoteRepository::class), $criteria);
     $check(str_contains($candidateQuery->toSql(), '[ct].[dtSettlement] < ?')
@@ -603,9 +624,18 @@ try {
     $check($response->getStatusCode() === 202, 'HTTP run endpoint must queue rather than block the request.');
     $runId = $response->getData(true)['run_id'];
     $job = Bus::dispatched(GenerateVieFundCashAgchReport::class)->first();
-    $check($job instanceof GenerateVieFundCashAgchReport && $job->userId === 17 && $job->connection === 'database', 'Report must use the existing general database queue with the requesting owner.');
+    $check($job instanceof GenerateVieFundCashAgchReport && $job->userId === 17
+        && $job->connection === 'database_reports' && $job->queue === 'cashagch-reports', 'Report must use the isolated resumable report queue with the requesting owner.');
     $availability = $app->make(VieFundAvailabilityWindow::class);
-    $job->handle($report, $availability);
+    $runService = new VieFundCashAgchReportRun($source, $app->make(RuntimeSettings::class), $report);
+    $finishJob = static function (GenerateVieFundCashAgchReport $job) use ($runService, $availability, $check): void {
+        for ($stage = 0; $stage < 2000; ++$stage) {
+            $job->handle($runService, $availability);
+            if ((Cache::get(VieFundCashAgchReport::statusKey($job->userId, $job->runId))['success'] ?? null) !== null) return;
+        }
+        $check(false, 'Report did not finish within the expected number of bounded stages.');
+    };
+    $finishJob($job);
     $status = $controller->status($request, $runId)->getData(true);
     $check($status['success'] === true && $status['download_url'] !== null, 'Completed queued job must expose its download.');
     $check($status['criteria']['date_from'] === null, 'A missing start date must preserve the inception default for old clients.');
@@ -622,73 +652,48 @@ try {
         }
     }
     $job->failed(new RuntimeException('Simulated worker failure'));
-    $check(Cache::get(VieFundCashAgchReport::statusKey(17, $runId))['success'] === false, 'Worker failures must be visible to the user.');
+    $check(Cache::get(VieFundCashAgchReport::statusKey(17, $runId))['success'] === true, 'A stale failure callback must not invalidate an already-published workbook.');
     $rangeRequest = Request::create('/reports/cashagch/run', 'POST', [...$criteria, 'date_from' => '2019-08-09', 'date_to' => '2019-08-09']);
     $rangeRequest->headers->set('Accept', 'application/json');
     $rangeRequest->setUserResolver(static fn() => $user);
     $rangeRunId = $controller->run($rangeRequest, $availability)->getData(true)['run_id'];
     $rangeJob = Bus::dispatched(GenerateVieFundCashAgchReport::class)->last();
     $check($rangeJob->criteria['date_from'] === '2019-08-09', 'Controller must persist the requested start date in the queued criteria.');
-    $rangeJob->handle($report, $availability);
+    $finishJob($rangeJob);
     $rangeDownload = $controller->download($rangeRequest, $rangeRunId);
     $check(str_contains($rangeDownload->headers->get('Content-Disposition'), 'CASHagch-2019-08-09-to-2019-08-09.xlsx'), 'Custom-range download names must not claim since inception.');
     $timedRunId = $controller->run($request, $availability)->getData(true)['run_id'];
-    $timedJob = new class(17, $timedRunId, $criteria) extends GenerateVieFundCashAgchReport
-    {
-        public float $clock = 1000;
-        protected function monotonicSeconds(): float { return $this->clock; }
-    };
-    $timedReport = new class extends VieFundCashAgchReport
-    {
-        public Closure $simulate;
-        public function __construct() {}
-        public function generate(array $criteria, string $path, callable $progress): array { return ($this->simulate)($progress); }
-    };
+    $timedJob = Bus::dispatched(GenerateVieFundCashAgchReport::class)->last();
     $timedKey = VieFundCashAgchReport::statusKey(17, $timedRunId);
-    $timedReport->simulate = static function (callable $progress) use ($timedJob, $timedKey, $check, $controller, $request, $timedRunId): array {
-        $check(Cache::get($timedKey)['phase'] === 'counting' && Cache::get($timedKey)['eta_seconds'] === null, 'Counting must not publish a guessed ETA.');
-        $timedJob->clock = 1600;
-        $progress(0, 1000, 'exporting');
-        $timedJob->clock = 1610;
-        $progress(100, 1000, 'exporting');
-        $check(Cache::get($timedKey)['eta_seconds'] === null, 'A single completed batch must remain in ETA warm-up.');
-        $timedJob->clock = 1620;
-        $progress(200, 1000, 'exporting');
-        $status = Cache::get($timedKey);
-        $check($status['rows_per_second'] === 10.0 && $status['eta_seconds'] === 80, '200 rows in 20 seconds with 800 left must estimate exactly 80 seconds; exclude counting/queue time.');
-        $completion = $controller->status($request, $timedRunId)->getData(true)['estimated_completion_at'];
-        $check(CarbonImmutable::parse($completion)->equalTo(CarbonImmutable::now()->addSeconds(80)), 'Estimated completion must be based on the measured remaining time.');
-        Carbon::setTestNow('2026-10-24 12:00:15 UTC');
-        CarbonImmutable::setTestNow('2026-10-24 12:00:15 UTC');
-        $check($controller->status($request, $timedRunId)->getData(true)['estimated_completion_at'] === $completion, 'Polling alone must not move the estimated completion timestamp.');
-        $timedJob->clock = 1640;
-        $progress(300, 1000, 'exporting');
-        $check(Cache::get($timedKey)['eta_seconds'] === 94, 'Slower measured throughput must update ETA using ceil(700 / 7.5).');
-        $progress(1200, 1000, 'exporting');
-        $check(Cache::get($timedKey)['eta_seconds'] === null, 'A changing source count must not cause negative or zero-second ETAs.');
-        $progress(1200, 1000, 'finalizing');
-        $status = $controller->status($request, $timedRunId)->getData(true);
-        $check($status['phase'] === 'finalizing' && $status['eta_seconds'] === null && $status['estimated_completion_at'] === null, 'Finalization must clear the read ETA.');
-        $check($status['success'] === null && $status['download_url'] === null, 'Finalizing must not expose a premature download.');
-        return ['processed_transactions' => 1200, 'review_transactions' => 0];
-    };
-    $timedJob->handle($timedReport, $availability);
-    $timedStatus = $controller->status($request, $timedRunId)->getData(true);
-    $check($timedStatus['phase'] === 'completed' && $timedStatus['expected_transactions'] === 1200
-        && $timedStatus['eta_seconds'] === null && $timedStatus['estimated_completion_at'] === null, 'Completion must settle on actual row counts without a moving ETA.');
-    Cache::put($timedKey, [...$timedStatus, 'eta_seconds' => 80, 'estimated_completion_at' => now()->addSeconds(80)->toIso8601String()]);
+    $timedState = [
+        ...$runService->load(VieFundCashAgchReportRun::directory(17, $timedRunId), $criteria),
+        'phase' => 'counting', 'count_from' => '2019-08-09',
+    ];
+    $check($runService->status($timedState)['eta_seconds'] === null, 'Counting must not publish a guessed ETA.');
+    $timedState = [...$timedState, 'phase' => 'exporting', 'processed_transactions' => 100,
+        'expected_transactions' => 1000, 'read_batches' => 1, 'read_seconds' => 10];
+    $check($runService->status($timedState)['eta_seconds'] === null, 'A single batch must remain in ETA warm-up.');
+    $timedState = [...$timedState, 'processed_transactions' => 200, 'read_batches' => 2, 'read_seconds' => 20];
+    $timedStatus = $runService->status($timedState);
+    $check($timedStatus['rows_per_second'] === 10.0 && $timedStatus['eta_seconds'] === 80, '200 rows in 20 seconds must estimate exactly 80 seconds for 800 remaining, excluding count/queue time.');
+    Cache::put($timedKey, [...Cache::get($timedKey), ...$timedStatus]);
+    $completion = $controller->status($request, $timedRunId)->getData(true)['estimated_completion_at'];
+    $check(CarbonImmutable::parse($completion)->equalTo(CarbonImmutable::now()->addSeconds(80)), 'Completion estimate must use measured remaining time.');
+    Carbon::setTestNow('2026-10-24 12:00:15 UTC');
+    CarbonImmutable::setTestNow('2026-10-24 12:00:15 UTC');
+    $check($controller->status($request, $timedRunId)->getData(true)['estimated_completion_at'] === $completion, 'Polling alone must not move the completion estimate.');
+    $timedState = [...$timedState, 'processed_transactions' => 300, 'read_seconds' => 40];
+    $check($runService->status($timedState)['eta_seconds'] === 94, 'Slower throughput must update ETA using ceil(700 / 7.5).');
+    $timedState['processed_transactions'] = 1200;
+    $check($runService->status($timedState)['eta_seconds'] === null, 'A changing source count must not produce a negative ETA.');
+    $timedState['phase'] = 'finalizing';
+    $finalizing = $runService->status($timedState);
+    $check($finalizing['eta_seconds'] === null && $finalizing['estimated_completion_at'] === null, 'Workbook finalization must clear the read ETA.');
+    $check($controller->status($request, $timedRunId)->getData(true)['download_url'] === null, 'Unfinished stages must never expose a download.');
     $timedJob->failed(new RuntimeException('Simulated failure after ETA'));
     $check(Cache::get($timedKey)['eta_seconds'] === null && Cache::get($timedKey)['estimated_completion_at'] === null, 'Failures must clear every ETA field.');
-    $timedReport->simulate = static function (callable $progress) use ($timedKey, $check): array {
-        $progress(0, 0, 'exporting');
-        $progress(1, 0, 'exporting');
-        $progress(2, 0, 'exporting');
-        $check(Cache::get($timedKey)['eta_seconds'] === null && Cache::get($timedKey)['rows_per_second'] === null, 'Zero elapsed time and a zero initial count must not divide by zero or invent an ETA.');
-        $progress(2, 0, 'finalizing');
-        return ['processed_transactions' => 2, 'review_transactions' => 0];
-    };
-    $timedJob->handle($timedReport, $availability);
-    $check(Cache::get($timedKey)['expected_transactions'] === 2, 'Rows added after an initial zero count must still be exported and reflected in final counts.');
+    $zeroTime = $runService->status([...$timedState, 'phase' => 'exporting', 'read_seconds' => 0, 'expected_transactions' => 0]);
+    $check($zeroTime['eta_seconds'] === null && $zeroTime['rows_per_second'] === null, 'Zero time/count must not divide by zero or invent an ETA.');
     Carbon::setTestNow('2026-10-24 12:00:00 UTC');
     CarbonImmutable::setTestNow('2026-10-24 12:00:00 UTC');
     echo "PASS: count/export parity, exact measured ETA, warm-up, queue/count exclusion, stable polling timestamps, changing totals, zero time and terminal-state clearing\n";
@@ -716,14 +721,14 @@ try {
     CarbonImmutable::setTestNow('2026-10-24 23:00:00 UTC');
     $maintenanceRunId = $controller->run($request, $availability)->getData(true)['run_id'];
     $maintenanceJob = Bus::dispatched(GenerateVieFundCashAgchReport::class)->last();
-    $check($maintenanceJob->delay->equalTo($availability->nextAvailableAt()), 'Submissions during maintenance must be delayed until the source is available.');
-    $maintenanceJob->handle($report, $availability);
+    $check($maintenanceJob->delay === null, 'The worker must select the source before deciding whether remote maintenance requires a delay.');
+    $maintenanceJob->handle($runService, $availability);
     $check(count($source->requests) === $sourceCalls, 'A delayed worker that starts during maintenance must not query VieFund.');
     $requeued = Bus::dispatched(GenerateVieFundCashAgchReport::class)->last();
     $check($requeued !== $maintenanceJob && $requeued->runId === $maintenanceRunId, 'Maintenance deferral must retain the same user-facing run.');
     Carbon::setTestNow('2026-10-24 23:26:00 UTC');
     CarbonImmutable::setTestNow('2026-10-24 23:26:00 UTC');
-    $requeued->handle($report, $availability);
+    $finishJob($requeued);
     $check($controller->status($request, $maintenanceRunId)->getData(true)['success'] === true, 'A maintenance-delayed report must complete after the window.');
     Carbon::setTestNow('2026-10-24 22:54:00 UTC');
     CarbonImmutable::setTestNow('2026-10-24 22:54:00 UTC');
@@ -733,15 +738,12 @@ try {
         Carbon::setTestNow('2026-10-24 22:55:00 UTC');
         CarbonImmutable::setTestNow('2026-10-24 22:55:00 UTC');
     };
-    try {
-        $interruptedJob->handle($report, $availability);
-        throw new RuntimeException('A report interrupted by maintenance must not publish partial results.');
-    } catch (RuntimeException $exception) {
-        $check(str_contains($exception->getMessage(), 'maintenance began'), 'Maintenance interruption must give a meaningful error.');
-        $interruptedJob->failed($exception);
-        $check(!is_file(VieFundCashAgchReport::outputPath(17, $interruptedRunId)), 'Maintenance interruption must remove partial output.');
-        $check($controller->status($request, $interruptedRunId)->getData(true)['download_url'] === null, 'Partial reports must not be downloadable.');
-    }
+    $interruptedJob->handle($runService, $availability);
+    $saved = $runService->load(VieFundCashAgchReportRun::directory(17, $interruptedRunId), $interruptedJob->criteria);
+    $interruptedJob->handle($runService, $availability);
+    $check($saved['processed_transactions'] === 1 && $saved['cursor'] !== null, 'A batch finishing as maintenance begins must be retained.');
+    $check($controller->status($request, $interruptedRunId)->getData(true)['state'] === 'queued', 'Maintenance must pause the same run instead of failing it.');
+    $check($controller->status($request, $interruptedRunId)->getData(true)['download_url'] === null, 'A paused report must not publish a partial workbook.');
     $source->onFetch = null;
     Carbon::setTestNow('2026-10-24 12:00:00 UTC');
     CarbonImmutable::setTestNow('2026-10-24 12:00:00 UTC');
@@ -750,12 +752,20 @@ try {
         $check($route !== null && in_array('auth.check', $route->gatherMiddleware(), true), 'Every new report route must require authentication.');
     }
     $app['auth']->guard()->setUser($user);
-    $html = view('reports.cashagch', ['dateBasisOptions' => VieFundCashAgchReport::DATE_BASES, 'fundStatusOptions' => VieFundReportsController::FUND_STATUS_OPTIONS])->render();
+    $inceptionDates = ['settlement_date' => '2019-06-10', 'trade_date' => '2019-06-07'];
+    $html = view('reports.cashagch', [
+        'dateBasisOptions' => VieFundCashAgchReport::DATE_BASES,
+        'fundStatusOptions' => VieFundReportsController::FUND_STATUS_OPTIONS,
+        'inceptionDates' => $inceptionDates,
+    ])->render();
     $check(str_contains($html, 'Run Report') && str_contains($html, 'Use Inception Date')
         && str_contains($html, 'name="date_from"'), 'Reports page must expose optional start-date and inception controls.');
     $document = new DOMDocument();
     $check($document->loadHTML($html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET), 'The report form must render as usable HTML.');
     $xpath = new DOMXPath($document);
+    $formInceptionDates = $xpath->query('//form[@id="cashagch-report-form"]')->item(0)->getAttribute('data-inception-dates');
+    $check(json_decode($formInceptionDates, true, 512, JSON_THROW_ON_ERROR) === $inceptionDates
+        && str_contains($html, 'Inception Date: 2019-06-10'), 'CASHagch must receive and display the same basis-specific inception dates as the other report controls.');
     $check($xpath->query('//form[@id="cashagch-report-form"]//div[@class="report-run-action"]/button[@type="submit"]')->length === 1,
         'The CASHagch Run Report action must be in the right-aligned action column.');
     $previewPath = getenv('REPORT_UI_PREVIEW');
@@ -766,7 +776,9 @@ try {
             . $styles[1].'</style></head><body><div class="reports-page">'.$html.'</div></body></html>') !== false, 'Unable to write the requested browser preview.');
     }
     echo "PASS: queue lifecycle, progress/download, owner isolation, explicit worker failure, authenticated routes and rendered report form\n";
-    echo "PASS: criteria validation, maintenance submission/start deferral, post-maintenance completion and partial-report rejection\n";
+    $finishJob($interruptedJob);
+    $check($controller->status($request, $interruptedRunId)->getData(true)['success'] === true, 'A maintenance-interrupted report must resume and complete without starting over.');
+    echo "PASS: criteria validation, maintenance deferral/resume, saved progress and partial-report rejection\n";
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception->getMessage()."\n".$exception->getTraceAsString()."\n");
     $exitCode = 1;

@@ -223,6 +223,8 @@ final class AllTransactionColumns
                 'sort_id',
                 'basis_date',
                 'cash_status_id',
+                'trust_amount_used',
+                'trust_amount_left',
             ],
             array_filter(array_column(self::DEFINITIONS, 'field'))
         )));

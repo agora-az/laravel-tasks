@@ -70,6 +70,11 @@ try {
     Schema::table('viefund_transaction_mirror_syncs', fn(Blueprint $table) => $table->dropColumn('fund_ids_verified_at'));
     $migration->up();
     $check(Schema::hasIndex('viefund_transaction_mirror_rows', 'viefund_mirror_fund_checked_idx'), 'Verification migration must be resumable.');
+    $reportMigration = require dirname(__DIR__, 2).'/database/migrations/2026_10_25_000001_add_cashagch_mirror_verification.php';
+    $reportMigration->up();
+    Schema::table('viefund_transaction_mirror_rows', fn(Blueprint $table) => $table->dropIndex('viefund_mirror_trade_cursor_idx'));
+    $reportMigration->up();
+    $check(Schema::hasIndex('viefund_transaction_mirror_rows', 'viefund_mirror_trade_cursor_idx'), 'Report migration must restore an index after interrupted DDL.');
     $route = $app['router']->getRoutes()->getByName('admin.settings.mirror.backfill-fund-ids');
     $check($route !== null && in_array('application.admin', $route->gatherMiddleware(), true), 'Backfill control must remain admin-protected.');
     $compiled = $app['blade.compiler']->compileString(file_get_contents(dirname(__DIR__, 2).'/resources/views/admin/settings/index.blade.php'));
@@ -152,12 +157,14 @@ try {
                     return (object) [
                         'cash_transaction_id' => $id,
                         'fund_id' => $ids[0] ?? null,
+                        'trust_amount_used' => null, 'trust_amount_left' => null,
                         'funds' => collect($ids)->map(fn(string $fund, int $index): array => [
                             'cash_transaction_id' => $id,
                             'fund_id' => $fund,
                             'fund_transaction_id' => $id * 10 + $index,
                             'source_id' => 'SOURCE-'.$id.'-'.$index,
                             'transaction_type' => 'Type-'.$fund,
+                            'transaction_type_count' => 1,
                         ])->all(),
                     ];
                 })->values();
@@ -165,6 +172,10 @@ try {
         public function countAllTransactions(?string $search = null, array $filters = []): int
         {
             return 1;
+        }
+        public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
+        {
+            return collect();
         }
         public function fetchAllTransactionMirrorRowsAfter(array $filters, ?array $cursor, int $limit = 1000): Collection
         {
@@ -250,6 +261,10 @@ try {
     $runBatch();
     $check($processed() === 206 && !$manager->fundIdsReady(), 'Completion must include rows inserted during the historical scan.');
     $runBatch();
+    $runBatch();
+    for ($i = 0; $i < 40 && !$manager->sync()->isReady(); ++$i) {
+        $runBatch();
+    }
     $check($manager->fundIdsReady() && $manager->sync()->isReady(), 'Only a completed scan may mark fund IDs verified.');
     $check(max(array_map('count', $source->requests)) <= 100, 'Remote lookups must respect the batch limit.');
     echo "PASS: pause/resume, failed-source retry, atomic rollback, stale generation, maintenance, concurrent insertion\n";
@@ -287,6 +302,9 @@ try {
     $check(DB::table('viefund_transaction_mirror_funds')->where('cash_transaction_id', 207)->value('fund_id') === 'VIEFund', 'Incremental sync must maintain every linked fund.');
     $runBatch();
     $runBatch();
+    for ($i = 0; $i < 10 && !$manager->sync()->isReady(); ++$i) {
+        $runBatch();
+    }
     $check($manager->sync()->isReady() && $manager->fundIdsReady(), 'Regular incremental completion must preserve fund readiness.');
     DB::table('viefund_transaction_mirror_rows')->where('cash_transaction_id', 207)->delete();
     $check(!DB::table('viefund_transaction_mirror_funds')->where('cash_transaction_id', 207)->exists(), 'Deleting stale mirror rows must cascade to linked fund metadata.');

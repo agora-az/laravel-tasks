@@ -11,6 +11,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 
@@ -141,8 +142,10 @@ class VieFundTransactionMirrorManager
             if ($sync->state !== 'ready') {
                 throw new InvalidArgumentException('Finish or resume the existing mirror synchronization before starting the fund/unit ID backfill.');
             }
-            if ($sync->fund_ids_verified_at !== null) {
-                throw new InvalidArgumentException('Mirror fund/unit IDs have already been verified.');
+            if ($sync->fund_ids_verified_at !== null && $sync->cashagch_verified_at !== null
+                && $sync->cashagch_scope_hash === VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids)
+                && !self::pendingFundMetadata(1)->exists()) {
+                throw new InvalidArgumentException('Mirror fund/unit IDs and CASHagch report metadata have already been verified.');
             }
 
             $from = DB::table('viefund_transaction_mirror_rows')->min('created_date');
@@ -154,7 +157,7 @@ class VieFundTransactionMirrorManager
                 'fund_id_backfill'
             );
             $sync->forceFill([
-                'expected_rows' => DB::table('viefund_transaction_mirror_rows')->whereNull('fund_id_checked_at')->count(),
+                'expected_rows' => self::pendingFundMetadata()->count(),
                 'current_currency' => null,
             ])->save();
 
@@ -194,6 +197,21 @@ class VieFundTransactionMirrorManager
         }
 
         return $sync;
+    }
+
+    public static function pendingFundMetadata(?int $limit = null): Builder
+    {
+        $unchecked = DB::table('viefund_transaction_mirror_rows')
+            ->whereNull('fund_id_checked_at')->select('cash_transaction_id');
+        $report = DB::table('viefund_transaction_mirror_funds')
+            ->where('fund_id', VieFundCashAgchReport::FUND_ID)
+            ->whereNull('transaction_type_count')->select('cash_transaction_id');
+        if ($limit !== null) {
+            $unchecked->orderBy('cash_transaction_id')->limit($limit);
+            $report->orderBy('cash_transaction_id')->limit($limit);
+        }
+
+        return DB::query()->fromSub($unchecked->union($report), 'pending_fund_metadata');
     }
 
     public function sourceMode(): string
@@ -274,6 +292,10 @@ class VieFundTransactionMirrorManager
             'data_source' => $this->sourceMode(),
             'fund_ids_ready' => $sync->isReadable() && $sync->fund_ids_verified_at !== null,
             'fund_ids_verified_at' => optional($sync->fund_ids_verified_at)->toIso8601String(),
+            'cashagch_ready' => $sync->cashagch_verified_at !== null
+                && $sync->cashagch_scope_hash === VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids)
+                && !self::pendingFundMetadata(1)->exists(),
+            'cashagch_verification_error' => $sync->cashagch_verification_error,
             'maintenance_phase' => $this->availabilityWindow->phase(),
             'target_from_date' => optional($sync->target_from_date)->toDateString(),
             'target_through_date' => optional($sync->target_through_date)->toDateString(),
@@ -334,6 +356,10 @@ class VieFundTransactionMirrorManager
             'last_batch_started_at' => null,
             'last_batch_completed_at' => null,
             'last_error' => null,
+            'cashagch_verification' => null,
+            'cashagch_verified_at' => $sync->cashagch_scope_hash === VieFundCashAgchReportSource::scopeHash($currencies, $statusIds)
+                ? $sync->cashagch_verified_at : null,
+            'cashagch_verification_error' => null,
         ])->save();
     }
 

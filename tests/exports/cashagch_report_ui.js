@@ -11,12 +11,14 @@ const downloadView = fs.readFileSync(path.join(__dirname, '../../resources/views
 const downloadScript = new vm.Script(downloadView.match(/<script>([\s\S]*?)<\/script>/)[1]);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function createPage(responses, { previousRun = null, blockedStorage = false, blockedDownload = false, initialStart = '' } = {}) {
+function createPage(responses, { previousRun = null, blockedStorage = false, blockedDownload = false, initialStart = '',
+    inceptionDates = { settlement_date: '2019-06-10', trade_date: '2019-06-07', processing_date: '2019-06-08', create_date: '2019-06-06' } } = {}) {
     const state = { requests: [], timers: [], cleanupTimers: [], frames: [], nextTimer: 1, handlers: {}, documentHandlers: {}, warnings: [], storedRun: previousRun };
     const message = { textContent: '' };
     const download = { hidden: true };
     const warning = { hidden: true };
     const eta = { hidden: true, textContent: '' };
+    const source = { hidden: true, textContent: '' };
     const button = { disabled: false };
     const cancelButton = { id: 'cashagch-report-cancel', dataset: {}, hidden: true, disabled: false, textContent: '' };
     cancelButton.closest = () => cancelButton;
@@ -28,6 +30,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     });
     const startDate = dateField(initialStart);
     const endDate = dateField('2026-10-24');
+    const dateBasis = dateField('settlement_date');
     const dateScope = { textContent: '' };
     const inception = {
         handlers: {}, attributes: {},
@@ -41,11 +44,12 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
             '[data-cashagch-download]': download,
             '[data-cashagch-storage-warning]': warning,
             '[data-cashagch-eta]': eta,
+            '[data-cashagch-source]': source,
         })[selector],
     };
     const form = {
         action: '/reports/cashagch/run',
-        dataset: { statusUrl: '/reports/cashagch/__RUN_ID__/status', userId: '17' },
+        dataset: { statusUrl: '/reports/cashagch/__RUN_ID__/status', userId: '17', inceptionDates: JSON.stringify(inceptionDates) },
         querySelector: () => button,
         addEventListener: (event, handler) => { state.handlers[event] = handler; },
         reportValidity: () => true,
@@ -65,6 +69,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
             'cashagch-feedback': feedback,
             'cashagch-start-date': startDate,
             'cashagch-end-date': endDate,
+            'cashagch-date-basis': dateBasis,
             'cashagch-use-inception': inception,
             'cashagch-date-scope': dateScope,
             'cashagch-report-cancel': cancelButton,
@@ -100,10 +105,31 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     downloadScript.runInContext(context);
     cancellationScript.runInContext(context);
     script.runInContext(context);
-    return { ...state, message, download, warning, eta, button, feedback, startDate, endDate, dateScope, inception, cancelButton, cancelMessage, state };
+    return { ...state, message, download, warning, eta, source, button, feedback, startDate, endDate, dateBasis, dateScope, inception, cancelButton, cancelMessage, state };
 }
 
 (async () => {
+    const sourcePage = createPage([
+        { data: { run_id: 'source-run' } },
+        { data: { state: 'running', message: 'Reading locally.', source_label: 'Verified local VieFund mirror', mirror_synced_at: '2026-10-24T12:00:00Z' } },
+        { data: { state: 'running', message: 'Restarting.', source_label: 'Direct VieFund', mirror_synced_at: '2026-10-24T12:00:00Z', source_fallback_reason: 'Mirror changed; restarted to avoid mixing snapshots.' } },
+        { data: { state: 'completed', success: true, source_label: 'Direct VieFund', source_fallback_reason: 'Mirror changed; restarted to avoid mixing snapshots.', download_url: '/source-run/download' } },
+    ]);
+    await sourcePage.handlers.submit({ preventDefault() {} });
+    await flush();
+    assert.equal(sourcePage.source.hidden, false);
+    assert.match(sourcePage.source.textContent, /^Source: Verified local VieFund mirror\./);
+    assert.match(sourcePage.source.textContent, /Mirror last data sync:/);
+    sourcePage.timers.shift().callback();
+    await flush();
+    assert.match(sourcePage.source.textContent, /^Source: Direct VieFund\./);
+    assert.match(sourcePage.source.textContent, /avoid mixing snapshots/);
+    sourcePage.timers.shift().callback();
+    await flush();
+    assert.match(sourcePage.source.textContent, /avoid mixing snapshots/);
+    assert.equal(sourcePage.download.hidden, false);
+    console.log('PASS: visible source, local last-sync time and explicit fallback reason through progress, source restart and completion');
+
     const page = createPage([
         { data: { run_id: 'run-1' } },
         { data: { state: 'running', phase: 'exporting', message: '3 transactions written.', eta_seconds: 125, estimated_completion_at: '2026-10-24T21:00:00Z', download_url: null } },
@@ -112,7 +138,8 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     ]);
     assert.equal(page.startDate.value, '');
     assert.equal(page.inception.attributes['aria-pressed'], 'true');
-    assert.ok(page.dateScope.textContent.includes('Since inception'));
+    assert.equal(page.dateScope.textContent, 'Inception Date: 2019-06-10');
+    assert.equal(page.inception.disabled, false);
     page.startDate.value = '2026-09-01';
     page.startDate.handlers.input();
     assert.equal(page.endDate.min, '2026-09-01');
@@ -121,10 +148,32 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     page.endDate.handlers.input();
     assert.equal(page.startDate.max, '2026-09-30');
     page.inception.handlers.click();
-    assert.equal(page.startDate.value, '');
-    assert.equal(page.endDate.min, '');
+    assert.equal(page.startDate.value, '2019-06-10');
+    assert.equal(page.endDate.min, '2019-06-10');
     assert.equal(page.inception.attributes['aria-pressed'], 'true');
     assert.equal(page.startDate.focused, true);
+    for (const [basis, date] of Object.entries({ trade_date: '2019-06-07', processing_date: '2019-06-08', create_date: '2019-06-06', settlement_date: '2019-06-10' })) {
+        const previousStart = page.startDate.value;
+        page.dateBasis.value = basis;
+        page.dateBasis.handlers.change();
+        assert.equal(page.dateScope.textContent, `Inception Date: ${date}`);
+        assert.equal(page.startDate.value, previousStart, 'Changing date basis must not overwrite a selected start date.');
+        page.inception.handlers.click();
+        assert.equal(page.startDate.value, date);
+        assert.equal(page.endDate.min, date);
+        assert.equal(page.inception.attributes['aria-pressed'], 'true');
+    }
+    const unavailable = createPage([], { inceptionDates: {} });
+    assert.equal(unavailable.inception.disabled, true);
+    assert.equal(unavailable.dateScope.textContent, 'Inception Date: N/A');
+    unavailable.startDate.value = '2026-09-01';
+    unavailable.startDate.handlers.input();
+    unavailable.inception.handlers.click();
+    assert.equal(unavailable.startDate.value, '2026-09-01', 'An unavailable inception date must not erase a custom date.');
+    page.startDate.value = '';
+    page.startDate.handlers.input();
+    assert.equal(page.endDate.min, '');
+    assert.equal(page.inception.attributes['aria-pressed'], 'true', 'A blank start must still preserve all-history reporting.');
     await page.handlers.submit({ preventDefault() {} });
     await flush();
     assert.equal(page.button.disabled, true);
@@ -310,7 +359,7 @@ function createPage(responses, { previousRun = null, blockedStorage = false, blo
     console.log('PASS: report submission, progress polling, download, user-scoped resume, blocked browser storage, validation/expiry errors and stale-response protection');
     console.log('PASS: automatic downloads once per run, active-run resume, no completed-run redownload, stale/failed/cancelled protection, frame cleanup and manual fallback');
     console.log('PASS: ETA phases, duration formatting, estimated local completion, warm-up, finalization and terminal-state clearing');
-    console.log('PASS: inception default/reset, optional custom start date, inclusive date boundaries and accessible date-range state');
+    console.log('PASS: shared inception dates populate Start Date for all four date bases, missing-date guard, blank all-history scope and inclusive date boundaries');
     console.log('PASS: shared cancellation POST/CSRF, stopping state, terminal cleanup, hidden ETA/download and explicit cancellation errors for every report type');
 })().catch(error => {
     console.error(error);

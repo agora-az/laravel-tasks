@@ -3,14 +3,16 @@
 namespace App\Jobs;
 
 use App\Exceptions\ReportCancelled;
-use App\Services\VieFund\VieFundCashAgchReport;
 use App\Services\VieFund\VieFundAvailabilityWindow;
+use App\Services\VieFund\VieFundCashAgchReport;
+use App\Services\VieFund\VieFundCashAgchReportRun;
 use App\Services\VieFund\VieFundReportCancellation;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -18,9 +20,16 @@ class GenerateVieFundCashAgchReport implements ShouldQueue
 {
     use Queueable;
 
-    public int $tries = 1;
+    /** @var array<string, resource> */
+    private static array $executionLocks = [];
 
-    public int $timeout = 3600;
+    public int $tries = 3;
+
+    public int $maxExceptions = 3;
+
+    public int $timeout = 600;
+
+    public array $backoff = [15, 60, 180];
 
     public function __construct(
         public readonly int $userId,
@@ -28,110 +37,186 @@ class GenerateVieFundCashAgchReport implements ShouldQueue
         public readonly array $criteria
     ) {}
 
-    public function handle(VieFundCashAgchReport $report, VieFundAvailabilityWindow $availability): void
+    public function handle(VieFundCashAgchReportRun $run, VieFundAvailabilityWindow $availability): void
     {
+        $directory = VieFundCashAgchReportRun::directory($this->userId, $this->runId);
+        File::ensureDirectoryExists(dirname($directory));
+        $lock = fopen($directory.'.lock', 'c');
+        if ($lock === false) {
+            throw new RuntimeException('Unable to open the CASHagch execution lock.');
+        }
+        $acquired = false;
         try {
-            VieFundReportCancellation::check($this->cancellationFile());
-            $this->generateReport($report, $availability);
-        } catch (Throwable $exception) {
-            if (!$exception instanceof ReportCancelled && !VieFundReportCancellation::requested($this->cancellationFile())) {
+            if (!flock($lock, LOCK_EX | LOCK_NB, $wouldBlock)) {
+                if (!$wouldBlock) {
+                    throw new RuntimeException('Unable to acquire the CASHagch execution lock.');
+                }
+                // The active owner will queue the continuation; acknowledge duplicates.
+                return;
+            }
+            $acquired = true;
+            self::$executionLocks[$directory] = $lock;
+            try {
+                VieFundReportCancellation::check($this->cancellationFile());
+                $state = $run->load($directory, $this->criteria);
+                if (in_array($state['phase'], ['cancelled', 'failed'], true)) {
+                    return;
+                }
+                $state = $run->prepare($directory, $this->criteria, $state);
+                $this->updateStatus($state['source'] ?? []);
+                if ($run->requiresRemote($state) && $availability->isBlocked()) {
+                    $this->deferForMaintenance($availability);
+                    return;
+                }
+                if (!in_array($state['phase'], ['ready', 'completed'], true)) {
+                    $state = $run->advance(
+                        $directory,
+                        VieFundCashAgchReportRun::buildingPath($this->userId, $this->runId),
+                        $this->criteria,
+                        $state,
+                        fn(array $status) => $this->updateStatus($status)
+                    );
+                }
+                if (in_array($state['phase'], ['ready', 'completed'], true)) {
+                    $this->complete($run, $directory, $state);
+                } else {
+                    $this->continueReport();
+                }
+            } catch (Throwable $exception) {
+                if ($exception instanceof ReportCancelled || VieFundReportCancellation::requested($this->cancellationFile())) {
+                    if (!$exception instanceof ReportCancelled) {
+                        Log::warning('CASHagch operation failed while cancellation was pending.', ['run_id' => $this->runId, 'error' => $exception->getMessage()]);
+                    }
+                    $this->finishCancellation($run, $directory);
+                    return;
+                }
+                if (($exception instanceof QueryException || $exception instanceof \PDOException) && $availability->isBlocked()
+                    && isset($state) && $run->requiresRemote($state)) {
+                    Log::warning('CASHagch source operation interrupted by maintenance; retaining saved progress.', ['run_id' => $this->runId, 'error' => $exception->getMessage()]);
+                    $this->deferForMaintenance($availability);
+                    return;
+                }
+                Log::warning('CASHagch stage interrupted; saved progress retained for retry.', ['run_id' => $this->runId, 'error' => $exception->getMessage()]);
+                if ((Cache::get(VieFundCashAgchReport::statusKey($this->userId, $this->runId), [])['success'] ?? null) !== true) {
+                    $this->updateStatus([
+                        'eta_seconds' => null, 'estimated_completion_at' => null,
+                        'message' => 'An interrupted report stage is being retried. Saved transactions are retained.',
+                    ]);
+                }
                 throw $exception;
             }
-            if (!$exception instanceof ReportCancelled) {
-                Log::warning('CASHagch operation failed while cancellation was pending.', ['run_id' => $this->runId, 'error' => $exception->getMessage()]);
+        } finally {
+            if ($acquired) {
+                unset(self::$executionLocks[$directory]);
+                flock($lock, LOCK_UN);
             }
-            $this->finishCancellation();
+            fclose($lock);
         }
-    }
-
-    private function generateReport(VieFundCashAgchReport $report, VieFundAvailabilityWindow $availability): void
-    {
-        if ($availability->isBlocked()) {
-            self::dispatch($this->userId, $this->runId, $this->criteria)
-                ->onConnection('database')
-                ->delay($availability->nextAvailableAt());
-            $this->updateStatus([
-                'state' => 'queued', 'phase' => 'queued',
-                'eta_seconds' => null, 'estimated_completion_at' => null,
-                'message' => 'Queued until the VieFund maintenance window ends.',
-            ]);
-            return;
-        }
-        $this->updateStatus([
-            'state' => 'running', 'phase' => 'counting',
-            'processed_transactions' => 0, 'expected_transactions' => null,
-            'rows_per_second' => null, 'eta_seconds' => null, 'estimated_completion_at' => null,
-            'message' => 'Counting matching CASHagch transactions for the selected period...',
-        ]);
-        $exportStartedAt = null;
-        $batches = 0;
-        $result = $report->generate(
-            $this->criteria,
-            VieFundCashAgchReport::outputPath($this->userId, $this->runId),
-            function (int $count, int $total, string $phase) use ($availability, &$exportStartedAt, &$batches): void {
-                VieFundReportCancellation::check($this->cancellationFile());
-                if ($phase === 'exporting' && $availability->isBlocked()) {
-                    throw new RuntimeException('VieFund maintenance began before the report finished. Generate the report again after '.$availability->nextAvailableAt()->format('g:i a T').'.');
-                }
-                $exportStartedAt ??= $this->monotonicSeconds();
-                if ($phase === 'exporting' && $count > 0) {
-                    ++$batches;
-                }
-                $elapsed = max(0, $this->monotonicSeconds() - $exportStartedAt);
-                $rate = $phase === 'exporting' && $batches >= 2 && $elapsed > 0 ? $count / $elapsed : null;
-                $remaining = max(0, $total - $count);
-                $eta = $rate !== null && $rate > 0 && $remaining > 0 ? (int) ceil($remaining / $rate) : null;
-                $message = $count === 0
-                    ? 'Preparing Excel export for approximately '.number_format($total).' transactions...'
-                    : ($remaining > 0
-                        ? number_format($count).' of approximately '.number_format($total).' transactions written. Reading the next batch...'
-                        : number_format($count).' transactions written. Checking for remaining transactions...');
-                $this->updateStatus([
-                    'phase' => $phase,
-                    'processed_transactions' => $count,
-                    'expected_transactions' => $total,
-                    'rows_per_second' => $rate !== null ? round($rate, 2) : null,
-                    'eta_seconds' => $eta,
-                    'estimated_completion_at' => $eta !== null ? now()->addSeconds($eta)->toIso8601String() : null,
-                    'message' => $phase === 'finalizing'
-                        ? number_format($count).' transactions written. Finalizing Excel workbook...'
-                        : $message,
-                ]);
-            }
-        );
-        $this->updateStatus([
-            ...$result,
-            'state' => 'completed',
-            'phase' => 'completed',
-            'success' => true,
-            'expected_transactions' => $result['processed_transactions'],
-            'eta_seconds' => null,
-            'estimated_completion_at' => null,
-            'message' => $result['review_transactions'] > 0
-                ? 'Report ready. Some transaction types need review; see the Summary sheet.'
-                : 'CASHagch report ready to download.',
-            'completed_at' => now()->toIso8601String(),
-        ]);
     }
 
     public function failed(?Throwable $exception): void
     {
+        $directory = VieFundCashAgchReportRun::directory($this->userId, $this->runId);
+        // Laravel invokes timeout failure on a fresh job instance before killing the lock owner.
+        if (isset(self::$executionLocks[$directory])) {
+            $this->failReport($exception);
+            return;
+        }
+        File::ensureDirectoryExists(dirname($directory));
+        $lock = fopen($directory.'.lock', 'c');
+        if ($lock === false) {
+            throw new RuntimeException('Unable to open the CASHagch failure lock.');
+        }
+        try {
+            if (!flock($lock, LOCK_EX)) {
+                throw new RuntimeException('Unable to acquire the CASHagch failure lock.');
+            }
+            $this->failReport($exception);
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    private function failReport(?Throwable $exception): void
+    {
+        $status = Cache::get(VieFundCashAgchReport::statusKey($this->userId, $this->runId), []);
+        if (($status['success'] ?? null) === true) {
+            return;
+        }
+        $run = app(VieFundCashAgchReportRun::class);
+        $directory = VieFundCashAgchReportRun::directory($this->userId, $this->runId);
+        if ($run->load($directory, $this->criteria)['phase'] === 'completed') {
+            return;
+        }
         if (VieFundReportCancellation::requested($this->cancellationFile())) {
-            $this->finishCancellation();
+            $this->finishCancellation($run, $directory);
             return;
         }
         $message = $exception?->getMessage() ?? 'The report worker stopped before completion.';
         Log::error('CASHagch report failed.', ['run_id' => $this->runId, 'user_id' => $this->userId, 'error' => $message]);
-        $this->updateStatus([
-            'state' => 'failed', 'phase' => 'failed', 'success' => false,
-            'eta_seconds' => null, 'estimated_completion_at' => null,
-            'message' => 'Report failed: '.$message,
-        ]);
+        VieFundReportCancellation::locked($this->cancellationFile(), function () use ($run, $directory, $message): void {
+            if (VieFundReportCancellation::requested($this->cancellationFile())) {
+                $this->discard($run, $directory, 'cancelled');
+                $this->writeStatus(VieFundReportCancellation::status());
+                return;
+            }
+            $this->discard($run, $directory, 'failed');
+            $this->writeStatus([
+                'state' => 'failed', 'phase' => 'failed', 'success' => false,
+                'eta_seconds' => null, 'estimated_completion_at' => null,
+                'message' => 'Report failed after retrying the interrupted stage: '.$message,
+            ]);
+        });
     }
 
-    protected function monotonicSeconds(): float
+    private function complete(VieFundCashAgchReportRun $run, string $directory, array $state): void
     {
-        return hrtime(true) / 1_000_000_000;
+        VieFundReportCancellation::locked($this->cancellationFile(), function () use ($run, $directory, $state): void {
+            VieFundReportCancellation::check($this->cancellationFile());
+            $path = VieFundCashAgchReport::outputPath($this->userId, $this->runId);
+            $building = VieFundCashAgchReportRun::buildingPath($this->userId, $this->runId);
+            // A previous attempt may have renamed the file before its checkpoint committed.
+            if ($state['phase'] === 'ready' && is_file($building) && !rename($building, $path)) {
+                throw new RuntimeException('Unable to publish the completed CASHagch workbook.');
+            }
+            if (!is_file($path)) {
+                throw new RuntimeException('The completed CASHagch workbook is missing.');
+            }
+            $state['phase'] = 'completed';
+            $state['completed_at'] ??= now()->toIso8601String();
+            $run->save($directory, $state);
+            $this->writeStatus([
+                ...$state['result'],
+                'state' => 'completed', 'phase' => 'completed', 'success' => true,
+                'expected_transactions' => $state['result']['processed_transactions'],
+                'eta_seconds' => null, 'estimated_completion_at' => null,
+                'message' => $state['result']['review_transactions'] > 0
+                    ? 'Report ready. Some transaction types need review; see the Summary sheet.'
+                    : 'CASHagch report ready to download.',
+                'completed_at' => $state['completed_at'],
+            ]);
+        });
+        $run->cleanup($directory, VieFundCashAgchReportRun::buildingPath($this->userId, $this->runId));
+    }
+
+    private function deferForMaintenance(VieFundAvailabilityWindow $availability): void
+    {
+        $this->updateStatus([
+            'state' => 'queued', 'phase' => 'queued',
+            'eta_seconds' => null, 'estimated_completion_at' => null,
+            'message' => 'Paused for VieFund maintenance. Saved progress will resume automatically when it ends.',
+        ]);
+        $this->continueReport($availability->nextAvailableAt());
+    }
+
+    private function continueReport(?\DateTimeInterface $delay = null): void
+    {
+        $next = self::dispatch($this->userId, $this->runId, $this->criteria)
+            ->onConnection('database_reports')->onQueue('cashagch-reports');
+        if ($delay !== null) {
+            $next->delay($delay);
+        }
     }
 
     private function updateStatus(array $values): void
@@ -140,12 +225,18 @@ class GenerateVieFundCashAgchReport implements ShouldQueue
             if (empty($values['cancelled'])) {
                 VieFundReportCancellation::check($this->cancellationFile());
             }
-            $key = VieFundCashAgchReport::statusKey($this->userId, $this->runId);
-            Cache::put($key, array_merge(Cache::get($key, []), $values, [
-                'run_id' => $this->runId, 'user_id' => $this->userId, 'cancellation_supported' => true,
-                'updated_at' => now()->toIso8601String(),
-            ]), now()->addHours(12));
+            $this->writeStatus($values);
         });
+    }
+
+    private function writeStatus(array $values): void
+    {
+        $key = VieFundCashAgchReport::statusKey($this->userId, $this->runId);
+        Cache::put($key, array_merge(Cache::get($key, []), $values, [
+            'run_id' => $this->runId, 'user_id' => $this->userId, 'cancellation_supported' => true,
+            'criteria' => $this->criteria,
+            'updated_at' => now()->toIso8601String(),
+        ]), now()->addHours(12));
     }
 
     private function cancellationFile(): string
@@ -153,12 +244,22 @@ class GenerateVieFundCashAgchReport implements ShouldQueue
         return VieFundReportCancellation::path('cashagch', $this->userId, $this->runId);
     }
 
-    private function finishCancellation(): void
+    private function finishCancellation(VieFundCashAgchReportRun $run, string $directory): void
+    {
+        $this->discard($run, $directory, 'cancelled');
+        $this->updateStatus(VieFundReportCancellation::status());
+    }
+
+    private function discard(VieFundCashAgchReportRun $run, string $directory, string $phase): void
     {
         $path = VieFundCashAgchReport::outputPath($this->userId, $this->runId);
         if (is_file($path) && !File::delete($path)) {
-            throw new RuntimeException('Unable to discard the cancelled report workbook.');
+            throw new RuntimeException('Unable to discard the incomplete CASHagch workbook.');
         }
-        $this->updateStatus(VieFundReportCancellation::status());
+        $run->cleanup($directory, VieFundCashAgchReportRun::buildingPath($this->userId, $this->runId));
+        $run->save($directory, [
+            'criteria_hash' => hash('sha256', json_encode($this->criteria, JSON_THROW_ON_ERROR)),
+            'phase' => $phase,
+        ]);
     }
 }
