@@ -18,29 +18,30 @@ return new class extends Migration
                 $table->index(['fund_id', 'transaction_type_count', 'cash_transaction_id'], 'viefund_mirror_report_type_idx');
             });
         }
-        if (!Schema::hasColumn('viefund_transaction_mirror_rows', 'trust_amount_used')) {
+        if (Schema::getConnection()->getDriverName() === 'mysql') {
+            $this->upgradeMySqlRows();
+        } else {
+            foreach (['trust_amount_used', 'trust_amount_left'] as $name) {
+                if (!Schema::hasColumn('viefund_transaction_mirror_rows', $name)) {
+                    Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table) use ($name): void {
+                        $table->decimal($name, 20, 4)->nullable();
+                    });
+                }
+            }
+            foreach (['created', 'trade', 'processing', 'settlement'] as $basis) {
+                $index = "viefund_mirror_{$basis}_cursor_idx";
+                if (!Schema::hasIndex('viefund_transaction_mirror_rows', $index)) {
+                    Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table) use ($basis, $index): void {
+                        $table->index([$basis.'_date', 'cash_transaction_id'], $index);
+                    });
+                }
+            }
             Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
-                $table->decimal('trust_amount_used', 20, 4)->nullable();
+                foreach (['created_date', 'trade_date', 'processing_date', 'settlement_date'] as $date) {
+                    $table->dateTime($date, 6)->nullable()->change();
+                }
             });
         }
-        foreach (['created', 'trade', 'processing', 'settlement'] as $basis) {
-            $index = "viefund_mirror_{$basis}_cursor_idx";
-            if (!Schema::hasIndex('viefund_transaction_mirror_rows', $index)) {
-                Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table) use ($basis, $index): void {
-                    $table->index([$basis.'_date', 'cash_transaction_id'], $index);
-                });
-            }
-        }
-        if (!Schema::hasColumn('viefund_transaction_mirror_rows', 'trust_amount_left')) {
-            Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
-                $table->decimal('trust_amount_left', 20, 4)->nullable();
-            });
-        }
-        Schema::table('viefund_transaction_mirror_rows', function (Blueprint $table): void {
-            foreach (['created_date', 'trade_date', 'processing_date', 'settlement_date'] as $date) {
-                $table->dateTime($date, 6)->nullable()->change();
-            }
-        });
         foreach (['cashagch_verification' => 'json', 'cashagch_verified_at' => 'timestamp',
             'cashagch_scope_hash' => 'string', 'cashagch_verification_error' => 'text'] as $name => $type) {
             if (!Schema::hasColumn('viefund_transaction_mirror_syncs', $name)) {
@@ -48,6 +49,35 @@ return new class extends Migration
                     $table->$type($name)->nullable();
                 });
             }
+        }
+    }
+
+    private function upgradeMySqlRows(): void
+    {
+        $table = 'viefund_transaction_mirror_rows';
+        $columns = array_column(Schema::getColumns($table), null, 'name');
+        $changes = [];
+
+        foreach (['trust_amount_used', 'trust_amount_left'] as $name) {
+            if (!isset($columns[$name])) {
+                $changes[] = "ADD COLUMN `{$name}` DECIMAL(20, 4) NULL";
+            }
+        }
+        foreach (['created', 'trade', 'processing', 'settlement'] as $basis) {
+            $date = $basis.'_date';
+            if (($columns[$date]['type'] ?? null) !== 'datetime(6)' || !$columns[$date]['nullable']) {
+                $changes[] = "MODIFY COLUMN `{$date}` DATETIME(6) NULL";
+            }
+            $index = "viefund_mirror_{$basis}_cursor_idx";
+            if (!Schema::hasIndex($table, $index)) {
+                $changes[] = "ADD INDEX `{$index}` (`{$date}`, `cash_transaction_id`)";
+            }
+        }
+
+        // Widen timestamps and build missing indexes in one large-table rebuild.
+        if ($changes !== []) {
+            $connection = Schema::getConnection();
+            $connection->statement('ALTER TABLE '.$connection->getSchemaGrammar()->wrapTable($table).' '.implode(', ', $changes));
         }
     }
 

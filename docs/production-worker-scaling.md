@@ -91,8 +91,33 @@ executable permission bit, so no post-deployment copy into `/home/site` is
 needed. This also prevents a persistent copied script from falling behind the
 repository version.
 
-The workflow restarts the App Service as part of applying those settings and
-waits for the `/up` health endpoint. After deployment, verify:
+Production workflows are serialized without cancelling an active deployment.
+Runtime settings are applied before ZIP deployment; the ZIP deployment performs
+the restart, without a second explicit restart that could interrupt migrations.
+Startup runs `php artisan deploy:migrate`, which holds a MySQL session advisory
+lock before checking pending migrations. Other startup processes wait up to
+30 minutes for that lock and fail closed if they cannot acquire it. Losing the
+database connection also fails closed rather than reconnecting without the lock.
+Use this command, rather than unguarded `migrate --force`, for manual production
+migrations.
+
+The CASHagch migration combines missing mirror-row columns, timestamp widening,
+and cursor indexes into one MySQL `ALTER TABLE`, and skips timestamp changes
+already applied by an interrupted attempt. A populated mirror can still require
+a long rebuild. The workflow checks `/up` for up to 60 minutes using an elapsed-time
+deadline; it does not start PHP-FPM or workers before migrations finish. Migration
+and cache-command output is also streamed to container logs, with startup phase
+markers, while retaining `/home/LogFiles/startup.log`.
+
+Run `php tests/migrations/deployment_migrations.php` with the local MySQL server
+available to test cross-process serialization, failure cleanup, and resumable
+MySQL schema changes. The test creates and drops its own temporary database and
+refuses non-local database hosts. The test account must be able to create that
+temporary database. Alternatively, point `DEPLOYMENT_TEST_DB_SOCKET` at a
+disposable, socket-only MySQL instance initialized with an empty root password;
+this keeps the application database and its account entirely out of the test.
+
+After deployment, verify:
 
 ```bash
 cd /home/site/wwwroot

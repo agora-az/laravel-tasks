@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 
 APP_ROOT=/home/site/wwwroot
 APP_READY_PATH="$APP_ROOT/artisan-safe.sh"
@@ -22,6 +23,10 @@ report_startup_failure() {
         printf 'Recent startup log output:\n' >&2
         tail -n 200 "$STARTUP_LOG_PATH" >&2
     fi
+}
+
+run_startup_command() {
+    "$@" 2>&1 | tee -a "$STARTUP_LOG_PATH"
 }
 
 wait_for_app_root() {
@@ -106,6 +111,7 @@ service nginx reload
 cd /home/site/wwwroot
 
 # Ensure Laravel writable directories exist before running any Artisan command.
+log_startup "Preparing Laravel writable directories..."
 mkdir -p \
     storage/framework/cache/data \
     storage/framework/sessions \
@@ -120,20 +126,23 @@ chmod -R 755 storage bootstrap/cache
 rm -f bootstrap/cache/packages.php bootstrap/cache/services.php
 
 # Run database migrations before serving code that depends on the new schema.
-if ! bash /home/site/wwwroot/artisan-safe.sh migrate --force >> "$STARTUP_LOG_PATH" 2>&1; then
+log_startup "Running serialized database migrations..."
+if ! run_startup_command bash /home/site/wwwroot/artisan-safe.sh deploy:migrate; then
     report_startup_failure "ERROR: Database migration failed."
     exit 1
 fi
 
 # Cache Laravel config/routes/views and fail visibly if deployment is invalid.
 for cache_command in config:cache route:cache view:cache; do
-    if ! bash /home/site/wwwroot/artisan-safe.sh "$cache_command" >> "$STARTUP_LOG_PATH" 2>&1; then
+    log_startup "Running php artisan $cache_command..."
+    if ! run_startup_command bash /home/site/wwwroot/artisan-safe.sh "$cache_command"; then
         report_startup_failure "ERROR: php artisan $cache_command failed."
         exit 1
     fi
 done
 
 # Install Supervisor and PDF OCR tools.
+log_startup "Checking runtime dependencies..."
 if ! install_runtime_dependencies; then
     report_startup_failure "ERROR: Runtime dependency installation failed."
     exit 1
