@@ -18,7 +18,7 @@ final class VieFundMatchStatusSummaryAccumulator
 
     private array $seen = [];
 
-    public function __construct()
+    public function __construct(private readonly ?\Closure $recordClaim = null, ?array $totals = null)
     {
         foreach (self::STATUSES as $status) {
             $this->summary[$status] = [
@@ -44,6 +44,25 @@ final class VieFundMatchStatusSummaryAccumulator
                 'asm' => [],
                 'bank' => [],
             ];
+        }
+        if ($totals !== null) {
+            if (count($totals) !== count($this->summary) || array_diff_key($this->summary, $totals) !== []) {
+                throw new \UnexpectedValueException('Invalid saved summary statuses.');
+            }
+            foreach ($this->summary as $status => $fields) {
+                if (!is_array($totals[$status]) || count($totals[$status]) !== count($fields)
+                    || array_diff_key($fields, $totals[$status]) !== []) {
+                    throw new \UnexpectedValueException('Invalid saved summary fields.');
+                }
+                foreach ($totals[$status] as $value) {
+                    if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)) {
+                        throw new \UnexpectedValueException('Invalid saved summary amount.');
+                    }
+                }
+                foreach ($fields as $field => $value) {
+                    $this->summary[$status][$field] = $totals[$status][$field];
+                }
+            }
         }
     }
 
@@ -124,6 +143,11 @@ final class VieFundMatchStatusSummaryAccumulator
         }
     }
 
+    public function totals(): array
+    {
+        return $this->summary;
+    }
+
     public function result(): array
     {
         $summary = $this->summary;
@@ -147,22 +171,33 @@ final class VieFundMatchStatusSummaryAccumulator
         $recordKey = isset($record['id'])
             ? (string) $record['id']
             : sha1(json_encode($record, JSON_THROW_ON_ERROR));
-        if (isset($this->seen[$status][$type][$recordKey])) {
+        if (!$this->claim($status, $type, $recordKey)) {
             return;
         }
 
-        $this->seen[$status][$type][$recordKey] = true;
         ++$this->summary[$status][$type . '_count'];
         $this->summary[$status][$type . '_total'] += $amount($record);
     }
 
     private function addSummaryTotal(string $status, string $field, string $recordKey, float $amount): void
     {
-        if (isset($this->seen[$status][$field][$recordKey])) {
+        if (!$this->claim($status, $field, $recordKey)) {
             return;
         }
 
-        $this->seen[$status][$field][$recordKey] = true;
         $this->summary[$status][$field] += $amount;
+    }
+
+    private function claim(string $status, string $field, string $key): bool
+    {
+        if ($this->recordClaim !== null) {
+            return ($this->recordClaim)($status, $field, $key);
+        }
+        if (isset($this->seen[$status][$field][$key])) {
+            return false;
+        }
+        $this->seen[$status][$field][$key] = true;
+
+        return true;
     }
 }

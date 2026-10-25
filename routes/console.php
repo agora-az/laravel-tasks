@@ -7,6 +7,7 @@ use App\Services\Reconciliation\VieFundFundservMatcher;
 use App\Services\VieFund\VieFundExportLinkCache;
 use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
+use App\Services\VieFund\VieFundTransactionSummaryService;
 use App\Jobs\RefreshVieFundDashboardStats;
 use App\Jobs\RefreshVieFundReportInceptionDates;
 
@@ -34,6 +35,13 @@ Artisan::command('reconcile:match {--rule=viefund-fundserv} {--dry-run}', functi
 
 Schedule::job(new RefreshVieFundDashboardStats, 'default', 'database')
     ->hourly()
+    ->timezone('America/Toronto')
+    ->onOneServer()
+    ->withoutOverlapping();
+
+Schedule::call(fn() => app(VieFundTransactionSummaryService::class)->prune())
+    ->name('viefund:prune-transaction-summaries')
+    ->dailyAt('03:30')
     ->timezone('America/Toronto')
     ->onOneServer()
     ->withoutOverlapping();

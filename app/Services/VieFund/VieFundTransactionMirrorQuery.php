@@ -115,18 +115,23 @@ class VieFundTransactionMirrorQuery
         ];
     }
 
+    /** @return Collection<int, \stdClass> */
+    public function summaryRowsAfter(?string $search, array $filters, int $cursor, int $limit): Collection
+    {
+        return $this->baseQuery($search, array_merge($filters, ['match_statuses' => null]))
+            ->where('cash_transaction_id', '>', $cursor)
+            ->orderBy('cash_transaction_id')
+            ->limit($limit)
+            ->get(['cash_transaction_id', 'amount', 'match_status', 'enrichment']);
+    }
+
     /** @return array<string, array<string, int|float>> */
     public function matchStatusSummary(?string $search, array $filters): array
     {
         $accumulator = new VieFundMatchStatusSummaryAccumulator();
-        $summaryFilters = array_merge($filters, ['match_statuses' => null]);
         $lastCashTransactionId = 0;
         do {
-            $rows = $this->baseQuery($search, $summaryFilters)
-                ->where('cash_transaction_id', '>', $lastCashTransactionId)
-                ->orderBy('cash_transaction_id')
-                ->limit(1000)
-                ->get(['cash_transaction_id', 'amount', 'match_status', 'enrichment']);
+            $rows = $this->summaryRowsAfter($search, $filters, $lastCashTransactionId, 1000);
 
             foreach ($rows as $row) {
                 $lastCashTransactionId = (int) $row->cash_transaction_id;

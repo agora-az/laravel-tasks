@@ -15,6 +15,7 @@ use App\Services\VieFund\VieFundMatchStatusSummaryAccumulator;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
+use App\Services\VieFund\VieFundTransactionSummaryService;
 use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Services\VieFund\VieFundTransactionMirrorQuery;
 use App\Support\AllTransactionColumns;
@@ -875,30 +876,16 @@ class RemoteVieFundController extends Controller
             'has_asm_match' => $filterRequest->boolean('filter_has_asm_match') ?: null,
             'match_statuses' => $matchStatuses ?: null,
         ]);
-        if ($this->shouldUseMirrorForAllTransactions($request, $filters)) {
-            try {
-                $summary = $this->mirrorQuery->matchStatusSummary($search ?: null, $filters);
-
-                return response()->json([
-                    'state' => 'complete',
-                    'currency' => self::ALL_TRANSACTION_CURRENCIES[$currencyCode],
-                    'totals' => $this->filteredTransactionTotals($summary, $matchStatuses),
-                    'statuses' => collect($summary)->map(
-                        fn(array $values, string $status): array => array_merge(['status' => $status], $values)
-                    )->values(),
-                    'source' => 'mirror',
-                ], 200, $this->exportStatusNoCacheHeaders());
-            } catch (Throwable $e) {
-                Log::error('Unable to load the mirrored All Transactions match summary.', ['exception' => $e]);
-
-                return response()->json([
-                    'message' => 'The match summary could not be loaded.',
-                ], 503, $this->exportStatusNoCacheHeaders());
-            }
+        $useMirror = $this->shouldUseMirrorForAllTransactions($request, $filters);
+        $sync = $useMirror ? $this->mirrorManager->sync() : null;
+        if ($useMirror && !$sync?->isReady()) {
+            return response()->json([
+                'state' => 'processing',
+                'message' => 'Waiting for mirror synchronization before building summaries.',
+            ], 202, $this->exportStatusNoCacheHeaders());
         }
-
-        $workingSet = $this->workingSetManager->findForScope($filters);
-        if (!$workingSet?->isReady()) {
+        $workingSet = $useMirror ? null : $this->workingSetManager->findForScope($filters);
+        if (!$useMirror && !$workingSet?->isReady()) {
             return $this->pendingWorkingSetSummary(
                 $workingSet,
                 'Match summaries will be available when the period cache is ready.'
@@ -906,21 +893,18 @@ class RemoteVieFundController extends Controller
         }
 
         try {
-            $signature = sha1(json_encode([
-                'working_set_id' => $workingSet->id,
-                'generation' => $workingSet->readableGeneration(),
-                'search' => $search,
-                'filters' => $filters,
-            ], JSON_THROW_ON_ERROR));
-            $summary = Cache::remember(
-                "viefund_all_transactions_match_summary:v2:{$signature}",
-                now()->addMinutes(5),
-                fn(): array => $this->workingSetQuery->matchStatusSummary(
-                    $workingSet,
-                    $search ?: null,
-                    $filters
-                )
-            );
+            $service = app(VieFundTransactionSummaryService::class);
+            $run = $useMirror
+                ? $service->forMirror($sync, $search ?: null, $filters, $request->boolean('retry_summary'))
+                : $service->forWorkingSet($workingSet, $search ?: null, $filters, $request->boolean('retry_summary'));
+            $status = $service->status($run);
+            if ($status['state'] !== 'complete') {
+                return response()->json($status, $status['state'] === 'failed' ? 200 : 202, $this->exportStatusNoCacheHeaders());
+            }
+            $summary = $run->result;
+            if (!is_array($summary)) {
+                throw new \RuntimeException('The completed transaction summary has no saved result.');
+            }
 
             return response()->json([
                 'state' => 'complete',
@@ -929,6 +913,7 @@ class RemoteVieFundController extends Controller
                 'statuses' => collect($summary)->map(
                     fn(array $values, string $status): array => array_merge(['status' => $status], $values)
                 )->values(),
+                'source' => $useMirror ? 'mirror' : 'working_set',
             ], 200, $this->exportStatusNoCacheHeaders());
         } catch (Throwable $e) {
             Log::error('Unable to load the All Transactions match summary.', ['exception' => $e]);

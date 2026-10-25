@@ -15,8 +15,8 @@ const script = new vm.Script([
 ].join('\n'));
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function createPage(initialState) {
-    const state = { cache: initialState, requests: [], timers: [], reloads: 0, elements: {}, schedules: [] };
+function createPage(initialState, summaryState = 'complete') {
+    const state = { cache: initialState, summary: summaryState, requests: [], timers: [], reloads: 0, elements: {}, schedules: [] };
     const element = () => ({
         textContent: 'Loading', style: {}, dataset: {}, handlers: {},
         addEventListener(name, handler) { this.handlers[name] = handler; },
@@ -30,6 +30,7 @@ function createPage(initialState) {
         'all-transactions-match-summary', 'all-transactions-filtered-summary', 'all-transactions-match-summary-body',
         'all-transactions-match-summary-state', 'all-transactions-filtered-state', 'all-transactions-filtered-count',
         'all-transactions-filtered-outflow', 'all-transactions-filtered-inflow', 'all-transactions-filtered-net',
+        'all-transactions-summary-retry',
     ];
     ids.forEach(id => { state.elements[id] = element(); });
     const cells = [element(), element()];
@@ -75,7 +76,15 @@ function createPage(initialState) {
                 status = 202;
                 data = { state: 'processing', message: 'Waiting for period cache.' };
             } else if (url.includes('match-summary')) {
-                data = { state: 'complete', currency: 'CAD', totals: { transaction_count: 1272452 }, statuses: [] };
+                if (state.summary === 'failed' && !url.includes('retry_summary=1')) {
+                    data = { state: 'failed', retryable: true, message: 'Summary failed. Retry summaries to continue.' };
+                } else if (state.summary === 'processing' || url.includes('retry_summary=1')) {
+                    state.summary = 'processing';
+                    status = 202;
+                    data = { state: 'processing', message: 'Building summaries: 1,000 of 1,272,452 transactions processed.' };
+                } else {
+                    data = { state: 'complete', currency: 'CAD', totals: { transaction_count: 1272452 }, statuses: [] };
+                }
             } else {
                 data = { opening_balance: 10, period_net: 5, closing_balance: 15, transaction_count: 1272452, balance_source: 'Test cache' };
             }
@@ -99,6 +108,8 @@ function createPage(initialState) {
         assert.equal(page.state.elements['all-transactions-summary-net'].textContent, 'Unavailable');
         assert.equal(page.state.elements['all-transactions-filtered-net'].textContent, 'Unavailable');
         assert(page.cells.every(cell => cell.textContent === 'Unavailable'), 'Failed match cells must not remain Loading.');
+        assert.equal(page.state.elements['all-transactions-summary-retry'].hidden, true,
+            'Stopped period caches must use their cache controls, not offer a misleading summary retry.');
         assert.match(page.totalSummary.textContent, new RegExp(`cache ${cacheState}`));
         await page.button.handlers.click();
         assert.equal(page.state.reloads, 1, 'Successful retry/resume must reload and restart stopped summaries.');
@@ -115,6 +126,24 @@ function createPage(initialState) {
     assert.equal(page.state.elements['all-transactions-summary-net'].textContent, '$5.00');
     assert.equal(page.state.elements['all-transactions-filtered-count'].textContent, '1,272,452');
     assert.match(page.state.elements['all-transactions-match-summary-state'].textContent, /Complete/);
+    const failedSummary = createPage('ready', 'failed');
+    await flush();
+    const retry = failedSummary.state.elements['all-transactions-summary-retry'];
+    assert.equal(retry.hidden, false, 'A failed background summary must expose its own retry button.');
+    assert.equal(failedSummary.state.elements['all-transactions-filtered-net'].textContent, 'Unavailable');
+    await retry.handlers.click();
+    assert.equal(retry.disabled, false);
+    assert.equal(retry.hidden, true, 'Retry control should hide once the saved run is active again.');
+    assert(failedSummary.state.requests.some(request => request.url.includes('retry_summary=1')));
+    assert.equal(failedSummary.state.elements['all-transactions-filtered-net'].textContent, 'Loading…');
+    assert.match(failedSummary.state.elements['all-transactions-match-summary-state'].textContent, /1,000 of 1,272,452/);
+    failedSummary.state.summary = 'complete';
+    const summaryPoll = failedSummary.state.timers.pop();
+    await summaryPoll();
+    await flush();
+    assert.equal(failedSummary.state.elements['all-transactions-filtered-count'].textContent, '1,272,452');
+    assert.equal(failedSummary.state.requests.filter(request => request.url.includes('retry_summary=1')).length, 1,
+        'Normal progress polling must not repeatedly request a retry.');
     console.log('PASS: failed/paused caches stop polling and show guidance; retry/resume reloads; active summaries recover on completion');
 })().catch(error => {
     console.error(error);

@@ -76,6 +76,21 @@ class VieFundTransactionWorkingSetQuery
             ->get();
     }
 
+    /** @return Collection<int, \stdClass> */
+    public function summaryRowsAfter(
+        VieFundTransactionWorkingSet $workingSet,
+        ?string $search,
+        array $filters,
+        int $cursor,
+        int $limit
+    ): Collection {
+        return $this->baseQuery($workingSet, $search, array_merge($filters, ['match_statuses' => null]))
+            ->where('cash_transaction_id', '>', $cursor)
+            ->orderBy('cash_transaction_id')
+            ->limit($limit)
+            ->get(['cash_transaction_id', 'amount', 'match_status', 'enrichment']);
+    }
+
     /** @return array<string, array<string, int|float>> */
     public function matchStatusSummary(
         VieFundTransactionWorkingSet $workingSet,
@@ -83,14 +98,9 @@ class VieFundTransactionWorkingSetQuery
         array $filters
     ): array {
         $accumulator = new VieFundMatchStatusSummaryAccumulator();
-        $summaryFilters = array_merge($filters, ['match_statuses' => null]);
         $lastCashTransactionId = 0;
         do {
-            $rows = $this->baseQuery($workingSet, $search, $summaryFilters)
-                ->where('cash_transaction_id', '>', $lastCashTransactionId)
-                ->orderBy('cash_transaction_id')
-                ->limit(1000)
-                ->get(['cash_transaction_id', 'amount', 'match_status', 'enrichment']);
+            $rows = $this->summaryRowsAfter($workingSet, $search, $filters, $lastCashTransactionId, 1000);
 
             foreach ($rows as $row) {
                 $lastCashTransactionId = (int) $row->cash_transaction_id;

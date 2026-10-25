@@ -7,6 +7,7 @@ use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
 use App\Services\RuntimeSettings;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundWorkingSetBalanceService;
+use App\Services\VieFund\VieFundTransactionSummaryService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
@@ -225,14 +226,14 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
 
         $balanceReport = $balanceService->build($current);
 
-        DB::transaction(function () use ($current, $balanceReport): void {
+        $ready = DB::transaction(function () use ($current, $balanceReport): ?VieFundTransactionWorkingSet {
             $locked = VieFundTransactionWorkingSet::query()->lockForUpdate()->find($current->id);
             if (
                 !$locked
                 || $locked->build_generation !== $this->generation
                 || !in_array($locked->state, ['warming', 'refreshing'], true)
             ) {
-                return;
+                return null;
             }
 
             $totalRows = (int) $locked->rows_cached;
@@ -256,7 +257,11 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 'expires_at' => now()->addMinutes(app(RuntimeSettings::class)->get('viefund.working_set.ttl_minutes')),
                 'last_error' => null,
             ])->save();
+            return $locked;
         });
+        if ($ready !== null) {
+            app(VieFundTransactionSummaryService::class)->prewarm($ready);
+        }
     }
 
     private function nullableString(mixed $value): ?string

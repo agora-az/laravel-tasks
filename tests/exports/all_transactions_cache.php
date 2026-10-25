@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\RemoteVieFundController;
 use App\Jobs\HydrateVieFundTransactionWorkingSet;
+use App\Jobs\BuildVieFundTransactionSummary;
+use App\Services\VieFund\VieFundTransactionSummaryService;
 use App\Models\VieFundTransactionWorkingSet;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
@@ -57,6 +59,7 @@ try {
         '2026_10_06_000001_create_viefund_transaction_working_sets',
         '2026_10_07_000002_add_balance_report_to_viefund_transaction_working_sets',
         '2026_10_08_000001_add_hydration_control_to_viefund_transaction_working_sets',
+        '2026_10_25_000002_create_viefund_transaction_summaries',
     ] as $name) {
         (require dirname(__DIR__, 2).'/database/migrations/'.$name.'.php')->up();
     }
@@ -66,7 +69,7 @@ try {
         $table->boolean('has_asm_match')->default(false);
     });
 
-    Bus::fake([HydrateVieFundTransactionWorkingSet::class]);
+    Bus::fake([HydrateVieFundTransactionWorkingSet::class, BuildVieFundTransactionSummary::class]);
     $manager = $app->make(VieFundTransactionWorkingSetManager::class);
     $query = $app->make(VieFundTransactionWorkingSetQuery::class);
     $filters = [
@@ -195,7 +198,7 @@ try {
     $count = $controller->allTransactionsCountStatus($request)->getData(true);
     $check($count['state'] === 'partial' && $count['cache_state'] === 'failed' && $count['total'] === 120,
         'Partial totals must expose the stopped cache state without claiming completion.');
-    Bus::fake([HydrateVieFundTransactionWorkingSet::class]);
+    Bus::fake([HydrateVieFundTransactionWorkingSet::class, BuildVieFundTransactionSummary::class]);
     $manager->ensure($filters);
     $check(Bus::dispatched(HydrateVieFundTransactionWorkingSet::class)->isEmpty(),
         'Opening a failed cache must not silently restart it.');
@@ -217,8 +220,12 @@ try {
     $summary = $controller->allTransactionsSummary($request)->getData(true);
     $check($summary['period_net'] === 5 && $summary['transaction_count'] === 120,
         'Completed summaries must retain their existing financial response.');
+    $check($controller->allTransactionsMatchSummary($request)->getStatusCode() === 202,
+        'The first match-summary request must enqueue work, not scan cached transactions.');
+    $summaryJob = Bus::dispatched(BuildVieFundTransactionSummary::class)->last();
+    $summaryJob->handle($app->make(VieFundTransactionSummaryService::class));
     $check($controller->allTransactionsMatchSummary($request)->getData(true)['state'] === 'complete',
-        'Match summaries must recover after completion.');
+        'Match summaries must recover after their background calculation completes.');
     echo "PASS: failed/paused/zero-row summaries, partial totals, saved-cursor retry and completed summary recovery\n";
 
     $batchSet = $manager->ensure([...$filters, 'date_from' => '2026-08-01', 'date_to' => '2026-08-31']);

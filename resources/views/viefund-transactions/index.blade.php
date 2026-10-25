@@ -970,6 +970,7 @@
                 <div style="margin-top:3px;color:#718096;font-size:12px;">Counts are unique linked records; EFT and FSP totals use their full reconciliation batches. Match checkboxes do not remove rows from this breakdown; filtered totals above still respect them. Variance is Bank - (EFT + FSP).</div>
             </div>
             <div id="all-transactions-match-summary-state" role="status" style="color:#4a5568;font-size:12px;font-weight:700;">Loading summaries…</div>
+            <button id="all-transactions-summary-retry" type="button" hidden>Retry summaries</button>
         </div>
         <div class="all-transactions-match-summary-shell">
             <table class="all-transactions-match-summary-table">
@@ -2209,6 +2210,8 @@
 
     const matchSummary = document.getElementById('all-transactions-match-summary');
     const filteredSummary = document.getElementById('all-transactions-filtered-summary');
+    const summaryRetryButton = document.getElementById('all-transactions-summary-retry');
+    let retrySummaryRequested = false;
     const loadMatchSummary = async () => {
         if (!matchSummary) return;
 
@@ -2233,18 +2236,33 @@
             return cell;
         };
 
+        let canRetry = true;
         try {
             const summaryUrl = new URL('{{ route('viefund-transactions.match-summary') }}', window.location.origin);
             summaryUrl.search = window.location.search;
+            if (retrySummaryRequested) {
+                summaryUrl.searchParams.set('retry_summary', '1');
+                [filteredCount, filteredOutflow, filteredInflow, filteredNet].forEach((element) => {
+                    if (element) element.textContent = 'Loading…';
+                });
+                body.querySelectorAll('td:not(:first-child)').forEach((cell) => {
+                    cell.textContent = 'Loading…';
+                });
+            }
+            retrySummaryRequested = false;
             const response = await fetch(summaryUrl.toString(), {
                 headers: {'Accept':'application/json','X-Requested-With':'XMLHttpRequest'},
                 cache: 'no-store',
             });
             const data = await parseJsonResponse(response, 'The match summary returned an invalid response');
+            if (summaryRetryButton) summaryRetryButton.hidden = true;
             if (['failed', 'paused'].includes(data.state)) {
+                canRetry = Boolean(data.retryable);
                 throw new Error(data.message);
             }
             if (response.status === 202) {
+                state.style.color = '#4a5568';
+                if (filteredState) filteredState.style.color = '#4a5568';
                 state.textContent = data.message || 'Waiting for the period cache…';
                 if (filteredState) filteredState.textContent = data.message || 'Waiting for the period cache…';
                 window.setTimeout(loadMatchSummary, 5000);
@@ -2317,6 +2335,7 @@
             state.textContent = `${data.currency || ''} · Complete`;
             matchSummary.removeAttribute('aria-busy');
         } catch (summaryError) {
+            if (summaryRetryButton) summaryRetryButton.hidden = !canRetry;
             state.textContent = summaryError.message || 'Match summaries unavailable.';
             state.style.color = '#b91c1c';
             body.querySelectorAll('td:not(:first-child)').forEach((cell) => {
@@ -2335,6 +2354,15 @@
         }
     };
     loadMatchSummary();
+    summaryRetryButton?.addEventListener('click', async () => {
+        summaryRetryButton.disabled = true;
+        retrySummaryRequested = true;
+        try {
+            await loadMatchSummary();
+        } finally {
+            summaryRetryButton.disabled = false;
+        }
+    });
 
     const showStatus = (element, message, isError = false, isBusy = false) => {
         element.textContent = message;
