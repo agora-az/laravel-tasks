@@ -143,6 +143,12 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 return false;
             }
 
+            $cashTransactionIds = $cachedRows->pluck('cash_transaction_id')->unique()->values()->all();
+            $existingRows = DB::table('viefund_transaction_working_set_rows')
+                ->where('working_set_id', $this->workingSetId)
+                ->where('generation', $this->generation)
+                ->whereIn('cash_transaction_id', $cashTransactionIds)
+                ->count();
             $cachedRows->chunk(500)->each(fn(Collection $chunk) => DB::table('viefund_transaction_working_set_rows')->upsert(
                 $chunk->all(),
                 ['working_set_id', 'generation', 'cash_transaction_id'],
@@ -175,12 +181,8 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 ]
             ));
 
-            $rowsCached = DB::table('viefund_transaction_working_set_rows')
-                ->where('working_set_id', $this->workingSetId)
-                ->where('generation', $this->generation)
-                ->count();
             $locked->forceFill([
-                'rows_cached' => $rowsCached,
+                'rows_cached' => (int) $locked->rows_cached + count($cashTransactionIds) - $existingRows,
                 'hydration_cursor' => $nextCursor,
             ])->save();
 
@@ -233,10 +235,7 @@ class HydrateVieFundTransactionWorkingSet implements ShouldQueue
                 return;
             }
 
-            $totalRows = DB::table('viefund_transaction_working_set_rows')
-                ->where('working_set_id', $this->workingSetId)
-                ->where('generation', $this->generation)
-                ->count();
+            $totalRows = (int) $locked->rows_cached;
             DB::table('viefund_transaction_working_set_rows')
                 ->where('working_set_id', $this->workingSetId)
                 ->where('generation', '<>', $this->generation)

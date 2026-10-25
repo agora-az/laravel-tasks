@@ -5,12 +5,17 @@ use App\Jobs\HydrateVieFundTransactionWorkingSet;
 use App\Models\VieFundTransactionWorkingSet;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
 use App\Services\VieFund\VieFundTransactionWorkingSetQuery;
+use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundWorkingSetBalanceService;
+use App\Services\Reconciliation\AllTransactionMatchStatusResolver;
+use App\Services\RuntimeSettings;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Collection;
 use Symfony\Component\Process\Process;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -58,6 +63,7 @@ try {
     Schema::table('viefund_transaction_working_set_rows', function (Blueprint $table): void {
         $table->string('fund_id')->nullable();
         $table->text('enrichment')->default('{}');
+        $table->boolean('has_asm_match')->default(false);
     });
 
     Bus::fake([HydrateVieFundTransactionWorkingSet::class]);
@@ -214,6 +220,72 @@ try {
     $check($controller->allTransactionsMatchSummary($request)->getData(true)['state'] === 'complete',
         'Match summaries must recover after completion.');
     echo "PASS: failed/paused/zero-row summaries, partial totals, saved-cursor retry and completed summary recovery\n";
+
+    $batchSet = $manager->ensure([...$filters, 'date_from' => '2026-08-01', 'date_to' => '2026-08-31']);
+    $batchSet->forceFill(['total_rows' => 3])->save();
+    $remote = new class extends VieFundRemoteService
+    {
+        public array $rows = [];
+
+        public function __construct() {}
+
+        public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
+        {
+            return collect($this->rows);
+        }
+    };
+    $resolver = new class extends AllTransactionMatchStatusResolver
+    {
+        public function __construct() {}
+
+        public function resolve(Collection $rows): Collection
+        {
+            return $rows->mapWithKeys(fn($row) => [(string) $row->cash_transaction_id => [
+                'match_status' => 'Unknown', 'has_eft_match' => false, 'has_agra_fsp_match' => false,
+                'has_7960_fsp_match' => false, 'has_asm_match' => false, 'enrichment' => [],
+            ]]);
+        }
+    };
+    $balance = new class extends VieFundWorkingSetBalanceService
+    {
+        public function __construct() {}
+
+        public function build(VieFundTransactionWorkingSet $workingSet): array
+        {
+            return ['rows' => []];
+        }
+    };
+    $sourceRow = static fn(int $id) => (object) [
+        'cash_transaction_id' => $id, 'trust_transaction_id' => null, 'transaction_id' => 'C-'.$id,
+        'basis_date' => '2026-08-01 00:00:00', 'sort_id' => $id, 'plan_account_id' => 'TEST',
+    ];
+    DB::table('viefund_transaction_working_set_rows')->insert([
+        ...$fixture[0], 'working_set_id' => $batchSet->id, 'generation' => 'older-generation',
+    ]);
+    DB::enableQueryLog();
+    DB::flushQueryLog();
+    $runBatch = static function (array $ids) use ($remote, $resolver, $balance, $sourceRow, $batchSet, $app): void {
+        $remote->rows = array_map($sourceRow, $ids);
+        $current = $batchSet->fresh();
+        $job = new HydrateVieFundTransactionWorkingSet($current->id, $current->build_generation, $current->hydration_cursor);
+        $job->handle($remote, $resolver, $app->make(RuntimeSettings::class), $balance);
+    };
+    $runBatch([1, 2, 2]);
+    $check($batchSet->fresh()->rows_cached === 2, 'Repeated cash IDs within a batch must count only once.');
+    $runBatch([1, 2, 2]);
+    $check($batchSet->fresh()->rows_cached === 2, 'Duplicate job execution must not inflate the saved count.');
+    $runBatch([2, 3]);
+    $check($batchSet->fresh()->rows_cached === 3, 'Overlapping batches must count only newly inserted cash IDs.');
+    $runBatch([]);
+    $finished = $batchSet->fresh();
+    $check($finished->isReady() && $finished->total_rows === 3 && $finished->rows_cached === 3,
+        'Completion must publish the saved exact row count.');
+    $counts = collect(DB::getQueryLog())->filter(fn($entry) => str_contains($entry['query'], 'count(*)'));
+    $check($counts->count() === 3 && $counts->every(
+        fn($entry) => str_contains($entry['query'], '"cash_transaction_id" in')
+    ), 'Hydration must only count the bounded batch IDs, never recount the full generation.');
+    DB::disableQueryLog();
+    echo "PASS: bounded batch counting, duplicate and overlapping retries, generation isolation and count-free completion\n";
 
     DB::table('viefund_transaction_working_set_rows')->where('working_set_id', $workingSet->id)->delete();
     for ($start = 1; $start <= 100001; $start += 500) {
