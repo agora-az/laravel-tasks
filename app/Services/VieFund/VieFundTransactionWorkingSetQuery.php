@@ -4,7 +4,8 @@ namespace App\Services\VieFund;
 
 use App\Models\VieFundTransactionWorkingSet;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -16,7 +17,7 @@ class VieFundTransactionWorkingSetQuery
         int $page,
         ?string $search,
         array $filters
-    ): LengthAwarePaginator {
+    ): Paginator {
         $query = $this->baseQuery($workingSet, $search, $filters);
 
         $sortColumns = [
@@ -27,11 +28,16 @@ class VieFundTransactionWorkingSetQuery
             'amount' => 'amount',
         ];
         $sort = $sortColumns[$filters['sort'] ?? ''] ?? 'basis_date';
+        $basisColumn = $workingSet->date_basis === 'create_date' ? 'created_date' : $workingSet->date_basis;
+        if ($sort === $basisColumn) {
+            // The scope's date basis is stored in the indexed pagination column.
+            $sort = 'basis_date';
+        }
         $direction = ($filters['sort_dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $paginator = $query
             ->orderBy($sort, $direction)
             ->orderBy('cash_transaction_id', $direction)
-            ->paginate($perPage, ['payload', 'match_status'], 'page', $page);
+            ->simplePaginate($perPage, ['payload', 'match_status'], 'page', $page);
         $paginator->setCollection($paginator->getCollection()->map(function ($cachedRow) {
             $row = json_decode((string) $cachedRow->payload, false, 512, JSON_THROW_ON_ERROR);
             $row->cached_match_status = $cachedRow->match_status;
@@ -44,6 +50,20 @@ class VieFundTransactionWorkingSetQuery
 
     public function count(VieFundTransactionWorkingSet $workingSet, ?string $search, array $filters): int
     {
+        $rowFilters = Arr::only($filters, [
+            'customer_name', 'plan_account_id', 'trx_id', 'source_id', 'fund_id', 'trx_type',
+            'has_reconciliation_match', 'has_agra_fsp_match', 'has_7960_fsp_match', 'has_asm_match',
+            'match_statuses',
+        ]);
+        $rowFilters = array_filter($rowFilters, fn($value) => $value !== null && $value !== ''
+            && $value !== [] && $value !== false);
+        // During refresh, rows_cached belongs to the build, not the readable generation.
+        if ($workingSet->hasQueryableGeneration()
+            && !($workingSet->active_generation && $workingSet->build_generation)
+            && trim((string) $search) === '' && $rowFilters === []) {
+            return (int) $workingSet->rows_cached;
+        }
+
         return $this->baseQuery($workingSet, $search, $filters)->count();
     }
 

@@ -142,28 +142,27 @@ class VieFundTransactionWorkingSetManager
         ];
     }
 
-    public function findReady(array $filters): ?VieFundTransactionWorkingSet
+    public function findForScope(array $filters): ?VieFundTransactionWorkingSet
     {
         if (!$this->available()) {
             return null;
         }
 
-        $workingSet = VieFundTransactionWorkingSet::query()
+        return VieFundTransactionWorkingSet::query()
             ->where('scope_hash', $this->scopeHash($filters))
             ->first();
+    }
+
+    public function findReady(array $filters): ?VieFundTransactionWorkingSet
+    {
+        $workingSet = $this->findForScope($filters);
 
         return $workingSet?->isReady() ? $workingSet : null;
     }
 
     public function findQueryable(array $filters): ?VieFundTransactionWorkingSet
     {
-        if (!$this->available()) {
-            return null;
-        }
-
-        $workingSet = VieFundTransactionWorkingSet::query()
-            ->where('scope_hash', $this->scopeHash($filters))
-            ->first();
+        $workingSet = $this->findForScope($filters);
 
         return $workingSet?->hasQueryableGeneration() ? $workingSet : null;
     }

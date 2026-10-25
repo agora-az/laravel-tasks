@@ -1898,6 +1898,10 @@
             if (!response.ok) throw new Error('Cache control request failed.');
             const status = await response.json();
             renderWorkingSetStatus(status);
+            if (action === 'resume') {
+                window.location.reload();
+                return;
+            }
             if (!status.ready && !['paused', 'failed'].includes(status.state)) {
                 scheduleWorkingSetPoll(500);
             }
@@ -2106,14 +2110,17 @@
                 knownTotalRecords = Number(data.total || 0);
                 const totalPageCount = Math.max(1, Math.ceil(knownTotalRecords / currentPerPage));
                 const total = knownTotalRecords.toLocaleString('en-CA');
+                const cacheStopped = ['failed', 'paused'].includes(data.cache_state);
                 totalSummary.textContent = data.state === 'partial'
-                    ? ` · ${total} cached so far`
+                    ? ` · ${total} cached so far${cacheStopped ? ` (cache ${data.cache_state})` : ''}`
                     : ` · ${total} total`;
                 totalSummary.title = data.state === 'partial'
-                    ? 'This filtered total and the available page count will grow as more period rows are cached.'
+                    ? (cacheStopped
+                        ? 'Caching has stopped. Retry or resume the period cache to finish loading this period.'
+                        : 'This filtered total and the available page count will grow as more period rows are cached.')
                     : (data.cached ? 'Cached for this filter selection.' : '');
                 renderNumberedPagination(currentPage, totalPageCount);
-                if (data.state === 'partial') {
+                if (data.state === 'partial' && !cacheStopped) {
                     totalPollAttempts = 0;
                     window.setTimeout(updateFilteredTotal, 2500);
                 }
@@ -2160,6 +2167,9 @@
                 cache: 'no-store',
             });
             const data = await parseJsonResponse(response, 'The period summary returned an invalid response');
+            if (['failed', 'paused'].includes(data.state)) {
+                throw new Error(data.message);
+            }
             if (response.status === 202) {
                 [period, opening, periodNet, closing, transactionCount].forEach((element) => {
                     if (element) element.textContent = 'Waiting…';
@@ -2231,6 +2241,9 @@
                 cache: 'no-store',
             });
             const data = await parseJsonResponse(response, 'The match summary returned an invalid response');
+            if (['failed', 'paused'].includes(data.state)) {
+                throw new Error(data.message);
+            }
             if (response.status === 202) {
                 state.textContent = data.message || 'Waiting for the period cache…';
                 if (filteredState) filteredState.textContent = data.message || 'Waiting for the period cache…';
@@ -2306,6 +2319,12 @@
         } catch (summaryError) {
             state.textContent = summaryError.message || 'Match summaries unavailable.';
             state.style.color = '#b91c1c';
+            body.querySelectorAll('td:not(:first-child)').forEach((cell) => {
+                cell.textContent = 'Unavailable';
+            });
+            [filteredCount, filteredOutflow, filteredInflow, filteredNet].forEach((element) => {
+                if (element) element.textContent = 'Unavailable';
+            });
             if (filteredState) {
                 filteredState.textContent = 'Filtered totals unavailable.';
                 filteredState.title = summaryError.message || 'The filtered transaction totals could not be loaded.';

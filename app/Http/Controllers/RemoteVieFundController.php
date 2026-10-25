@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Exports\VieFundReportSheetExport;
 use App\Models\RemoteVieFundCustomerTransaction;
 use App\Models\SettlementInstruction;
+use App\Models\VieFundTransactionWorkingSet;
 use App\Services\Reconciliation\AgraFspBankMatcher;
 use App\Services\Reconciliation\AsmVieFundMatcher;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
@@ -673,6 +674,7 @@ class RemoteVieFundController extends Controller
                 'cached' => true,
                 'source' => 'working_set',
                 'rows_cached' => (int) $workingSet->rows_cached,
+                'cache_state' => $workingSet->state,
             ], 200, $this->exportStatusNoCacheHeaders());
         }
 
@@ -789,18 +791,18 @@ class RemoteVieFundController extends Controller
                 return response()->json($summary, 200, $this->exportStatusNoCacheHeaders());
             }
 
-            $workingSet = $this->workingSetManager->findReady([
+            $workingSet = $this->workingSetManager->findForScope([
                 'date_from' => $dateFrom->toDateString(),
                 'date_to' => $dateTo->toDateString(),
                 'date_basis' => $dateBasis,
                 'currency_code' => $currencyCode,
                 'status_ids' => $statusIds,
             ]);
-            if (!$workingSet || !is_array($workingSet->balance_report)) {
-                return response()->json([
-                    'state' => 'processing',
-                    'message' => 'Period summary will be available when caching completes.',
-                ], 202, $this->exportStatusNoCacheHeaders());
+            if (!$workingSet?->isReady() || !is_array($workingSet->balance_report)) {
+                return $this->pendingWorkingSetSummary(
+                    $workingSet,
+                    'Period summary will be available when caching completes.'
+                );
             }
 
             $report = $workingSet->balance_report;
@@ -895,12 +897,12 @@ class RemoteVieFundController extends Controller
             }
         }
 
-        $workingSet = $this->workingSetManager->findReady($filters);
-        if (!$workingSet) {
-            return response()->json([
-                'state' => 'processing',
-                'message' => 'Match summaries will be available when the period cache is ready.',
-            ], 202, $this->exportStatusNoCacheHeaders());
+        $workingSet = $this->workingSetManager->findForScope($filters);
+        if (!$workingSet?->isReady()) {
+            return $this->pendingWorkingSetSummary(
+                $workingSet,
+                'Match summaries will be available when the period cache is ready.'
+            );
         }
 
         try {
@@ -1730,6 +1732,26 @@ class RemoteVieFundController extends Controller
     private function shouldUseMirrorForAllTransactions(Request $request, array $filters): bool
     {
         return $this->mirrorManager->shouldUseMirror($request->user(), $filters);
+    }
+
+    private function pendingWorkingSetSummary(?VieFundTransactionWorkingSet $workingSet, string $message): JsonResponse
+    {
+        $state = $workingSet?->state;
+        if (in_array($state, ['failed', 'paused'], true)) {
+            $message = $state === 'failed'
+                ? 'Period caching failed. Use Retry period cache above the transaction table to continue from the saved position.'
+                : 'Period caching is paused. Use Resume period cache above the transaction table to continue.';
+
+            return response()->json([
+                'state' => $state,
+                'message' => $message,
+            ], 200, $this->exportStatusNoCacheHeaders());
+        }
+
+        return response()->json([
+            'state' => 'processing',
+            'message' => $message,
+        ], 202, $this->exportStatusNoCacheHeaders());
     }
 
     private function filteredTransactionTotals(array $summary, array $matchStatuses): array
