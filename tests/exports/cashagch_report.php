@@ -112,6 +112,7 @@ try {
         'database.connections' => [
             'sqlite' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''],
             'viefund_sqlsrv' => ['driver' => 'sqlsrv', 'database' => 'report-test', 'host' => 'invalid.example.test', 'prefix' => ''],
+            'viefund_verification_sqlsrv' => ['driver' => 'sqlsrv', 'database' => 'report-test', 'host' => 'invalid.example.test', 'prefix' => ''],
         ],
         'cache.default' => 'array',
         'session.driver' => 'array',
@@ -558,6 +559,15 @@ try {
     $connection = DB::connection('viefund_sqlsrv');
     $connection->setPdo(DB::connection('sqlite')->getPdo());
     $connection->setReadPdo(DB::connection('sqlite')->getPdo());
+    $coverageConnection = DB::connection('viefund_verification_sqlsrv');
+    $coverageConnection->setPdo(DB::connection('sqlite')->getPdo());
+    $coverageConnection->setReadPdo(DB::connection('sqlite')->getPdo());
+    try {
+        $app->make(SqlServerVieFundRemoteRepository::class)->firstCashTransactionDate('trade_date', '2026-10-24');
+        $check(false, 'Coverage must refuse to run without an effective SQL Server driver deadline.');
+    } catch (RuntimeException $exception) {
+        $check(str_contains($exception->getMessage(), '30-second query deadline'), $exception->getMessage());
+    }
     $metadataSql = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)->fetchFundIdsForCashTransactions([1, 2]))[0]['query'];
     $check(str_contains($metadataSql, 'COUNT(DISTINCT ISNULL(ISNULL(tt.NameEN, CAST(fl.iType AS NVARCHAR(100))),')
         && str_contains($metadataSql, 'AS transaction_type_count') && str_contains($metadataSql, 'MIN(tr.mAmountUsed)')
@@ -590,18 +600,32 @@ try {
             $repository = $app->make(SqlServerVieFundRemoteRepository::class);
             $repository->countAllTransactions(null, $filters);
             $repository->fetchAllTransactionExportRowsAfter(null, $filters, null, 100);
-            $repository->firstAllTransactionDate(null, $filters);
         });
         foreach ($rangeQueries as $query) {
             $check(str_contains($query['query'], "[ct].[{$column}] >= '2019-08-13 00:00:00'")
                 && str_contains($query['query'], "[ct].[{$column}] < '2019-08-18 00:00:00'"), 'Actual count and export SQL must share inclusive start/end day boundaries for every date basis.');
         }
-        $firstQuery = $rangeQueries[2]['query'];
-        $check(str_contains($firstQuery, "min([ct].[{$column}]) as aggregate")
-            && !str_contains(strtolower($firstQuery), 'top ') && !str_contains(strtolower($firstQuery), 'order by')
-            && !str_contains($firstQuery, 'fund_meta')
-            && in_array('CASHagch', $rangeQueries[2]['bindings'], true),
-            'First-date discovery must use an exact-fund MIN aggregate without ordered row goals or metadata hydration.');
+        foreach (['00', '01'] as $currency) {
+            $coverageQueries = $coverageConnection->pretend(function () use ($app, $basis, $filters, $currency): void {
+                $repository = $app->make(SqlServerVieFundRemoteRepository::class);
+                $repository->firstCashTransactionDate($basis, $filters['date_to']);
+                $repository->countAllTransactionsForCoverage([...$filters, 'currency_code' => $currency]);
+            });
+            $firstQuery = $coverageQueries[0]['query'];
+            $check(count($coverageQueries) === 2 && str_contains($firstQuery, "min([{$column}]) as aggregate")
+                && str_contains($firstQuery, "[{$column}] >= '1900-01-01 00:00:00'")
+                && str_contains($firstQuery, "[{$column}] < '2019-08-18 00:00:00'")
+                && !str_contains(strtolower($firstQuery), 'join') && !str_contains(strtolower($firstQuery), 'top ')
+                && !str_contains(strtolower($firstQuery), 'order by') && !str_contains($firstQuery, 'FundID'),
+                'Discovery must use the simple ledger date index without full-history eligibility joins or a report-inception cutoff.');
+            $countQuery = $coverageQueries[1]['query'];
+            $check(str_contains($countQuery, 'count(*) as aggregate')
+                && str_contains($countQuery, "[ct].[{$column}] >= '2019-08-13 00:00:00'")
+                && str_contains($countQuery, "[ct].[{$column}] < '2019-08-18 00:00:00'")
+                && str_contains($countQuery, "[page_fl].[FundID] = 'CASHagch'")
+                && in_array($currency, $coverageQueries[1]['bindings'], true),
+                'Dedicated-deadline coverage counts must retain exact fund, date and currency scope for every basis/currency.');
+        }
     }
     $existingQueries = $connection->pretend(fn() => $app->make(SqlServerVieFundRemoteRepository::class)
         ->fetchAllTransactionExportRowsAfter(null, ['fund_id' => 'CASHagch', 'mirror_fields' => true, ...$criteria], null, 100));

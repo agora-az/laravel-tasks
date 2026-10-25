@@ -25,7 +25,7 @@ let status = {
     throughput_label: 'Row backfill complete', rows_per_second: null,
     eta_label: 'Coverage verification (ETA unavailable)', eta_seconds: null,
     estimated_completion_at: null, progress_pct: 100, maintenance_phase: 'available',
-    activity_message: 'Backfill complete. Finding the first CASHagch transaction for Created date / USD.',
+    activity_message: 'Backfill complete. Finding the historical cash-ledger start for Created date / USD.',
 };
 script.runInNewContext({
     document: { querySelector: () => section },

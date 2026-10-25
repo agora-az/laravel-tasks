@@ -95,6 +95,7 @@ try {
         public array $cash = [];
         public array $funds = [];
         public array $calls = [];
+        public ?Closure $onCoverageCount = null;
         public function __construct() {}
         private function matching(array $filters): Collection
         {
@@ -133,10 +134,20 @@ try {
             $this->calls[] = ['count', $filters];
             return $this->matching($filters)->count();
         }
-        public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+        public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
         {
-            $this->calls[] = ['first_date', $filters];
-            return $this->matching($filters)->min('basis_date');
+            $this->calls[] = ['first_date', $dateBasis, $throughDate];
+            $column = $dateBasis === 'create_date' ? 'created_date' : $dateBasis;
+            $end = CarbonImmutable::parse($throughDate)->addDay()->startOfDay()->format('Y-m-d H:i:s.u');
+            return collect($this->cash)->pluck($column)->filter(fn(?string $date): bool =>
+                $date !== null && $date >= '1900-01-01 00:00:00' && $date < $end)->min();
+        }
+        public function countAllTransactionsForCoverage(array $filters): int
+        {
+            if ($this->onCoverageCount) {
+                ($this->onCoverageCount)();
+            }
+            return $this->countAllTransactions(null, $filters);
         }
         public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
         {
@@ -217,6 +228,8 @@ try {
         = $source->cash[26]->settlement_date = '2026-10-25 00:00:00.000000';
     $source->funds[27][] = ['fund_id' => 'CASHagch', 'fund_transaction_id' => 9999, 'source_id' => 'ZZ', 'transaction_type' => 'Purchase'];
     $source->funds[28] = [['fund_id' => 'CASHagch-extra', 'fund_transaction_id' => 1028, 'source_id' => 'NO', 'transaction_type' => 'Purchase']];
+    $source->cash[28]->created_date = $source->cash[28]->trade_date = $source->cash[28]->processing_date
+        = $source->cash[28]->settlement_date = '2019-06-07 00:00:00.000000';
     $source->funds[10][] = ['fund_id' => 'CASHagch', 'fund_transaction_id' => 9998, 'source_id' => 'ZZ', 'transaction_type' => 'Purchase'];
     $source->funds[3][1]['fund_id'] = 'CASHAGCH';
     foreach ([29, 30, 31] as $id) {
@@ -255,6 +268,19 @@ try {
     $app->instance(VieFundRemoteService::class, $source);
     $selector = new VieFundCashAgchReportSource();
     $criteria = ['date_from' => null, 'date_to' => '2026-10-24', 'date_basis' => 'settlement_date', 'currency_code' => '00', 'status_ids' => [6]];
+    $firstLocalCoverageDate = $selector->firstCoverageDate($criteria);
+    $check($firstLocalCoverageDate !== null && CarbonImmutable::parse($firstLocalCoverageDate)->toDateString() === '2019-06-07'
+        && $source->firstCashTransactionDate('settlement_date', $criteria['date_to']) === '2019-06-07 00:00:00.000000',
+        'Discovery must use a conservative unfiltered ledger bound, including an unrelated fund before report inception.');
+    $mysql = new Illuminate\Database\MySqlConnection(DB::connection()->getPdo(), ':memory:', '', ['driver' => 'mysql']);
+    $aggregate = new ReflectionMethod($selector, 'coverageAggregate');
+    $hintQueries = $mysql->pretend(function () use ($mysql, $selector, $aggregate): void {
+        $aggregate->invoke($selector, $mysql->table('viefund_transaction_mirror_rows'), 'MIN(created_date)');
+        $aggregate->invoke($selector, $mysql->table('viefund_transaction_mirror_rows'), 'COUNT(*)');
+    });
+    $check(count($hintQueries) === 2 && collect($hintQueries)->every(fn(array $query): bool =>
+        str_contains($query['query'], 'select /*+ MAX_EXECUTION_TIME(30000) */ ')),
+        'Both local lower-bound and monthly count SQL must carry the real MySQL execution deadline.');
     $check($selector->select($criteria)['data_source'] === 'viefund', 'A fund-ID backfill alone must not enable unverified report classification.');
     $manager = new class(new RuntimeSettings(), new ApplicationAdmin(), new VieFundAvailabilityWindow()) extends VieFundTransactionMirrorManager {
         public int $dispatches = 0;
@@ -268,7 +294,7 @@ try {
     $job = new SyncVieFundTransactionMirror();
     $upgrade = static function () use ($manager, $job, $availability, $source, $resolver, $check): void {
         $manager->startFundIdBackfill();
-        for ($stage = 0; $stage < 100 && !$manager->sync()->isReady(); ++$stage) {
+        for ($stage = 0; $stage < 2000 && !$manager->sync()->isReady(); ++$stage) {
             $job->handle($availability, $source, $resolver, $manager);
         }
         $check($manager->sync()->isReady(), 'Metadata upgrade did not finish in bounded stages.');
@@ -282,6 +308,71 @@ try {
         if ($call[0] === 'count') $check(substr($call[1]['date_from'], 0, 7) === substr($call[1]['date_to'], 0, 7), 'Coverage verification attempted an unbounded count.');
     }
     $check(collect($source->calls)->where(0, 'read')->isEmpty(), 'Coverage discovery must not hydrate ordered report rows.');
+    $check(collect($source->calls)->where(0, 'first_date')->pluck(1)->unique()->count() === 4,
+        'Historical lower-bound discovery must cover all four cash date columns.');
+    $sync->forceFill([
+        'state' => 'running', 'phase' => 'cashagch_verification', 'cashagch_verified_at' => null,
+        'cashagch_verification' => [
+            'basis' => 1, 'currency' => 0, 'month' => null, 'date_to' => '2026-10-24',
+            'scope_hash' => VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids),
+        ],
+    ])->save();
+    $job->handle($availability, $source, $resolver, $manager);
+    $sync->refresh();
+    $check($sync->cashagch_verification['basis'] === 1 && $sync->cashagch_verification['currency'] === 0
+        && $sync->cashagch_verification['month'] === '2019-06-01'
+        && $sync->fund_ids_verified_at !== null && $sync->rows_processed === $sync->expected_rows,
+        'A deployed legacy Trade/CAD discovery checkpoint must resume at the wider ledger bound without resetting completed backfill or scopes.');
+    $sync->forceFill([
+        'state' => 'running', 'phase' => 'cashagch_verification', 'cashagch_verified_at' => null,
+        'cashagch_verification' => [
+            'basis' => 1, 'currency' => 0, 'month' => '2026-09-01', 'date_to' => '2026-10-24',
+            'scope_hash' => VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids),
+        ],
+    ])->save();
+    $savedAudit = $sync->cashagch_verification;
+    $savedCompletion = $sync->last_batch_completed_at->toISOString();
+    $savedDispatches = $manager->dispatches;
+    $source->onCoverageCount = static function (): void {
+        throw new RuntimeException('Simulated database query deadline exceeded');
+    };
+    try {
+        $job->handle($availability, $source, $resolver, $manager);
+        $check(false, 'A coverage query deadline must not produce a successful stage.');
+    } catch (RuntimeException $exception) {
+        $check($exception->getMessage() === 'Simulated database query deadline exceeded', $exception->getMessage());
+    }
+    $sync->refresh();
+    $check($sync->cashagch_verification === $savedAudit
+        && $sync->last_batch_completed_at->toISOString() === $savedCompletion
+        && $sync->cashagch_verified_at === null && $manager->dispatches === $savedDispatches,
+        'Timed-out monthly checks must preserve their exact checkpoint and never dispatch a successful continuation.');
+    $job->failed(new RuntimeException('Simulated database query deadline exceeded'));
+    $check($manager->sync()->state === 'failed'
+        && str_contains($manager->sync()->last_error, 'deadline exceeded'),
+        'Exhausted query retries must visibly stop the run.');
+    $source->onCoverageCount = null;
+    $manager->resume();
+    $job->handle($availability, $source, $resolver, $manager);
+    $sync->refresh();
+    $check($sync->cashagch_verification['month'] === '2026-10-01'
+        && $sync->rows_processed === $sync->expected_rows,
+        'Resume after a query deadline must finish the saved month without repeating the metadata backfill.');
+    $pausedAudit = $sync->cashagch_verification;
+    $source->onCoverageCount = static function () use ($manager): void {
+        $manager->pause();
+    };
+    $job->handle($availability, $source, $resolver, $manager);
+    $source->onCoverageCount = null;
+    $check($manager->sync()->state === 'paused' && $manager->sync()->cashagch_verification === $pausedAudit,
+        'Pausing an in-flight monthly query must prevent its eventual result from advancing the saved checkpoint.');
+    $pausedCalls = count($source->calls);
+    $job->handle($availability, $source, $resolver, $manager);
+    $job->failed(new RuntimeException('Old worker timeout after pause'));
+    $check($manager->sync()->state === 'paused'
+        && $manager->sync()->cashagch_verification === $pausedAudit && count($source->calls) === $pausedCalls,
+        'Queued work and stale worker failures must leave a paused audit untouched.');
+    echo "PASS: database-deadline failures preserve checkpoints, stop explicitly, resume the saved month and respect pause\n";
     $sync->forceFill([
         'state' => 'running', 'phase' => 'cashagch_verification',
         'cashagch_verified_at' => null, 'rows_processed' => 100, 'expected_rows' => 100,
@@ -301,6 +392,7 @@ try {
         'Report fallback must distinguish verified fund IDs from incomplete historical coverage.');
     $sync->forceFill([
         'state' => 'ready', 'phase' => 'ready', 'cashagch_verified_at' => now(),
+        'cashagch_scope_hash' => VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids),
     ])->save();
     $check($manager->status($sync)['eta_label'] === 'Complete'
         && $manager->status($sync)['estimated_completion_at'] === null,
@@ -319,7 +411,8 @@ try {
             for ($i = 0; $i < 15 && $state['phase'] !== 'ready'; ++$i) {
                 $state = $run->advance($path, $path.'-mirror.xlsx', $selected, $state, static function (): void {});
             }
-            $check($state['phase'] === 'ready' && $state['source']['data_source'] === 'mirror', 'Mirror report did not complete.');
+            $check($state['phase'] === 'ready' && $state['source']['data_source'] === 'mirror',
+                'Mirror report did not complete: '.json_encode([$basis, $currency, $state['phase'], $state['source']], JSON_THROW_ON_ERROR));
             $check(count($source->calls) === $calls, 'Mirror generation must make zero VieFund calls.');
             $check($workbook($path.'-remote.xlsx') === $workbook($path.'-mirror.xlsx'), "Remote/mirror workbook mismatch: $basis, $currency, ".implode(',', $statuses));
             $summaryReader = new Reader();
@@ -382,6 +475,39 @@ try {
         $state = $run->advance($pinned, $pinned.'.xlsx', $criteria, $state, static function (): void {});
     }
     $check($state['phase'] === 'ready' && str_contains($state['source']['source_fallback_reason'], 'avoid mixing snapshots'), 'Remote restart must finish with its fallback explanation.');
+
+    $older = clone $source->cash[4];
+    $older->cash_transaction_id = $older->sort_id = 32;
+    $older->transaction_id = 'C-32';
+    $older->created_date = $older->trade_date = $older->processing_date = $older->settlement_date = '2018-01-10 00:00:00.000000';
+    $source->cash[32] = $older;
+    $source->funds[32] = [['fund_id' => 'CASHagch', 'fund_transaction_id' => 1032, 'source_id' => null,
+        'transaction_type' => 'Purchase']];
+    $sync->forceFill(['cashagch_verified_at' => null])->save();
+    $upgrade();
+    $sync->refresh();
+    $check($sync->cashagch_verified_at === null
+        && str_contains($sync->cashagch_verification_error, '2018-01-01')
+        && str_contains($sync->cashagch_verification_error, 'VieFund has 1 transactions; the mirror has 0'),
+        'Remote history preceding mirror/report inception must be compared, not skipped by discovery.');
+    $insert($older);
+    unset($source->cash[32], $source->funds[32]);
+    $sync->forceFill([
+        'state' => 'running', 'phase' => 'cashagch_verification',
+        'cashagch_verification' => [
+            'basis' => 0, 'currency' => 0, 'month' => null, 'date_to' => '2026-10-24',
+            'scope_hash' => VieFundCashAgchReportSource::scopeHash((array) $sync->currencies, (array) $sync->status_ids),
+        ],
+    ])->save();
+    $job->handle($availability, $source, $resolver, $manager);
+    $job->handle($availability, $source, $resolver, $manager);
+    $sync->refresh();
+    $check($sync->cashagch_verified_at === null
+        && str_contains($sync->cashagch_verification_error, '2018-01-01')
+        && str_contains($sync->cashagch_verification_error, 'VieFund has 0 transactions; the mirror has 1'),
+        'Local-only older history must also determine the conservative starting month and fail coverage.');
+    DB::table('viefund_transaction_mirror_rows')->where('cash_transaction_id', 32)->delete();
+    echo "PASS: conservative discovery rejects older missing history on either side without relying on report inception\n";
 
     $sync->forceFill(['cashagch_verified_at' => null])->save();
     DB::table('viefund_transaction_mirror_rows')->where('cash_transaction_id', 23)->delete();

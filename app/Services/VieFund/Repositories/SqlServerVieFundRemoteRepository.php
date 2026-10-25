@@ -7,6 +7,7 @@ use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use App\Services\VieFund\Contracts\VieFundRemoteRepositoryInterface;
 use Illuminate\Contracts\Pagination\Paginator as PaginatorContract;
+use Illuminate\Database\Connection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
@@ -372,23 +373,46 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
         return (int) $this->buildAllTransactionCashLedgerQuery($search, $filters)->count();
     }
 
-    public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+    public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
     {
-        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
-            $dateColumn = match ($this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null)) {
-                'create_date' => 'ct.dtCreated',
-                'trade_date' => 'ct.dtTrade',
-                'processing_date' => 'ct.dtProcessing',
-                'settlement_date' => 'ct.dtSettlement',
-                default => throw new InvalidArgumentException('Invalid cash-ledger date column selected.'),
-            };
-            // MIN avoids the ordered TOP(1) row goal that can scan history for an empty currency.
-            $date = $this->buildAllTransactionPageCandidateQuery($filters, false)->min($dateColumn);
-        } else {
-            $date = $this->buildAllTransactionCashLedgerQuery($search, $filters)->min('basis_date');
-        }
+        $dateColumn = match ($dateBasis) {
+            'create_date' => 'dtCreated',
+            'trade_date' => 'dtTrade',
+            'processing_date' => 'dtProcessing',
+            'settlement_date' => 'dtSettlement',
+            default => throw new InvalidArgumentException('Invalid coverage date basis selected.'),
+        };
+        // A wider ledger lower bound cannot skip eligible CASHagch history.
+        $date = $this->coverageConnection()
+            ->table(env('VIEFUND_DB_SCHEMA', 'dbo').'.UB_CashTrx')
+            ->where($dateColumn, '>=', '1900-01-01 00:00:00')
+            ->where($dateColumn, '<', Carbon::parse($throughDate)->addDay()->startOfDay()->toDateTimeString())
+            ->min($dateColumn);
 
         return $date === null ? null : (string) $date;
+    }
+
+    public function countAllTransactionsForCoverage(array $filters): int
+    {
+        if (!$this->canUseFastAllTransactionPageQuery(null, $filters)) {
+            throw new InvalidArgumentException('Coverage counts require cash-ledger filters without enrichment searches.');
+        }
+
+        return (int) $this->buildAllTransactionPageCandidateQuery($filters, false, $this->coverageConnection())->count();
+    }
+
+    private function coverageConnection(): Connection
+    {
+        $connection = DB::connection('viefund_verification_sqlsrv');
+        if (!$connection->pretending() && (
+            !defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')
+            || $connection->getReadPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME) !== 'sqlsrv'
+            || (int) $connection->getReadPdo()->getAttribute(constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')) !== 30
+        )) {
+            throw new \RuntimeException('CASHagch coverage verification requires the SQL Server driver with a 30-second query deadline.');
+        }
+
+        return $connection;
     }
 
     /**
@@ -562,7 +586,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
      * fund metadata. This prevents the interactive table from aggregating the
      * complete UB_FundTrxCash history merely to display 50–250 rows.
      */
-    private function buildAllTransactionPageCandidateQuery(array $filters, bool $selectId = true): \Illuminate\Database\Query\Builder
+    private function buildAllTransactionPageCandidateQuery(array $filters, bool $selectId = true, ?Connection $connection = null): \Illuminate\Database\Query\Builder
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
@@ -586,7 +610,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             $cashAccountScope['currency_code'] = (string) $filters['currency_code'];
         }
 
-        return DB::connection(self::CONNECTION)
+        return ($connection ?? DB::connection(self::CONNECTION))
             ->table("{$schema}.UB_CashTrx as ct")
             ->join("{$schema}.UB_CashAccount as ca", 'ca.ID', '=', 'ct.iCashAccountID')
             ->join("{$schema}.UB_Plan as p", 'p.ID', '=', 'ct.iPlanID')

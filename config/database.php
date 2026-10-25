@@ -1,5 +1,20 @@
 <?php
 
+$vieFundConnection = [
+    'driver' => 'sqlsrv',
+    'host' => env('VIEFUND_DB_HOST', 'localhost'),
+    'port' => env('VIEFUND_DB_PORT', 1433),
+    'database' => env('VIEFUND_DB_DATABASE', ''),
+    'username' => env('VIEFUND_DB_USERNAME', ''),
+    'password' => env('VIEFUND_DB_PASSWORD', ''),
+    'charset' => env('VIEFUND_DB_CHARSET', 'utf8'),
+    'prefix' => '',
+    'prefix_indexes' => true,
+    'encrypt' => env('VIEFUND_DB_ENCRYPT', 'yes'),
+    'trust_server_certificate' => env('VIEFUND_DB_TRUST_SERVER_CERTIFICATE', 'false'),
+    'login_timeout' => (int) env('VIEFUND_DB_LOGIN_TIMEOUT', 5),
+];
+
 return [
 
     'default' => env('DB_CONNECTION', 'mysql'),
@@ -64,19 +79,13 @@ return [
             'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
-        'viefund_sqlsrv' => [
-            'driver' => 'sqlsrv',
-            'host' => env('VIEFUND_DB_HOST', 'localhost'),
-            'port' => env('VIEFUND_DB_PORT', 1433),
-            'database' => env('VIEFUND_DB_DATABASE', ''),
-            'username' => env('VIEFUND_DB_USERNAME', ''),
-            'password' => env('VIEFUND_DB_PASSWORD', ''),
-            'charset' => env('VIEFUND_DB_CHARSET', 'utf8'),
-            'prefix' => '',
-            'prefix_indexes' => true,
-            'encrypt' => env('VIEFUND_DB_ENCRYPT', 'yes'),
-            'trust_server_certificate' => env('VIEFUND_DB_TRUST_SERVER_CERTIFICATE', 'false'),
-            'login_timeout' => (int) env('VIEFUND_DB_LOGIN_TIMEOUT', 5),
+        'viefund_sqlsrv' => $vieFundConnection,
+
+        'viefund_verification_sqlsrv' => [
+            ...$vieFundConnection,
+            'options' => defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')
+                ? [constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT') => 30]
+                : [],
         ],
 
     ],

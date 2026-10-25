@@ -307,7 +307,7 @@ class VieFundTransactionMirrorManager
                 default => (string) $currency,
             };
             $activity = $verification['month'] === null
-                ? "Backfill complete. Finding the first CASHagch transaction for {$basisLabel} / {$currencyLabel}."
+                ? "Backfill complete. Finding the historical cash-ledger start for {$basisLabel} / {$currencyLabel}."
                 : "Backfill complete. Checking CASHagch historical coverage for {$basisLabel} / {$currencyLabel} / ".substr($verification['month'], 0, 7).'.';
             if (in_array($sync->state, ['paused', 'failed'], true)) {
                 $activity = ($sync->state === 'paused' ? 'Verification paused. ' : 'Verification stopped. ').$activity;

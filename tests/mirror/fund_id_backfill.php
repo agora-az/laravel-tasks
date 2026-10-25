@@ -173,9 +173,13 @@ try {
         {
             return 1;
         }
-        public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+        public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
         {
             return null;
+        }
+        public function countAllTransactionsForCoverage(array $filters): int
+        {
+            return $this->countAllTransactions(null, $filters);
         }
         public function fetchAllTransactionExportRowsAfter(?string $search, array $filters, ?array $cursor, int $limit): Collection
         {

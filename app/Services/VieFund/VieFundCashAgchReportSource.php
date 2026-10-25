@@ -99,11 +99,29 @@ class VieFundCashAgchReportSource
         return $this->query($criteria)->count();
     }
 
-    public function firstDate(array $criteria): ?string
+    public function firstCoverageDate(array $criteria): ?string
     {
-        $date = $this->query($criteria)->min($this->dateColumn($criteria));
+        $dateColumn = $this->dateColumn($criteria);
+        $query = DB::table('viefund_transaction_mirror_rows as r')
+            ->where($dateColumn, '>=', '1900-01-01 00:00:00')
+            ->where($dateColumn, '<', CarbonImmutable::parse($criteria['date_to'])->addDay()->startOfDay()->toDateTimeString());
+        $date = $this->coverageAggregate($query, "MIN($dateColumn)");
 
         return $date === null ? null : (string) $date;
+    }
+
+    public function countForCoverage(array $criteria): int
+    {
+        return (int) $this->coverageAggregate($this->query($criteria), 'COUNT(*)');
+    }
+
+    private function coverageAggregate(Builder $query, string $expression): mixed
+    {
+        $hint = $query->getConnection()->getDriverName() === 'mysql'
+            ? '/*+ MAX_EXECUTION_TIME(30000) */ '
+            : '';
+
+        return $query->selectRaw($hint.$expression.' AS aggregate')->value('aggregate');
     }
 
     public function rows(array $criteria, ?array $cursor, int $limit): Collection

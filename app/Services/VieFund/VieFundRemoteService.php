@@ -54,9 +54,14 @@ class VieFundRemoteService
         return $this->repository->countAllTransactions($search, $filters);
     }
 
-    public function firstAllTransactionDate(?string $search = null, array $filters = []): ?string
+    public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
     {
-        return $this->repository->firstAllTransactionDate($search, $filters);
+        return $this->repository->firstCashTransactionDate($dateBasis, $throughDate);
+    }
+
+    public function countAllTransactionsForCoverage(array $filters): int
+    {
+        return $this->repository->countAllTransactionsForCoverage($filters);
     }
 
     public function latestEftMatchedTransactionPage(int $perPage = 100): ?array

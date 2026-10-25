@@ -451,15 +451,15 @@ class SyncVieFundTransactionMirror implements ShouldQueue
         $error = null;
         try {
             if ($audit['month'] === null) {
-                $firstRemote = $remote->firstAllTransactionDate(null, VieFundCashAgchReport::filters($criteria));
-                $firstLocal = $local->firstDate($criteria);
+                $firstRemote = $remote->firstCashTransactionDate($criteria['date_basis'], $criteria['date_to']);
+                $firstLocal = $local->firstCoverageDate($criteria);
                 $first = array_filter([$firstRemote, $firstLocal]);
                 $audit['month'] = $first !== [] ? CarbonImmutable::parse(min($first))->startOfMonth()->toDateString() : null;
             } else {
                 $criteria['date_from'] = $audit['month'];
                 $criteria['date_to'] = min(CarbonImmutable::parse($audit['month'])->endOfMonth()->toDateString(), $audit['date_to']);
-                $expected = $remote->countAllTransactions(null, VieFundCashAgchReport::filters($criteria));
-                $actual = $local->count($criteria);
+                $expected = $remote->countAllTransactionsForCoverage(VieFundCashAgchReport::filters($criteria));
+                $actual = $local->countForCoverage($criteria);
                 if ($expected !== $actual) {
                     $error = "CASHagch mirror coverage verification failed for {$criteria['date_basis']}, {$criteria['currency_code']}, {$audit['month']}: VieFund has $expected transactions; the mirror has $actual. Refresh the mirror before retrying verification.";
                 }
