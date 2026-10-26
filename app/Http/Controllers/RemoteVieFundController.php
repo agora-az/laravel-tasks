@@ -926,7 +926,16 @@ class RemoteVieFundController extends Controller
 
     public function startAllTransactionsExport(Request $request): JsonResponse
     {
+        $submittedRequestId = $request->input('request_id');
+        $requestId = is_string($submittedRequestId) && Str::isUuid($submittedRequestId)
+            ? $submittedRequestId
+            : (string) Str::uuid();
+        $this->logAllTransactionsExport('info', 'Export start requested.', [
+            'request_id' => $requestId,
+            'secure' => $request->secure(),
+        ]);
         $validated = $request->validate([
+            'request_id' => ['nullable', 'uuid'],
             'search' => ['nullable', 'string', 'max:120'],
             'filter_customer_name' => ['nullable', 'string', 'max:255'],
             'filter_plan_account_id' => ['nullable', 'string', 'max:100'],
@@ -975,6 +984,7 @@ class RemoteVieFundController extends Controller
             return response()->json([
                 'success' => false,
                 'state' => 'waiting_for_cache',
+                'request_id' => $requestId,
                 'message' => 'Export queued in this browser. It will start when the period cache is complete.',
                 'retry_after_seconds' => 3,
                 'working_set' => $this->workingSetManager->status($workingSet),
@@ -984,12 +994,14 @@ class RemoteVieFundController extends Controller
         try {
             $phpPath = $this->consolePhpBinary();
         } catch (Throwable $exception) {
-            Log::error('Unable to find PHP CLI for the All Transactions export.', [
+            $this->logAllTransactionsExport('error', 'Export PHP CLI unavailable.', [
+                'request_id' => $requestId,
                 'exception' => $exception,
             ]);
 
             return response()->json([
                 'success' => false,
+                'request_id' => $requestId,
                 'message' => 'The export process could not be started because PHP CLI is unavailable.',
             ], 500, $this->exportStatusNoCacheHeaders());
         }
@@ -1000,16 +1012,40 @@ class RemoteVieFundController extends Controller
         if (!is_dir($reportsDirectory)) {
             @mkdir($reportsDirectory, 0775, true);
         }
+        if (!is_dir($reportsDirectory) || !is_writable($reportsDirectory)) {
+            $this->logAllTransactionsExport('error', 'Export report directory is not writable.', [
+                'request_id' => $requestId,
+                'run_id' => $runId,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'request_id' => $requestId,
+                'message' => 'Export storage is unavailable. Please contact support with the reference shown.',
+            ], 503, $this->exportStatusNoCacheHeaders());
+        }
 
         $lockFile = $reportsDirectory . "/viefund-all-transactions-{$userId}.lock";
         $statusFile = $this->allTransactionsStatusFile($userId, $runId);
         $hasLiveLock = file_exists($lockFile)
             && (time() - filemtime($lockFile)) < self::ALL_TRANSACTIONS_EXPORT_LOCK_TTL_SECONDS;
         if ($hasLiveLock) {
+            $lock = json_decode((string) file_get_contents($lockFile), true);
+            $existingRunId = is_array($lock) ? ($lock['run_id'] ?? null) : null;
+            $canResume = is_string($existingRunId) && Str::isUuid($existingRunId)
+                && (int) ($lock['user_id'] ?? 0) === $userId;
+            $this->logAllTransactionsExport('info', 'Export start blocked by existing run.', [
+                'request_id' => $requestId,
+                'run_id' => $canResume ? $existingRunId : null,
+            ]);
+
             return response()->json([
                 'success' => false,
+                'state' => $canResume ? 'running' : 'conflict',
+                'run_id' => $canResume ? $existingRunId : null,
+                'request_id' => $requestId,
                 'message' => 'Your previous All Transactions export is still running.',
-            ], 409);
+            ], 409, $this->exportStatusNoCacheHeaders());
         }
 
         $outputBase = sprintf(
@@ -1018,13 +1054,16 @@ class RemoteVieFundController extends Controller
             now()->format('Ymd_His'),
             substr(str_replace('-', '', $runId), 0, 8)
         );
-        file_put_contents($lockFile, json_encode([
+        $lockPayload = [
             'run_id' => $runId,
             'user_id' => $userId,
             'started_at' => now()->toIso8601String(),
-        ], JSON_PRETTY_PRINT));
-        file_put_contents($statusFile, json_encode([
+        ];
+        $statusPayload = [
             'run_id' => $runId,
+            'request_id' => $requestId,
+            'user_id' => $userId,
+            'dispatch_host' => gethostname(),
             'inProgress' => true,
             'success' => null,
             'message' => 'All Transactions export queued...',
@@ -1034,7 +1073,24 @@ class RemoteVieFundController extends Controller
             'working_set_generation' => $workingSet?->readableGeneration(),
             'started_at' => now()->toIso8601String(),
             'updated_at' => now()->toIso8601String(),
-        ], JSON_PRETTY_PRINT));
+        ];
+        try {
+            $this->writeJsonAtomically($lockFile, $lockPayload);
+            $this->writeJsonAtomically($statusFile, $statusPayload);
+        } catch (Throwable $exception) {
+            @unlink($lockFile);
+            $this->logAllTransactionsExport('error', 'Export tracking could not be saved.', [
+                'request_id' => $requestId,
+                'run_id' => $runId,
+                'exception' => $exception,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'request_id' => $requestId,
+                'message' => 'Export tracking storage is unavailable. Please contact support with the reference shown.',
+            ], 503, $this->exportStatusNoCacheHeaders());
+        }
 
         $repeatArgs = static function (string $option, array $values): string {
             return implode(' ', array_map(
@@ -1097,40 +1153,59 @@ class RemoteVieFundController extends Controller
             escapeshellarg($logPath)
         );
 
-        Log::info('Dispatching background VieFund All Transactions export.', [
-            'user_id' => $userId,
+        $this->logAllTransactionsExport('info', 'Dispatching export worker.', [
+            'request_id' => $requestId,
             'run_id' => $runId,
-            'output_base' => $outputBase,
         ]);
 
-        $process = proc_open($command, [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ], $pipes);
-        if (!is_resource($process)) {
+        try {
+            $process = proc_open($command, [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ], $pipes);
+            if (!is_resource($process)) {
+                throw new \RuntimeException('proc_open did not return a process.');
+            }
+            fclose($pipes[0]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            $exitCode = proc_close($process);
+            if ($exitCode !== 0) {
+                throw new \RuntimeException("Export dispatch shell exited with code {$exitCode}.");
+            }
+        } catch (Throwable $exception) {
             @unlink($lockFile);
-            file_put_contents($statusFile, json_encode([
+            $this->logAllTransactionsExport('error', 'Export worker dispatch failed.', [
+                'request_id' => $requestId,
                 'run_id' => $runId,
+                'exception' => $exception,
+            ]);
+            $this->writeJsonAtomically($statusFile, array_merge($statusPayload, [
                 'inProgress' => false,
                 'success' => false,
                 'message' => 'The export process could not be started.',
                 'completed_at' => now()->toIso8601String(),
-            ], JSON_PRETTY_PRINT));
+            ]));
 
-            return response()->json(['success' => false, 'message' => 'The export process could not be started.'], 500);
+            return response()->json([
+                'success' => false,
+                'request_id' => $requestId,
+                'message' => 'The export process could not be started.',
+            ], 500, $this->exportStatusNoCacheHeaders());
         }
 
-        fclose($pipes[0]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        proc_close($process);
+        $this->logAllTransactionsExport('info', 'Export dispatch accepted.', [
+            'request_id' => $requestId,
+            'run_id' => $runId,
+        ]);
 
         return response()->json([
             'success' => true,
             'message' => 'All Transactions Excel export started.',
             'run_id' => $runId,
-        ], 202);
+            'request_id' => $requestId,
+        ], 202, $this->exportStatusNoCacheHeaders());
     }
 
     public function allTransactionsExportStatus(Request $request): JsonResponse
@@ -1139,12 +1214,13 @@ class RemoteVieFundController extends Controller
         if ($runId === null) {
             return response()->json([
                 'run_id' => null,
+                'state' => 'invalid_run',
                 'inProgress' => false,
-                'success' => null,
-                'message' => 'Idle',
+                'success' => false,
+                'message' => 'A valid export tracking ID is required.',
                 'progress_pct' => null,
                 'download_url' => null,
-            ])->withHeaders($this->exportStatusNoCacheHeaders());
+            ], 422, $this->exportStatusNoCacheHeaders());
         }
 
         $userId = (int) auth()->id();
@@ -1155,39 +1231,67 @@ class RemoteVieFundController extends Controller
             'run_id' => $runId,
             'inProgress' => $hasLiveLock,
             'success' => null,
-            'message' => $hasLiveLock ? 'Export in progress...' : 'Idle',
+            'state' => $hasLiveLock ? 'running' : 'unavailable',
+            'message' => $hasLiveLock
+                ? 'Export in progress...'
+                : 'The previous export is no longer available. Generate a new Excel export.',
             'progress_pct' => null,
             'download_url' => null,
         ];
 
         if (is_file($statusFile)) {
-            $parsed = json_decode((string) file_get_contents($statusFile), true);
-            if (is_array($parsed)) {
-                $payload = array_merge($payload, $parsed);
-                $payload['inProgress'] = $hasLiveLock
-                    && (($parsed['inProgress'] ?? false) === true)
-                    && (($parsed['success'] ?? null) === null);
+            $parsed = json_decode((string) @file_get_contents($statusFile), true);
+            if (!is_array($parsed) || ($parsed['run_id'] ?? null) !== $runId
+                || !is_bool($parsed['inProgress'] ?? null) || !array_key_exists('success', $parsed)
+                || !in_array($parsed['success'], [null, true, false], true)) {
+                $this->logAllTransactionsExport('error', 'Export status is unreadable or invalid.', [
+                    'run_id' => $runId,
+                    'has_live_lock' => $hasLiveLock,
+                ]);
+
+                return response()->json([
+                    'run_id' => $runId,
+                    'message' => 'Export tracking could not be read. Reconnect to check the existing export.',
+                ], 503, $this->exportStatusNoCacheHeaders());
             }
+            $payload = array_merge($payload, $parsed);
+            $payload['state'] = ($parsed['success'] ?? null) === true ? 'complete'
+                : (($parsed['success'] ?? null) === false ? 'failed' : 'running');
+            $payload['inProgress'] = $hasLiveLock
+                && (($parsed['inProgress'] ?? false) === true)
+                && (($parsed['success'] ?? null) === null);
+        } elseif (!$hasLiveLock) {
+            $this->logAllTransactionsExport('warning', 'Export tracking no longer exists.', ['run_id' => $runId]);
         }
 
         $workerPid = (int) ($payload['worker_pid'] ?? 0);
         if ($hasLiveLock && $workerPid === 0 && !empty($payload['updated_at'])) {
+            $startupTimedOut = false;
             try {
-                if (Carbon::parse((string) $payload['updated_at'])->lt(now()->subMinute())) {
-                    @unlink($lockFile);
-                    $payload['inProgress'] = false;
-                    $payload['success'] = false;
-                    $payload['message'] = 'The export process stopped unexpectedly. Please retry the export.';
-                    $payload['completed_at'] = now()->toIso8601String();
-                    $payload['updated_at'] = now()->toIso8601String();
-                    $this->writeJsonAtomically($statusFile, $payload);
-                    $hasLiveLock = false;
-                }
-            } catch (Exception) {
-                // Leave the normal lock timeout as the fallback for malformed legacy status data.
+                $startupTimedOut = Carbon::parse((string) $payload['updated_at'])->lt(now()->subMinute());
+            } catch (Exception $exception) {
+                $this->logAllTransactionsExport('warning', 'Export startup timestamp is invalid.', [
+                    'run_id' => $runId,
+                    'exception' => $exception,
+                ]);
+            }
+            if ($startupTimedOut) {
+                @unlink($lockFile);
+                $payload['inProgress'] = false;
+                $payload['success'] = false;
+                $payload['message'] = 'The export process stopped unexpectedly. Please retry the export.';
+                $payload['completed_at'] = now()->toIso8601String();
+                $payload['updated_at'] = now()->toIso8601String();
+                $this->writeJsonAtomically($statusFile, $payload);
+                $this->logAllTransactionsExport('error', 'Export worker did not acknowledge startup.', [
+                    'run_id' => $runId,
+                    'request_id' => $payload['request_id'] ?? null,
+                ]);
+                $hasLiveLock = false;
             }
         }
-        if ($hasLiveLock && $workerPid > 0 && function_exists('posix_kill')) {
+        if ($hasLiveLock && $workerPid > 0 && ($payload['worker_host'] ?? null) === gethostname()
+            && function_exists('posix_kill')) {
             $workerIsRunning = @posix_kill($workerPid, 0);
             if (!$workerIsRunning && function_exists('posix_get_last_error') && posix_get_last_error() === 1) {
                 // EPERM means the process exists but this PHP process cannot signal it.
@@ -1202,19 +1306,73 @@ class RemoteVieFundController extends Controller
                 $payload['completed_at'] = now()->toIso8601String();
                 $payload['updated_at'] = now()->toIso8601String();
                 $this->writeJsonAtomically($statusFile, $payload);
+                $this->logAllTransactionsExport('error', 'Export worker stopped unexpectedly.', [
+                    'run_id' => $runId,
+                    'request_id' => $payload['request_id'] ?? null,
+                    'worker_pid' => $workerPid,
+                    'processed_transactions' => $payload['processed_transactions'] ?? null,
+                ]);
             }
         }
 
-        if (($payload['success'] ?? null) === true && !empty($payload['output_relative_path'])) {
-            $relativePath = ltrim((string) $payload['output_relative_path'], '/');
+        if ($payload['state'] === 'running' && !$payload['inProgress'] && $payload['success'] === null) {
+            $payload['state'] = 'unavailable';
+            $payload['message'] = 'Export tracking has expired. Generate a new Excel export.';
+            $this->logAllTransactionsExport('warning', 'Export lock expired before a terminal status.', [
+                'run_id' => $runId,
+                'request_id' => $payload['request_id'] ?? null,
+            ]);
+        }
+        if ($payload['success'] === false) {
+            $payload['state'] = 'failed';
+        }
+        if (($payload['success'] ?? null) === true) {
+            $relativePath = ltrim((string) ($payload['output_relative_path'] ?? ''), '/');
             if (str_starts_with($relativePath, 'reports/') && is_file(storage_path('app/' . $relativePath))) {
                 $payload['download_url'] = route('viefund-transactions.export.download', [
                     'run_id' => $runId,
+                ], false);
+            } else {
+                $payload['state'] = 'unavailable';
+                $payload['success'] = false;
+                $payload['message'] = 'The completed Excel file is no longer available. Generate a new export.';
+                $this->logAllTransactionsExport('warning', 'Completed export file is missing.', [
+                    'run_id' => $runId,
+                    'request_id' => $payload['request_id'] ?? null,
                 ]);
             }
         }
 
         return response()->json($payload)->withHeaders($this->exportStatusNoCacheHeaders());
+    }
+
+    public function reportAllTransactionsExportIssue(Request $request): JsonResponse
+    {
+        $diagnostic = $request->validate([
+            'request_id' => ['nullable', 'uuid'],
+            'run_id' => ['nullable', 'uuid'],
+            'phase' => ['required', Rule::in(['start', 'status', 'storage'])],
+            'category' => ['required', Rule::in(['network', 'timeout', 'http', 'invalid_response', 'storage', 'recovered'])],
+            'http_status' => ['nullable', 'integer', 'between:100,599'],
+            'attempt' => ['required', 'integer', 'between:0,100'],
+            'online' => ['required', 'boolean'],
+        ]);
+        $this->logAllTransactionsExport(
+            $diagnostic['category'] === 'recovered' ? 'info' : 'warning',
+            'Browser export diagnostic.',
+            $diagnostic
+        );
+
+        return response()->json(['received' => true], 200, $this->exportStatusNoCacheHeaders());
+    }
+
+    private function logAllTransactionsExport(string $level, string $message, array $context): void
+    {
+        Log::channel('all_transactions_export')->log($level, $message, array_merge([
+            'user_id' => auth()->id(),
+            'instance' => gethostname(),
+            'pid' => getmypid(),
+        ], $context));
     }
 
     public function downloadAllTransactionsExport(Request $request): BinaryFileResponse|RedirectResponse
@@ -1882,11 +2040,12 @@ class RemoteVieFundController extends Controller
         $encoded = json_encode($payload, JSON_PRETTY_PRINT);
         $temporaryFile = $encoded !== false ? tempnam($directory, basename($path) . '.tmp.') : false;
         if ($temporaryFile === false) {
-            return;
+            throw new \RuntimeException('Unable to create an export tracking temporary file.');
         }
 
         if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $path)) {
             @unlink($temporaryFile);
+            throw new \RuntimeException('Unable to publish export tracking data.');
         }
     }
 

@@ -129,3 +129,71 @@ tail -100 /home/LogFiles/startup.log
 
 Expected Supervisor programs are `laravel-queue-cache-00`,
 `laravel-queue-general-00`, `laravel-queue-reports-00`, and `laravel-scheduler`.
+
+## All Transactions export diagnostics
+
+All Transactions exports still run as background CLI processes, not on the
+resumable CASHagch queue. A restart can interrupt them, and a clean deployment
+can remove report files. These changes improve diagnosis and reconnection; they
+do not make an interrupted All Transactions export resumable.
+
+The export form, status requests and download URLs use the current origin to
+avoid cross-host or mixed-content requests behind Azure/custom-domain proxies.
+Browser tracking is scoped to the signed-in account. Old unscoped tracking IDs
+are not imported because they may belong to another account.
+
+Start requests have a browser-generated request UUID. Accepted exports also have
+a run UUID. Connection/startup failures show the available reference so support
+can correlate browser reports with server events. A lost startup response is not
+automatically retried: clicking Export Excel again can reconnect to an existing
+run through the server's conflict response. Interrupted status requests retry
+twice, then retain their tracking ID and offer reconnection via Export Excel
+without another start request. Session errors instead instruct the user to
+reload/sign in. Unavailable old runs are informational, not red "Idle" errors.
+
+The `all_transactions_export` logging channel rotates daily and retains 14 files.
+On Azure App Service (`WEBSITE_SITE_NAME` present), it defaults to
+`/home/LogFiles/all-transactions-export-YYYY-MM-DD.log`, outside the clean-deployed
+webroot. Elsewhere it uses `storage/logs`. Override the base path with
+`ALL_TRANSACTIONS_EXPORT_LOG_PATH` and rebuild the configuration cache. Log level
+follows `LOG_LEVEL`; use `info` to retain lifecycle events.
+
+Events cover start receipt, dispatch, worker startup/completion/failure, invalid
+or missing status/workbook files, failed startup acknowledgements and confirmed
+dead workers. Events include account/reference and instance/PID metadata where
+available; completion includes duration, rows, sheets, output size, stage timings
+and peak PHP memory. PID liveness is checked only on the worker's own instance.
+Status publication failures now fail explicitly instead of silently losing
+progress. PHP failures before the worker boots still go to
+`storage/logs/viefund-all-transactions-export.log`.
+
+An authenticated, CSRF-protected endpoint, throttled to 20 requests/minute, records
+allowlisted browser metadata: phase, failure category, HTTP status, retry attempt,
+online flag and UUID references. It does not collect form filters, customer or
+transaction data, browser URLs, arbitrary error text or CSRF tokens. If the browser
+cannot reach that endpoint, it records a console warning instead; a total network
+outage cannot reliably be reported to the server at that moment.
+
+For an incident, collect the time (including timezone) and displayed reference:
+
+```bash
+grep -F 'REFERENCE-UUID' /home/LogFiles/all-transactions-export-*.log
+tail -100 /home/site/wwwroot/storage/logs/viefund-all-transactions-export.log
+tail -100 /home/LogFiles/startup.log
+```
+
+If the start event exists without a browser response, compare dispatch and worker
+events. Dispatch without worker startup points to CLI/bootstrap/process failure;
+worker startup without completion/failure points to an interruption or hard kill.
+Correlate these with App Service restarts, deployments and memory/CPU metrics.
+Browser network/timeout reports alone do not establish the underlying cause.
+If no start event exists, inspect the browser Network/Console records and Azure
+access/platform logs; the request may not have reached Laravel.
+
+Regression checks:
+
+```bash
+node tests/exports/all_transactions_export_ui.js
+php tests/exports/all_transactions_export_status.php
+php tests/exports/all_transactions_fund_id.php
+```

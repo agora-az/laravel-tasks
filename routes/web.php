@@ -89,6 +89,9 @@ Route::middleware('auth.check')->group(function () {
     Route::post('/viefund-transactions/export', [RemoteVieFundController::class, 'startAllTransactionsExport'])->name('viefund-transactions.export.start');
     Route::get('/viefund-transactions/export/status', [RemoteVieFundController::class, 'allTransactionsExportStatus'])->name('viefund-transactions.export.status');
     Route::get('/viefund-transactions/export/download', [RemoteVieFundController::class, 'downloadAllTransactionsExport'])->name('viefund-transactions.export.download');
+    Route::post('/viefund-transactions/export/diagnostics', [RemoteVieFundController::class, 'reportAllTransactionsExportIssue'])
+        ->middleware('throttle:20,1')
+        ->name('viefund-transactions.export.diagnostics');
 
     Route::get('/docs', [DocumentationController::class, 'index'])->name('docs.index');
     Route::get('/docs/{document}', [DocumentationController::class, 'show'])->name('docs.show');

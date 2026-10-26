@@ -35,6 +35,15 @@ return [
     */
 
     'channels' => [
+        'all_transactions_export' => [
+            'driver' => 'daily',
+            'path' => env('ALL_TRANSACTIONS_EXPORT_LOG_PATH', env('WEBSITE_SITE_NAME')
+                ? '/home/LogFiles/all-transactions-export.log'
+                : storage_path('logs/all-transactions-export.log')),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => 14,
+        ],
+
         'stack' => [
             'driver' => 'stack',
             'channels' => [env('LOG_STACK', 'single')],

@@ -23,6 +23,7 @@ use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use OpenSpout\Common\Entity\Cell\DateTimeCell;
 use OpenSpout\Common\Entity\Cell\FormulaCell;
 use OpenSpout\Common\Entity\Cell\NumericCell;
@@ -98,6 +99,12 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $lockFile = $this->stringOption('lock-file');
         $outputBase = $this->stringOption('output-base');
         $this->runId = $this->stringOption('run-id');
+        $logger = Log::channel('all_transactions_export');
+        $logger->withContext([
+            'run_id' => $this->runId,
+            'instance' => gethostname(),
+            'worker_pid' => getmypid(),
+        ]);
         $writer = null;
         $writerIsOpen = false;
         $outputAbsolutePath = '';
@@ -111,6 +118,7 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         ];
 
         try {
+            $logger->info('Export worker started.');
             if ($outputBase === '') {
                 throw new \InvalidArgumentException('The --output-base option is required.');
             }
@@ -1086,6 +1094,14 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
             ]);
 
             $this->info('Export generated: ' . $outputRelativePath);
+            $logger->info('Export worker completed.', [
+                'duration_seconds' => $duration,
+                'processed_transactions' => $processedTransactions,
+                'processed_sheets' => count($sheetSummaries),
+                'output_bytes' => filesize($outputAbsolutePath),
+                'peak_memory_bytes' => memory_get_peak_usage(true),
+                'timings_seconds' => $this->roundedTimings($stageTimings),
+            ]);
 
             return self::SUCCESS;
         } catch (Throwable $exception) {
@@ -1100,16 +1116,26 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
                 @unlink($outputAbsolutePath);
             }
             report($exception);
-            $this->writeStatus($statusFile, [
-                'inProgress' => false,
-                'success' => false,
-                'message' => 'The All Transactions export failed: ' . $exception->getMessage(),
-                'progress_pct' => null,
-                'started_at' => $startedAtIso,
-                'updated_at' => now()->toIso8601String(),
-                'completed_at' => now()->toIso8601String(),
+            $logger->error('Export worker failed.', [
+                'exception' => $exception,
+                'duration_seconds' => round(microtime(true) - $startedAt, 2),
+                'peak_memory_bytes' => memory_get_peak_usage(true),
                 'timings_seconds' => $this->roundedTimings($stageTimings),
             ]);
+            try {
+                $this->writeStatus($statusFile, [
+                    'inProgress' => false,
+                    'success' => false,
+                    'message' => 'The All Transactions export failed: ' . $exception->getMessage(),
+                    'progress_pct' => null,
+                    'started_at' => $startedAtIso,
+                    'updated_at' => now()->toIso8601String(),
+                    'completed_at' => now()->toIso8601String(),
+                    'timings_seconds' => $this->roundedTimings($stageTimings),
+                ]);
+            } catch (Throwable $statusException) {
+                $logger->error('Export failure status could not be saved.', ['exception' => $statusException]);
+            }
             $this->error($exception->getMessage());
 
             return self::FAILURE;
@@ -2600,15 +2626,17 @@ class GenerateVieFundAllTransactionsExportCommand extends Command
         $status = array_merge(is_array($existing) ? $existing : [], [
             'run_id' => $this->runId,
             'worker_pid' => getmypid(),
+            'worker_host' => gethostname(),
         ], $payload);
         $encoded = json_encode($status, JSON_PRETTY_PRINT);
         $temporaryFile = $encoded !== false ? tempnam($directory, basename($statusFile) . '.tmp.') : false;
         if ($temporaryFile === false) {
-            return;
+            throw new \RuntimeException('Unable to create an export status temporary file.');
         }
 
         if (@file_put_contents($temporaryFile, $encoded, LOCK_EX) === false || !@rename($temporaryFile, $statusFile)) {
             @unlink($temporaryFile);
+            throw new \RuntimeException('Unable to publish export status data.');
         }
     }
 

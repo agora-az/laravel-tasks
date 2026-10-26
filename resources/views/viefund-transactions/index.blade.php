@@ -1088,7 +1088,7 @@
             </div>
         </div>
 
-        <form id="all-transactions-excel-form" action="{{ route('viefund-transactions.export.start') }}" method="POST" style="display:none;">
+        <form id="all-transactions-excel-form" action="{{ route('viefund-transactions.export.start', [], false) }}" method="POST" style="display:none;">
             @csrf
             <input type="hidden" name="search" value="{{ $search }}">
             <input type="hidden" name="filter_customer_name" value="{{ $filters['customer_name'] ?? '' }}">
@@ -1187,9 +1187,12 @@
 
 <script>
 (() => {
-    const ACTIVE_RUN_KEY = 'viefundAllTransactionsActiveRunId';
+    const ACTIVE_RUN_KEY = 'viefundAllTransactionsActiveRunId:{{ (int) auth()->id() }}';
     let pollTimer = null;
-    let activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
+    let activeRunId = null;
+    let exportRequestId = null;
+    let exportPollFailures = 0;
+    let exportConnectionInterrupted = false;
     let lastProgress = 0;
     let reconciliationMatchesLoaded = false;
     let reconciliationMatchesLoading = false;
@@ -1815,10 +1818,12 @@
         workingSetStatus.dataset.ready = status.ready ? '1' : '0';
         if (exportButton) {
             exportButton.dataset.cacheReady = status.ready ? '1' : '0';
-            exportButton.title = status.ready
-                ? 'Export current results to a single-sheet Excel workbook'
-                : 'Export is available when period caching completes';
-            if (exportButton.dataset.busy !== '1') exportButton.disabled = !status.ready;
+            exportButton.title = activeRunId
+                ? 'Reconnect to the existing Excel export'
+                : (status.ready
+                    ? 'Export current results to a single-sheet Excel workbook'
+                    : 'Export is available when period caching completes');
+            if (exportButton.dataset.busy !== '1') exportButton.disabled = !status.ready && !activeRunId;
         }
 
         if (status.ready) {
@@ -2375,7 +2380,7 @@
 
     const setBusy = (button, busy) => {
         button.dataset.busy = busy ? '1' : '0';
-        button.disabled = busy || button.dataset.cacheReady !== '1';
+        button.disabled = busy || (button.dataset.cacheReady !== '1' && !activeRunId);
         button.style.opacity = busy ? '.65' : '1';
         button.style.cursor = busy ? 'wait' : (button.disabled ? 'not-allowed' : 'pointer');
     };
@@ -2388,18 +2393,104 @@
         window.setTimeout(() => frame.remove(), 60000);
     };
 
+    const reportExportIssue = (phase, category, httpStatus = null) => {
+        const diagnostic = {
+            request_id: exportRequestId,
+            run_id: activeRunId,
+            phase,
+            category,
+            http_status: httpStatus,
+            attempt: exportPollFailures,
+            online: navigator.onLine !== false,
+        };
+        console.warn('All Transactions export diagnostic:', diagnostic);
+        fetch('{{ route('viefund-transactions.export.diagnostics', [], false) }}', {
+            method: 'POST',
+            credentials: 'same-origin',
+            keepalive: true,
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: JSON.stringify(diagnostic),
+        }).then((response) => {
+            if (!response.ok) console.warn('Export diagnostic could not be recorded:', response.status);
+        }).catch((error) => console.warn('Export diagnostic could not reach the server:', error.name));
+    };
+
+    const saveExportRun = (runId) => {
+        try {
+            if (runId) localStorage.setItem(ACTIVE_RUN_KEY, runId);
+            else localStorage.removeItem(ACTIVE_RUN_KEY);
+        } catch (_) {
+            reportExportIssue('storage', 'storage');
+        }
+    };
+
+    const exportError = (message, category, httpStatus = null) => Object.assign(
+        new Error(message), {category, httpStatus}
+    );
+    const requestExport = async (url, options = {}, timeoutMs = 15000) => {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(url, {...options, credentials: 'same-origin', signal: controller.signal});
+            if ([401, 403, 419].includes(response.status) || response.redirected) {
+                throw exportError('Your session may have expired. Reload the page and sign in again before retrying.', 'http', response.status);
+            }
+            let data;
+            try {
+                data = await parseJsonResponse(response, 'The export server returned an unreadable response');
+            } catch (_) {
+                throw exportError(`The export server returned an unreadable response (HTTP ${response.status}). Reconnect or reload the page.`, 'invalid_response', response.status);
+            }
+            if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                throw exportError('The export server returned an invalid response. Reconnect or reload the page.', 'invalid_response', response.status);
+            }
+            if (!response.ok && !(response.status === 409 && ['waiting_for_cache', 'running'].includes(data.state))) {
+                const validationMessage = data.errors ? Object.values(data.errors).flat()[0] : null;
+                throw exportError(
+                    validationMessage || `${data.message || 'The export request failed'} (HTTP ${response.status}).`,
+                    'http', response.status
+                );
+            }
+            return data;
+        } catch (error) {
+            if (error.category) throw error;
+            throw exportError(
+                error.name === 'AbortError'
+                    ? 'The export server took too long to respond.'
+                    : 'The export server could not be reached. Check your connection.',
+                error.name === 'AbortError' ? 'timeout' : 'network'
+            );
+        } finally {
+            window.clearTimeout(timeout);
+        }
+    };
+
+    const exportReference = () => ` Reference: ${activeRunId || exportRequestId || 'unavailable'}.`;
+
     const poll = async (button, status) => {
         if (!activeRunId) return;
+        const requestedRunId = activeRunId;
 
         try {
-            const statusUrl = new URL('{{ route('viefund-transactions.export.status') }}', window.location.origin);
-            statusUrl.searchParams.set('run_id', activeRunId);
-            const response = await fetch(statusUrl.toString(), {
+            const statusUrl = new URL('{{ route('viefund-transactions.export.status', [], false) }}', window.location.origin);
+            statusUrl.searchParams.set('run_id', requestedRunId);
+            const data = await requestExport(statusUrl.toString(), {
                 headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
                 cache: 'no-store',
             });
-            const data = await response.json();
-            if (data.run_id !== activeRunId) return;
+            if (activeRunId !== requestedRunId) return;
+            if (data.run_id !== requestedRunId || typeof data.inProgress !== 'boolean') {
+                throw exportError('The export server returned mismatched tracking information.', 'invalid_response');
+            }
+            exportRequestId = data.request_id || exportRequestId;
+            if (exportConnectionInterrupted) reportExportIssue('status', 'recovered');
+            exportConnectionInterrupted = false;
+            exportPollFailures = 0;
 
             if (data.inProgress) {
                 const reportedProgress = Number(data.progress_pct || 0);
@@ -2434,49 +2525,68 @@
 
             window.clearTimeout(pollTimer);
             pollTimer = null;
-            setBusy(button, false);
             if (data.success === true && data.download_url) {
                 showStatus(status, data.message || 'Excel export completed. Downloading...');
                 download(data.download_url);
-                localStorage.removeItem(ACTIVE_RUN_KEY);
+            } else if (data.state === 'unavailable') {
+                showStatus(status, (data.message || 'The previous export is no longer available. Generate a new Excel export.') + exportReference());
             } else {
-                showStatus(status, data.message || 'The Excel export could not be generated.', true);
-                localStorage.removeItem(ACTIVE_RUN_KEY);
+                showStatus(status, (data.message || 'The Excel export could not be generated.') + exportReference(), true);
             }
-        } catch (_) {
-            pollTimer = window.setTimeout(() => poll(button, status), 5000);
+            saveExportRun(null);
+            activeRunId = null;
+            setBusy(button, false);
+        } catch (error) {
+            if (activeRunId !== requestedRunId) return;
+            exportPollFailures += 1;
+            exportConnectionInterrupted = true;
+            reportExportIssue('status', error.category || 'network', error.httpStatus || null);
+            const sessionExpired = [401, 403, 419].includes(error.httpStatus)
+                || (error.category === 'http' && error.httpStatus === 200);
+            const willRetry = exportPollFailures < 3 && !sessionExpired;
+            showStatus(status, error.message + (sessionExpired ? '' : (willRetry
+                ? ' Rechecking the existing export shortly.'
+                : ' Click Export Excel to reconnect to this export; it will not start a duplicate.')) + exportReference(), true);
+            if (willRetry) {
+                pollTimer = window.setTimeout(() => poll(button, status), 5000 * exportPollFailures);
+            } else {
+                pollTimer = null;
+                setBusy(button, false);
+            }
         }
     };
 
     const startExportWhenReady = async (formData, button, status) => {
         try {
-            const response = await fetch(document.getElementById('all-transactions-excel-form').action, {
+            exportRequestId = window.crypto.randomUUID();
+            formData.set('request_id', exportRequestId);
+            const data = await requestExport(document.getElementById('all-transactions-excel-form').action, {
                 method: 'POST',
                 body: formData,
                 headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-            });
-            const data = await response.json();
-            if (response.status === 409 && data.state === 'waiting_for_cache') {
+            }, 30000);
+            if (data.state === 'waiting_for_cache') {
                 setBusy(button, false);
                 showStatus(status, 'The period cache changed. Reloading the current status...', false, true);
                 window.setTimeout(() => window.location.reload(), 500);
                 return;
             }
-            if (!response.ok) {
-                const validationMessage = data.errors ? Object.values(data.errors).flat()[0] : null;
-                throw new Error(validationMessage || data.message || 'The Excel export could not start.');
-            }
-
             showStatus(status, data.message || 'Excel export started.');
             activeRunId = data.run_id || null;
             lastProgress = 0;
-            if (!activeRunId) throw new Error('The export started without a tracking ID.');
-            localStorage.setItem(ACTIVE_RUN_KEY, activeRunId);
+            exportPollFailures = 0;
+            exportConnectionInterrupted = false;
+            if (!activeRunId) throw exportError('The export started without a tracking ID.', 'invalid_response');
+            saveExportRun(activeRunId);
             if (pollTimer) window.clearTimeout(pollTimer);
             poll(button, status);
         } catch (error) {
             setBusy(button, false);
-            showStatus(status, error.message, true);
+            reportExportIssue('start', error.category || 'invalid_response', error.httpStatus || null);
+            const uncertainStart = ['network', 'timeout', 'invalid_response'].includes(error.category);
+            showStatus(status, error.message + (uncertainStart
+                ? ' Startup could not be confirmed. Click Export Excel to reconnect or retry.'
+                : '') + exportReference(), true);
         }
     };
 
@@ -2489,6 +2599,12 @@
         if (!form || !status) return;
 
         setBusy(button, true);
+        if (activeRunId) {
+            exportPollFailures = 0;
+            showStatus(status, 'Reconnecting to the existing export...', false, true);
+            poll(button, status);
+            return;
+        }
         showStatus(status, 'Starting the All Transactions Excel export...', false, true);
         const formData = new FormData(form);
         formData.set('linked_record_layout', 'single');
@@ -2500,6 +2616,11 @@
         startExportWhenReady(formData, button, status);
     });
 
+    try {
+        activeRunId = localStorage.getItem(ACTIVE_RUN_KEY) || null;
+    } catch (_) {
+        reportExportIssue('storage', 'storage');
+    }
     if (activeRunId) {
         const button = document.getElementById('all-transactions-excel-export');
         const status = document.getElementById('all-transactions-export-status');
