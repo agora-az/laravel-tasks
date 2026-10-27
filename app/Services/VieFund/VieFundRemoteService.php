@@ -54,6 +54,11 @@ class VieFundRemoteService
         return $this->repository->countAllTransactions($search, $filters);
     }
 
+    public function countAllTransactionsWithDeadline(?string $search = null, array $filters = []): int
+    {
+        return $this->repository->countAllTransactionsWithDeadline($search, $filters);
+    }
+
     public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
     {
         return $this->repository->firstCashTransactionDate($dateBasis, $throughDate);

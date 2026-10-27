@@ -2,8 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\SettlementInstruction;
-use App\Services\VieFund\VieFundRemoteService;
+use App\Services\VieFund\VieFundAllTransactionsCountService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
@@ -16,7 +15,7 @@ class CacheVieFundAllTransactionsCountCommand extends Command
 
     protected $description = 'Calculate and cache the filtered All Transactions total outside the web request';
 
-    public function handle(VieFundRemoteService $remoteService): int
+    public function handle(VieFundAllTransactionsCountService $counts): int
     {
         $cacheKey = trim((string) $this->option('cache-key'));
         $payload = json_decode((string) base64_decode((string) $this->option('payload'), true), true);
@@ -34,28 +33,7 @@ class CacheVieFundAllTransactionsCountCommand extends Command
         try {
             $search = trim((string) ($payload['search'] ?? ''));
             $filters = is_array($payload['filters'] ?? null) ? $payload['filters'] : [];
-            $hasAgraFspMatch = (bool) ($filters['has_agra_fsp_match'] ?? false);
-            $has7960FspMatch = (bool) ($filters['has_7960_fsp_match'] ?? false);
-            unset($filters['has_agra_fsp_match'], $filters['has_7960_fsp_match']);
-
-            if ($hasAgraFspMatch) {
-                $filters['agra_fsp_source_ids_json'] = $this->fspSourceIdsJson(
-                    'fundserv_agra',
-                    (string) ($filters['date_basis'] ?? 'settlement_date'),
-                    $filters['date_from'] ?? null,
-                    $filters['date_to'] ?? null
-                );
-            }
-            if ($has7960FspMatch) {
-                $filters['fsp_7960_source_ids_json'] = $this->fspSourceIdsJson(
-                    'ltm',
-                    (string) ($filters['date_basis'] ?? 'settlement_date'),
-                    $filters['date_from'] ?? null,
-                    $filters['date_to'] ?? null
-                );
-            }
-
-            $total = $remoteService->countAllTransactions($search !== '' ? $search : null, $filters);
+            $total = $counts->calculate($payload['source'] ?? ['source' => 'remote'], $search, $filters);
             Cache::put($valueKey, $total, now()->addHour());
             Cache::put($statusKey, [
                 'state' => 'complete',
@@ -78,33 +56,4 @@ class CacheVieFundAllTransactionsCountCommand extends Command
         }
     }
 
-    private function fspSourceIdsJson(
-        string $sourceType,
-        string $dateBasis,
-        ?string $dateFrom,
-        ?string $dateTo
-    ): string
-    {
-        $query = SettlementInstruction::query()
-            ->where('source_type', $sourceType)
-            ->whereNotNull('source_id')
-            ->where('source_id', '<>', '');
-
-        if ($dateBasis === 'settlement_date') {
-            if ($dateFrom) {
-                $query->where('settlement_date', '>=', $dateFrom);
-            }
-            if ($dateTo) {
-                $query->where('settlement_date', '<=', $dateTo);
-            }
-        }
-
-        return $query->distinct()
-            ->orderBy('source_id')
-            ->pluck('source_id')
-            ->map(fn($sourceId) => trim((string) $sourceId))
-            ->filter()
-            ->values()
-            ->toJson(JSON_THROW_ON_ERROR);
-    }
 }

@@ -81,6 +81,13 @@ return [
 
         'viefund_sqlsrv' => $vieFundConnection,
 
+        'viefund_count_sqlsrv' => [
+            ...$vieFundConnection,
+            'options' => defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')
+                ? [constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT') => 30]
+                : [],
+        ],
+
         'viefund_verification_sqlsrv' => [
             ...$vieFundConnection,
             'options' => defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')

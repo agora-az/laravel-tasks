@@ -2,8 +2,9 @@
 
 namespace App\Services\VieFund;
 
+use App\Support\BoundedQueryCount;
 use Illuminate\Database\Query\Builder;
-use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -44,7 +45,7 @@ class VieFundTransactionMirrorQuery
         ];
     }
 
-    public function paginate(int $perPage, int $page, ?string $search, array $filters): LengthAwarePaginator
+    public function paginate(int $perPage, int $page, ?string $search, array $filters): Paginator
     {
         $query = $this->baseQuery($search, $filters);
         $dateColumn = $this->dateColumn($filters);
@@ -60,7 +61,7 @@ class VieFundTransactionMirrorQuery
         $paginator = $query
             ->orderBy($sort, $direction)
             ->orderBy('cash_transaction_id', $direction)
-            ->paginate($perPage, ['payload', 'match_status', 'fund_id', 'fund_transaction_id', 'source_id', 'transaction_type'], 'page', $page);
+            ->simplePaginate($perPage, ['payload', 'match_status', 'fund_id', 'fund_transaction_id', 'source_id', 'transaction_type'], 'page', $page);
         $paginator->setCollection($paginator->getCollection()->map(function (object $cachedRow) use ($filters): object {
             $row = json_decode((string) $cachedRow->payload, false, 512, JSON_THROW_ON_ERROR);
             $this->applyFundMetadata($row, $cachedRow, $filters);
@@ -73,9 +74,11 @@ class VieFundTransactionMirrorQuery
         return $paginator;
     }
 
-    public function count(?string $search, array $filters): int
+    public function count(?string $search, array $filters, bool $bounded = false): int
     {
-        return $this->baseQuery($search, $filters)->count();
+        $query = $this->baseQuery($search, $filters);
+
+        return $bounded ? BoundedQueryCount::run($query) : $query->count();
     }
 
     public function dailyStats(?string $search, array $filters): Collection

@@ -2098,22 +2098,51 @@
     });
     window.addEventListener('popstate', () => loadTransactionPage(window.location.href, false));
     let totalPollAttempts = 0;
+    let totalPollFailures = 0;
+    const showTotalUnavailable = (message) => {
+        totalSummary.textContent = ' · Total unavailable';
+        totalSummary.title = message || 'The filtered total could not be calculated. Refresh later to retry.';
+    };
     const updateFilteredTotal = async () => {
-        if (!totalSummary || totalPollAttempts >= 120) return;
+        if (!totalSummary) return;
+        if (totalPollAttempts >= 120) {
+            showTotalUnavailable('The background total did not finish in time. Refresh later to retry.');
+            return;
+        }
         ++totalPollAttempts;
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 15000);
         try {
             const countUrl = new URL('{{ route('viefund-transactions.count') }}', window.location.origin);
             countUrl.search = window.location.search;
             const response = await fetch(countUrl.toString(), {
                 headers: {'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+                credentials: 'same-origin',
                 cache: 'no-store',
+                signal: controller.signal,
             });
+            if ([401, 403, 419].includes(response.status)) {
+                showTotalUnavailable('Your session may have expired. Reload the page and sign in again.');
+                return;
+            }
             const data = await response.json();
+            if (data.state === 'failed') {
+                showTotalUnavailable(data.message);
+                return;
+            }
+            if (!response.ok) {
+                showTotalUnavailable(`The total service returned HTTP ${response.status}. Refresh later to retry.`);
+                return;
+            }
             if (data.state === 'complete' || data.state === 'partial') {
+                if (!Number.isSafeInteger(data.total) || data.total < 0) {
+                    throw new Error('The total service returned an invalid transaction count.');
+                }
+                totalPollFailures = 0;
                 const currentUrl = new URL(window.location.href);
                 const currentPerPage = Number(currentUrl.searchParams.get('per_page') || {{ $perPage }});
                 const currentPage = Math.max(1, Number(currentUrl.searchParams.get('page') || 1));
-                knownTotalRecords = Number(data.total || 0);
+                knownTotalRecords = data.total;
                 const totalPageCount = Math.max(1, Math.ceil(knownTotalRecords / currentPerPage));
                 const total = knownTotalRecords.toLocaleString('en-CA');
                 const cacheStopped = ['failed', 'paused'].includes(data.cache_state);
@@ -2127,21 +2156,30 @@
                     : (data.cached ? 'Cached for this filter selection.' : '');
                 renderNumberedPagination(currentPage, totalPageCount);
                 if (data.state === 'partial' && !cacheStopped) {
-                    totalPollAttempts = 0;
                     window.setTimeout(updateFilteredTotal, 2500);
                 }
                 return;
             }
-            if (data.state === 'failed') {
-                totalSummary.textContent = ' · Total unavailable';
-                totalSummary.title = data.message || 'The filtered total could not be calculated.';
+            if (data.state !== 'processing') {
+                throw new Error('The total service returned an unrecognized status.');
+            }
+            totalPollFailures = 0;
+            totalSummary.textContent = ' · Calculating filtered total…';
+            totalSummary.title = data.message || '';
+        } catch (error) {
+            ++totalPollFailures;
+            if (totalPollFailures >= 3) {
+                showTotalUnavailable(error.name === 'AbortError'
+                    ? 'The total request timed out. Refresh later to retry.'
+                    : 'The total service could not be reached. Refresh later to retry.');
                 return;
             }
-            totalSummary.textContent = ' · Calculating filtered total…';
-        } catch (_) {
             totalSummary.textContent = ' · Waiting for filtered total…';
+            totalSummary.title = error.message || 'The total request was interrupted.';
+        } finally {
+            window.clearTimeout(timeout);
         }
-        window.setTimeout(updateFilteredTotal, 5000);
+        window.setTimeout(updateFilteredTotal, Math.min(30000, 5000 * (2 ** totalPollFailures)));
     };
     if (totalSummary) {
         window.setTimeout(updateFilteredTotal, 1000);

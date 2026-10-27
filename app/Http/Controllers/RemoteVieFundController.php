@@ -11,6 +11,7 @@ use App\Services\Reconciliation\AsmVieFundMatcher;
 use App\Services\Reconciliation\FspMatchedRecordCollapser;
 use App\Services\Reconciliation\TransactionBankMatchStatusService;
 use App\Services\VieFund\VieFundDailyBalanceService;
+use App\Services\VieFund\VieFundAllTransactionsCountService;
 use App\Services\VieFund\VieFundMatchStatusSummaryAccumulator;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundTransactionWorkingSetManager;
@@ -641,102 +642,26 @@ class RemoteVieFundController extends Controller
             'search' => trim((string) $filterRequest->query('search', '')),
             'filters' => $filters,
         ];
-        $signature = sha1(json_encode($payload, JSON_THROW_ON_ERROR));
-        $valueKey = "viefund_all_transactions_total:{$signature}";
-        $statusKey = "viefund_all_transactions_total_status:{$signature}";
-        $lockKey = "viefund_all_transactions_total_lock:{$signature}";
+        $counts = app(VieFundAllTransactionsCountService::class);
         $perPage = in_array((int) $filterRequest->query('per_page', 100), [50, 100, 250], true)
             ? (int) $filterRequest->query('per_page', 100)
             : 100;
         $page = max(1, (int) $filterRequest->query('page', 1));
         if ($this->shouldUseMirrorForAllTransactions($request, $filters)) {
-            $total = $this->mirrorQuery->count($payload['search'] ?: null, $filters);
-
-            return response()->json([
-                'state' => 'complete',
-                'total' => $total,
-                'total_pages' => max(1, (int) ceil($total / $perPage)),
-                'page' => $page,
-                'cached' => true,
-                'source' => 'mirror',
-            ], 200, $this->exportStatusNoCacheHeaders());
+            $sync = $this->mirrorManager->sync() ?? throw new \RuntimeException('The transaction mirror is no longer available.');
+            $status = $counts->forMirror($sync, $payload['search'], $filters);
+        } elseif ($workingSet = $this->workingSetManager->findQueryable($filters)) {
+            $status = $counts->forWorkingSet($workingSet, $payload['search'], $filters);
+        } else {
+            $status = $counts->forRemote($payload['search'], $filters);
         }
 
-        $workingSet = $this->workingSetManager->findQueryable($filters);
-        if ($workingSet) {
-            $total = $this->workingSetQuery->count($workingSet, $payload['search'] ?: null, $filters);
-            $complete = $workingSet->isReady();
-
-            return response()->json([
-                'state' => $complete ? 'complete' : 'partial',
-                'total' => $total,
-                'total_pages' => max(1, (int) ceil($total / $perPage)),
-                'page' => $page,
-                'cached' => true,
-                'source' => 'working_set',
-                'rows_cached' => (int) $workingSet->rows_cached,
-                'cache_state' => $workingSet->state,
-            ], 200, $this->exportStatusNoCacheHeaders());
+        if (array_key_exists('total', $status)) {
+            $status['total_pages'] = max(1, (int) ceil($status['total'] / $perPage));
+            $status['page'] = $page;
         }
 
-        if (Cache::has($valueKey)) {
-            $total = (int) Cache::get($valueKey);
-
-            return response()->json([
-                'state' => 'complete',
-                'total' => $total,
-                'total_pages' => max(1, (int) ceil($total / $perPage)),
-                'page' => $page,
-                'cached' => true,
-            ], 200, $this->exportStatusNoCacheHeaders());
-        }
-
-        $status = Cache::get($statusKey);
-        if (is_array($status) && ($status['state'] ?? null) === 'failed') {
-            return response()->json($status, 200, $this->exportStatusNoCacheHeaders());
-        }
-
-        if (Cache::add($lockKey, true, now()->addMinutes(15))) {
-            Cache::put($statusKey, [
-                'state' => 'processing',
-                'message' => 'Calculating the filtered transaction total...',
-                'updated_at' => now()->toIso8601String(),
-            ], now()->addMinutes(15));
-            $phpPath = $this->consolePhpBinary();
-            $logPath = storage_path('logs/viefund-all-transactions-count.log');
-            $encodedPayload = base64_encode(json_encode($payload, JSON_THROW_ON_ERROR));
-            $command = sprintf(
-                '%s %s report:cache-viefund-all-transactions-count --cache-key=%s --payload=%s >> %s 2>&1 &',
-                escapeshellarg($phpPath),
-                escapeshellarg(base_path('artisan')),
-                escapeshellarg($signature),
-                escapeshellarg($encodedPayload),
-                escapeshellarg($logPath)
-            );
-            $process = proc_open($command, [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ], $pipes);
-
-            if (is_resource($process)) {
-                fclose($pipes[0]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                proc_close($process);
-            } else {
-                Cache::forget($lockKey);
-                Cache::put($statusKey, [
-                    'state' => 'failed',
-                    'message' => 'The background total could not be started.',
-                ], now()->addMinutes(2));
-            }
-        }
-
-        return response()->json([
-            'state' => 'processing',
-            'message' => 'Calculating the filtered transaction total...',
-        ], 202, $this->exportStatusNoCacheHeaders());
+        return response()->json($status, $status['state'] === 'processing' ? 202 : 200, $this->exportStatusNoCacheHeaders());
     }
 
     public function allTransactionsSummary(Request $request): JsonResponse

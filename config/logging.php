@@ -35,6 +35,15 @@ return [
     */
 
     'channels' => [
+        'viefund_transaction_counts' => [
+            'driver' => 'daily',
+            'path' => env('VIEFUND_TRANSACTION_COUNTS_LOG_PATH', env('WEBSITE_SITE_NAME')
+                ? '/home/LogFiles/viefund-transaction-counts.log'
+                : storage_path('logs/viefund-transaction-counts.log')),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => 14,
+        ],
+
         'all_transactions_export' => [
             'driver' => 'daily',
             'path' => env('ALL_TRANSACTIONS_EXPORT_LOG_PATH', env('WEBSITE_SITE_NAME')

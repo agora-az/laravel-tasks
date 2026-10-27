@@ -366,11 +366,22 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     public function countAllTransactions(?string $search = null, array $filters = []): int
     {
-        if ($this->canUseFastAllTransactionPageQuery($search, $filters)) {
-            return (int) $this->buildAllTransactionPageCandidateQuery($filters)->count();
-        }
+        return (int) $this->buildAllTransactionCountQuery($search, $filters)->count();
+    }
 
-        return (int) $this->buildAllTransactionCashLedgerQuery($search, $filters)->count();
+    public function countAllTransactionsWithDeadline(?string $search = null, array $filters = []): int
+    {
+        return (int) $this->buildAllTransactionCountQuery(
+            $search, $filters, $this->boundedConnection('viefund_count_sqlsrv', 'Transaction counting')
+        )->count();
+    }
+
+    private function buildAllTransactionCountQuery(
+        ?string $search, array $filters, ?Connection $connection = null
+    ): \Illuminate\Database\Query\Builder {
+        return $this->canUseFastAllTransactionPageQuery($search, $filters)
+            ? $this->buildAllTransactionPageCandidateQuery($filters, true, $connection)
+            : $this->buildAllTransactionCashLedgerQuery($search, $filters, $connection);
     }
 
     public function firstCashTransactionDate(string $dateBasis, string $throughDate): ?string
@@ -403,13 +414,18 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
 
     private function coverageConnection(): Connection
     {
-        $connection = DB::connection('viefund_verification_sqlsrv');
+        return $this->boundedConnection('viefund_verification_sqlsrv', 'CASHagch coverage verification');
+    }
+
+    private function boundedConnection(string $name, string $purpose): Connection
+    {
+        $connection = DB::connection($name);
         if (!$connection->pretending() && (
             !defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')
             || $connection->getReadPdo()->getAttribute(\PDO::ATTR_DRIVER_NAME) !== 'sqlsrv'
             || (int) $connection->getReadPdo()->getAttribute(constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')) !== 30
         )) {
-            throw new \RuntimeException('CASHagch coverage verification requires the SQL Server driver with a 30-second query deadline.');
+            throw new \RuntimeException($purpose.' requires the SQL Server driver with a 30-second query deadline.');
         }
 
         return $connection;
@@ -675,7 +691,11 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
             ->when($selectId, fn($query) => $query->select('ct.ID'));
     }
 
-    private function buildAllTransactionCashLedgerQuery(?string $search, array $filters): \Illuminate\Database\Query\Builder
+    private function buildAllTransactionCashLedgerQuery(
+        ?string $search,
+        array $filters,
+        ?Connection $connection = null
+    ): \Illuminate\Database\Query\Builder
     {
         $schema = env('VIEFUND_DB_SCHEMA', 'dbo');
         $dateBasis = $this->normalizeAllTransactionDateBasis($filters['date_basis'] ?? null);
@@ -841,7 +861,7 @@ class SqlServerVieFundRemoteRepository implements VieFundRemoteRepositoryInterfa
                 "{$cashDateColumn} AS basis_date",
             ]));
 
-        $query = DB::connection(self::CONNECTION)
+        $query = ($connection ?? DB::connection(self::CONNECTION))
             ->query()
             ->fromSub($cashLedger, 'cash_ledger_transactions');
 

@@ -3,6 +3,7 @@
 namespace App\Services\VieFund;
 
 use App\Models\VieFundTransactionWorkingSet;
+use App\Support\BoundedQueryCount;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Arr;
@@ -48,7 +49,19 @@ class VieFundTransactionWorkingSetQuery
         return $paginator;
     }
 
-    public function count(VieFundTransactionWorkingSet $workingSet, ?string $search, array $filters): int
+    public function count(
+        VieFundTransactionWorkingSet $workingSet,
+        ?string $search,
+        array $filters,
+        bool $bounded = false
+    ): int {
+        return $this->savedCount($workingSet, $search, $filters)
+            ?? ($bounded
+                ? BoundedQueryCount::run($this->baseQuery($workingSet, $search, $filters))
+                : $this->baseQuery($workingSet, $search, $filters)->count());
+    }
+
+    public function savedCount(VieFundTransactionWorkingSet $workingSet, ?string $search, array $filters): ?int
     {
         $rowFilters = Arr::only($filters, [
             'customer_name', 'plan_account_id', 'trx_id', 'source_id', 'fund_id', 'trx_type',
@@ -64,7 +77,7 @@ class VieFundTransactionWorkingSetQuery
             return (int) $workingSet->rows_cached;
         }
 
-        return $this->baseQuery($workingSet, $search, $filters)->count();
+        return null;
     }
 
     public function dailyStats(VieFundTransactionWorkingSet $workingSet, ?string $search, array $filters): Collection

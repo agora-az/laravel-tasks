@@ -6,7 +6,7 @@ Production uses three independent database-queue worker pools:
 
 | Queue             | Connection               | Workloads                                                    | Default workers |
 | ----------------- | ------------------------ | ------------------------------------------------------------ | --------------: |
-| `viefund-cache`   | `database_viefund_cache` | Working-set hydration, transaction mirror sync and metadata verification |        1 |
+| `viefund-cache`   | `database_viefund_cache` | Working-set hydration, transaction mirror sync, metadata verification, transaction summaries and filtered counts |        1 |
 | `imports,default` | `database`               | File imports, dashboard refreshes, report metadata, matching |               1 |
 | `cashagch-reports` | `database_reports`       | Resumable CASHagch source batches, monthly counts and Excel assembly |          1 |
 
@@ -129,6 +129,91 @@ tail -100 /home/LogFiles/startup.log
 
 Expected Supervisor programs are `laravel-queue-cache-00`,
 `laravel-queue-general-00`, `laravel-queue-reports-00`, and `laravel-scheduler`.
+
+## All Transactions count isolation
+
+The optional record/page total must never scan transaction rows inside PHP-FPM.
+Unfiltered period caches can use their saved count when it belongs to the readable
+generation. During refresh, that saved value belongs to the new build and cannot
+be used as the old active generation's total. All other totals use
+`CountVieFundAllTransactions` on the existing `database_viefund_cache` connection,
+regardless of the default `QUEUE_CONNECTION`. A synchronous cache-queue driver is
+rejected rather than silently running a count inside the web request.
+
+Counts are deduplicated with shared cache locks per source, readable generation,
+search and filters. Page/per-page changes reuse the result. A global execution
+lock serializes counts across cache workers/instances; scaling the web/general
+workers does not increase count concurrency. Keep `CACHE_STORE=database`.
+Immutable results last one hour; incomplete-generation totals last five seconds
+and remain explicitly partial. Promotion, generation changes and mirror sync or
+verification changes invalidate the source identity. A mirror that is currently
+syncing waits rather than publishing an obsolete count.
+
+Count SQL uses MySQL `MAX_EXECUTION_TIME(30000)` or the dedicated
+`viefund_count_sqlsrv` connection's 30-second PDO statement timeout. SQL Server
+counts refuse to run without the expected driver deadline. The count job also
+requires PCNTL worker-timeout support and has a 45-second timeout, fails on its
+first exception/timeout, and uses a 90-second execution lock. Overlap releases
+can retry without retrying a failed SQL query. Missing workers become an explicit
+failure after ten minutes queued; an unresponsive running count is marked failed
+after 75 seconds. Stale/late jobs cannot overwrite another dispatch's status.
+
+Previous/next browsing uses simple pagination on both period caches and the
+mirror. Numbered pagination is filled in only after a real count arrives. A
+missing/failed total is not reported as zero and does not disable browsing or
+change transaction/report data. Browser count requests time out after 15 seconds,
+retry transport/invalid-response failures at most twice with backoff, stop on
+terminal/server/session failures, and have a 120-request budget including partial
+results. Refresh later to retry an unavailable total; failed status is retained
+for two minutes.
+
+Queued, started, completed and failed count events include `count_signature`.
+Started events include queue wait; completed events include source, total and
+elapsed milliseconds. The `viefund_transaction_counts` channel rotates daily
+and retains 14 files. On App Service it writes outside the webroot to
+`/home/LogFiles/viefund-transaction-counts-YYYY-MM-DD.log`; elsewhere it uses
+`storage/logs`. `VIEFUND_TRANSACTION_COUNTS_LOG_PATH` overrides the base path.
+Check this log, the cache-worker log and `php artisan queue:failed` when totals
+become unavailable. Do not retry a timed-out expensive count repeatedly; review
+its scope and query plan first.
+
+Focused regressions:
+
+```bash
+php tests/exports/all_transactions_count.php
+php tests/exports/all_transactions_count_deadlines.php
+php tests/exports/all_transactions_cache.php
+node tests/exports/all_transactions_count_ui.js
+node tests/exports/all_transactions_cache_ui.js
+```
+
+The deadline test uses only local MySQL (`127.0.0.1`, root with an empty password,
+or `DEPLOYMENT_TEST_DB_SOCKET` for a disposable local instance). It creates no
+tables and checks that a 31-second sleeping aggregate is interrupted at 30
+seconds. Its SQL Server checks validate SQL routing/configuration, not live
+VieFund performance.
+
+### Rolling out after emergency count isolation
+
+The October 27 recovery guard is an exact nginx location returning JSON
+`state: failed` and HTTP 503 for `/viefund-transactions/count`. Leave it active
+until the replacement is verified. It exists only in the live container:
+`startup.sh` overwrites nginx configuration from the deployed `default` file,
+so a restart or ordinary release can remove it.
+
+Before a controlled deployment, obtain approval for the restart, check active
+exports/report jobs, and prepare a rollback of the **currently deployed** code
+that also retains count isolation. Use a non-clean deployment to preserve
+runtime reports/uploads. Preserve the nginx guard in the rollout package or
+equivalent startup protection; do not rely on the current live edit surviving.
+Refresh the cache worker to load the new job/service. Before removing the guard,
+verify deployed file hashes, log-directory access as `www-data`, healthy web
+responses, and an isolated background count using the new code. Then remove only
+the temporary exact-location guard, validate/reload nginx, and verify an
+authenticated filtered count returns promptly as processing, completes or fails
+explicitly within its budget, and never creates PHP-FPM count queries. Also
+check worker status, PHP backlog and `/up`. Do not automatically roll back
+without approval, and do not roll back to unprotected synchronous count code.
 
 ## All Transactions export diagnostics
 

@@ -53,13 +53,17 @@ function createPage(initialState, summaryState = 'complete') {
             querySelector: () => ({ content: 'test-csrf' }),
             createElement: element, createTextNode: value => value,
         },
-        URL, console,
+        URL, console, AbortController,
         window: {
             location: {
                 href: 'https://example.test/transactions', origin: 'https://example.test', search: '',
                 reload() { state.reloads += 1; },
             },
-            setTimeout(fn) { state.timers.push(fn); },
+            setTimeout(fn) { state.timers.push(fn); return fn; },
+            clearTimeout(fn) {
+                const index = state.timers.indexOf(fn);
+                if (index >= 0) state.timers.splice(index, 1);
+            },
         },
         fetch: async (url, options = {}) => {
             state.requests.push({ url, options });
