@@ -230,10 +230,13 @@ class GenerateLegacyVieFundDailyBalanceReportCommand extends Command
 
         $this->checkForCancellation();
         if ($format === 'excel') {
-            Excel::store(new VieFundDailyBalanceWorkbookExport(
+            $stored = Excel::store(new VieFundDailyBalanceWorkbookExport(
                 [['Report Date', 'Legacy Transactions', 'Daily Net Transactions', 'Running Daily Balance'], ...$rows],
                 [['Summary Item', 'Value'], ...$metadataRows]
-            ), $outputRelativePath, null, ExcelWriter::XLSX);
+            ), $outputRelativePath, 'report_exports', ExcelWriter::XLSX);
+            if ($stored !== true) {
+                throw new \RuntimeException('Unable to save the legacy daily balance report workbook.');
+            }
         } else {
             $this->writeCsv($outputAbsolutePath, $rows, $metadataRows);
         }

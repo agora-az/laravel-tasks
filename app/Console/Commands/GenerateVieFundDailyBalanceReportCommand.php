@@ -340,15 +340,18 @@ class GenerateVieFundDailyBalanceReportCommand extends Command
 
         $this->checkForCancellation();
         if ($format === 'excel') {
-            Excel::store(
+            $stored = Excel::store(
                 new VieFundDailyBalanceWorkbookExport(
                     [$headers, ...$rows],
                     [['Summary Item', 'Value'], ...$metadataRows]
                 ),
                 $outputRelativePath,
-                null,
+                'report_exports',
                 ExcelWriter::XLSX
             );
+            if ($stored !== true) {
+                throw new \RuntimeException('Unable to save the daily balance report workbook.');
+            }
         } else {
             $sheetRows = $this->buildSheetRowsWithSideMetadata($rows, $metadataRows);
             $writer = $this->openWriter($outputAbsolutePath, $format);

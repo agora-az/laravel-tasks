@@ -10,7 +10,13 @@ const script = new vm.Script(source);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function createPage(report) {
-    const state = { requests: [], started: false, elements: {} };
+    const state = { requests: [], started: false, completed: false, elements: {}, downloads: [], timers: new Map() };
+    let timerId = 0;
+    const schedule = callback => {
+        state.timers.set(++timerId, callback);
+        return timerId;
+    };
+    const clearTimer = id => state.timers.delete(id);
     const element = () => ({
         handlers: {}, style: {}, disabled: false, textContent: '', value: '',
         addEventListener(event, handler) { this.handlers[event] = handler; },
@@ -65,6 +71,9 @@ function createPage(report) {
         FormData: class {
             constructor() { this.format = state.elements[formatId].value; }
         },
+        URL,
+        setTimeout: schedule,
+        clearTimeout: clearTimer,
         fetch: async (url, options = {}) => {
             state.requests.push({ url, options });
             if (options.method === 'POST') state.started = true;
@@ -72,13 +81,18 @@ function createPage(report) {
                 ok: true,
                 json: async () => options.method === 'POST'
                     ? { success: true, run_id: 'test-run', message: 'Started.' }
-                    : { inProgress: state.started, success: null, run_id: state.started ? 'test-run' : null,
-                        processed_days: 0, total_days: 1, message: 'Waiting.', download_url: null },
+                    : { inProgress: state.started && !state.completed, success: state.completed ? true : null,
+                        run_id: state.started ? 'test-run' : null,
+                        processed_days: 1, total_days: 1, processed_accounts: 40114, total_accounts: 40114,
+                        message: state.completed ? 'Report completed.' : 'Waiting.',
+                        download_url: state.completed ? '/reports/download-latest?run_id=test-run' : null },
             };
         },
         window: {
             updateReportCancelButton() {},
-            setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+            location: { origin: 'https://reports.test' },
+            downloadVieFundReport: url => state.downloads.push(url),
+            setTimeout: schedule, clearTimeout: clearTimer, setInterval: schedule, clearInterval: clearTimer,
         },
         console,
     });
@@ -99,9 +113,25 @@ function createPage(report) {
             assert.equal(posts.length, 1, `${report} ${action} must submit exactly one report.`);
             assert.equal(posts[0].options.body.format, 'excel', `${report} must submit Excel even if an old format value was present.`);
             assert.equal(posts[0].options.headers.Accept, 'application/json');
+            assert.equal(page.runButton.disabled, true, `${report} must poll the running report.`);
+            assert.equal(page.state.downloads.length, 0, `${report} must not download incomplete output.`);
+            page.state.completed = true;
+            const polls = [...page.state.timers.values()];
+            assert.equal(polls.length, 1, `${report} must schedule a status poll.`);
+            polls[0]();
+            await flush();
+            const url = '/reports/download-latest?run_id=test-run';
+            assert.deepEqual(page.state.downloads, [url], `${report} must automatically download its completed workbook.`);
+            const prefix = { daily: 'report', legacy: 'legacy-report', customer: 'customer-balance' }[report];
+            assert.equal(page.state.elements[`${prefix}-download-link`].href, url);
+            assert.equal(page.state.elements[`${prefix}-download-wrap`].style.display, 'block',
+                `${report} must offer a manual download link.`);
+            polls[0]();
+            await flush();
+            assert.deepEqual(page.state.downloads, [url], `${report} must not automatically download the same workbook twice.`);
         }
     }
-    console.log('PASS: single Run Report buttons and keyboard submission generate Excel for daily, legacy and customer reports without CSV menus');
+    console.log('PASS: daily, legacy and customer reports submit Excel, automatically download completed workbooks once and retain manual download links');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

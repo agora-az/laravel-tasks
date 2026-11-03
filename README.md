@@ -417,6 +417,8 @@ Administrators also receive an **Impersonate** selector beneath the header conta
 
 The Reports page uses a single **Run Report** action per report card and generates Excel workbooks only; CSV format menus are no longer offered, and report web endpoints reject CSV submissions. CASHagch uses the same compact filters and right-aligned action layout as the other report cards. The Snapshot Monitor's separate audit CSV download is unchanged, as are CSV imports/exports elsewhere and command-line report compatibility.
 
+Daily balance, legacy daily balance, and customer balance workbooks use the dedicated local `report_exports` disk rooted at `storage/app`, matching their authenticated download endpoints regardless of the default filesystem disk. Completed reports automatically download and retain a **Download again** link. Failed workbook writes are reported as failures, not successful reports. After deploying this fix, rebuild Laravel's configuration cache (`php artisan config:cache`) and rerun reports previously marked complete without a download link.
+
 ### All Transactions period cache
 
 With **Current source**, All Transactions builds its period cache on the background cache queue and can display already-cached rows before completion. Normal date-basis sorting uses the existing indexed pagination date; alternate date and amount sorts retain their selected ordering. The page reads only the requested rows plus one for next-page navigation, without a full-result count. Numbered pagination and totals load separately; unfiltered totals use the saved cache row count, except when an older generation remains readable during a refresh. A new period with no cached rows still reads its first page from VieFund.

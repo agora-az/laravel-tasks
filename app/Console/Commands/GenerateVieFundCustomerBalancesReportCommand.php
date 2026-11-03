@@ -406,16 +406,19 @@ class GenerateVieFundCustomerBalancesReportCommand extends Command
 
         $this->checkForCancellation();
         if ($format === 'excel') {
-            Excel::store(
+            $stored = Excel::store(
                 new VieFundCustomerBalancesWorkbookExport(
                     [$headers, ...$rows],
                     [['Summary Item', 'Value'], ...$metadataRows],
                     [$reviewHeaders, ...$reviewRows]
                 ),
                 $outputRelativePath,
-                null,
+                'report_exports',
                 ExcelWriter::XLSX
             );
+            if ($stored !== true) {
+                throw new \RuntimeException('Unable to save the customer balances report workbook.');
+            }
         } else {
             $sheetRows = $this->buildSheetRowsWithSideMetadata($headers, $rows, $metadataRows);
             $writer = $this->openWriter($outputAbsolutePath, $format);

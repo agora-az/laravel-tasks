@@ -50,7 +50,7 @@ try {
         'database.default' => 'sqlite',
         'database.connections' => ['sqlite' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']],
         'cache.default' => 'array', 'session.driver' => 'array', 'view.compiled' => $directory,
-        'filesystems.default' => 'local', 'filesystems.disks.local.root' => $directory.'/app',
+        'filesystems.default' => 'local', 'filesystems.disks.local.root' => $directory.'/app/private',
         'viefund.all_transactions_export_batch_size' => 100,
         'viefund.balance_report_cash_account_scope.opened_before' => '2026-10-24',
     ]);
@@ -119,12 +119,14 @@ try {
     };
     $app->instance(VieFundRemoteService::class, $source);
     $reports = $app->make(VieFundReportsController::class);
+    $excel = Excel::getFacadeRoot();
     foreach ([
         'daily-balance' => GenerateVieFundDailyBalanceReportCommand::class,
         'daily-balance-legacy' => GenerateLegacyVieFundDailyBalanceReportCommand::class,
         'customer-balances' => GenerateVieFundCustomerBalancesReportCommand::class,
     ] as $type => $class) {
-        foreach (['queued', 'running', 'packaging', 'normal', 'failed'] as $mode) {
+        foreach (['queued', 'running', 'packaging', 'normal', 'excel', 'write-failed', 'failed'] as $mode) {
+            Excel::swap($excel);
             $runId = (string) Str::uuid();
             $path = $type === 'daily-balance-legacy'
                 ? storage_path('app/reports/viefund-daily-balance-legacy-status.json')
@@ -166,6 +168,14 @@ try {
                 };
             } elseif ($mode === 'failed') {
                 $source->onQuery = static fn() => throw new RuntimeException('Simulated source failure');
+            } elseif ($mode === 'write-failed') {
+                Excel::swap(new class
+                {
+                    public function store($export, string $path, ...$options): bool
+                    {
+                        return false;
+                    }
+                });
             } elseif ($mode === 'packaging') {
                 $output = "reports/{$type}-{$runId}.xlsx";
                 Excel::swap(new class($cancel, $request, $type)
@@ -179,28 +189,56 @@ try {
                     }
                 });
             }
+            if (in_array($mode, ['excel', 'write-failed'], true)) {
+                $output = "reports/{$type}-{$runId}.xlsx";
+            }
             $command = $app->make($class);
             $command->setLaravel($app);
             $tester = new CommandTester($command);
             $options = [
                 '--run-id' => $runId, '--status-file' => $path, '--lock-file' => $lock,
                 '--cancel-file' => $marker, '--output-file' => $output,
-                '--format' => $mode === 'packaging' ? 'excel' : 'csv',
+                '--format' => in_array($mode, ['packaging', 'excel', 'write-failed'], true) ? 'excel' : 'csv',
             ];
             $options += $type === 'customer-balances'
                 ? ['--report-date' => '2026-02-10']
                 : ['--date-from' => '2026-01-01', '--date-to' => '2026-02-10'];
             try {
                 $code = $tester->execute($options);
-                $check($mode !== 'failed' && $code === 0, 'Commands must acknowledge cancellation or complete normally.');
+                $check(!in_array($mode, ['failed', 'write-failed'], true) && $code === 0, 'Commands must acknowledge cancellation or complete normally.');
             } catch (RuntimeException $exception) {
-                $check($mode === 'failed' && $exception->getMessage() === 'Simulated source failure', $exception->getMessage());
+                $expected = $mode === 'failed'
+                    ? $exception->getMessage() === 'Simulated source failure'
+                    : $mode === 'write-failed' && str_starts_with($exception->getMessage(), 'Unable to save the ');
+                $check($expected, $exception->getMessage());
             }
             $status = json_decode(File::get($path), true, 512, JSON_THROW_ON_ERROR);
             $check($status['run_id'] === $runId && $status['user_id'] === 17, 'CLI status updates must preserve owner/run identity.');
             $check(!is_file($lock), 'Every terminal CLI path must release its report lock.');
-            if ($mode === 'normal') {
-                $check($status['success'] === true && is_file(storage_path('app/'.$output)), 'Existing CSV generation must still complete.');
+            if (in_array($mode, ['normal', 'excel'], true)) {
+                $check($status['success'] === true && is_file(storage_path('app/'.$output)), 'Successful reports must exist at the download endpoint path.');
+                if ($mode === 'excel') {
+                    $check(!is_file(storage_path('app/private/'.$output)), 'Excel must not be stored on the default private disk.');
+                    $archive = new ZipArchive();
+                    $check($archive->open(storage_path('app/'.$output)) === true, 'Excel output must be a real workbook.');
+                    $check($archive->locateName('xl/workbook.xml') !== false, 'Excel output must contain a workbook definition.');
+                    $archive->close();
+                    $visible = match ($type) {
+                        'daily-balance' => $reports->reportStatus($request),
+                        'customer-balances' => $reports->customerBalancesReportStatus($request),
+                        'daily-balance-legacy' => $reports->legacyDailyBalanceReportStatus($request),
+                    };
+                    $url = $visible->getData(true)['download_url'];
+                    $check(is_string($url) && str_contains($url, 'download-latest'), 'Completed Excel reports must expose a download URL.');
+                    $download = match ($type) {
+                        'daily-balance' => $reports->downloadLatestReport($request),
+                        'customer-balances' => $reports->downloadLatestCustomerBalancesReport($request),
+                        'daily-balance-legacy' => $reports->downloadLatestLegacyDailyBalanceReport(),
+                    };
+                    $check($download instanceof \Symfony\Component\HttpFoundation\BinaryFileResponse
+                        && $download->getFile()->getPathname() === storage_path('app/'.$output),
+                        'The download endpoint must serve the generated Excel workbook.');
+                }
                 $hash = hash_file('sha256', storage_path('app/'.$output));
                 try {
                     $cancel($request, $type);
@@ -209,7 +247,7 @@ try {
                     $check($exception->getStatusCode() === 409, 'Completed reports must return a conflict, not be deleted.');
                 }
                 $check(hash_file('sha256', storage_path('app/'.$output)) === $hash, 'Late cancellation must preserve completed files.');
-            } elseif ($mode === 'failed') {
+            } elseif (in_array($mode, ['failed', 'write-failed'], true)) {
                 $check($status['success'] === false && empty($status['cancelled']), 'An ordinary source error must remain a visible failure.');
             } else {
                 $check($status['cancelled'] === true && $status['success'] === false && $status['inProgress'] === false, 'Cancellation must be terminal, not a successful partial report.');
@@ -228,6 +266,7 @@ try {
                 };
                 $check($visible->getData(true)['download_url'] === null, 'Cancelled CLI reports must not expose downloads.');
             }
+            Excel::swap($excel);
             echo "PASS: {$type} {$mode}, owner isolation, cleanup and completion ordering\n";
         }
     }
