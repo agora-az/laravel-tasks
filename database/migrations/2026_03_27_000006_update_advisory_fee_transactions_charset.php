@@ -15,8 +15,9 @@ return new class extends Migration
         // 1. Drop the unique constraint on record_hash
         $this->dropUniqueConstraintIfExists('advisory_fee_transactions', 'record_hash');
         
-        // 2. Convert table to UTF-8MB4
-        DB::statement('ALTER TABLE advisory_fee_transactions CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('ALTER TABLE advisory_fee_transactions CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+        }
         
         // 3. Delete duplicate records (keep only the first occurrence of each hash)
         DB::statement(
@@ -40,9 +41,11 @@ return new class extends Migration
      */
     public function down(): void
     {
-        // Drop unique constraint and revert charset
+        // Drop unique constraint and revert charset when supported by the driver.
         $this->dropUniqueConstraintIfExists('advisory_fee_transactions', 'record_hash');
-        DB::statement('ALTER TABLE advisory_fee_transactions CONVERT TO CHARACTER SET utf8 COLLATE utf8_general_ci');
+        if (DB::connection()->getDriverName() === 'mysql') {
+            DB::statement('ALTER TABLE advisory_fee_transactions CONVERT TO CHARACTER SET utf8 COLLATE utf8_general_ci');
+        }
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Jobs\CountVieFundAllTransactions;
 use App\Models\SettlementInstruction;
 use App\Models\VieFundTransactionMirrorSync;
 use App\Models\VieFundTransactionWorkingSet;
+use App\Support\BoundedQueryCount;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -238,7 +239,12 @@ class VieFundAllTransactionsCountService
             $query->selectRaw('/*+ MAX_EXECUTION_TIME(30000) */ source_id');
         }
 
-        return $query->distinct()->orderBy('source_id')->pluck('source_id')
+        $sourceIds = BoundedQueryCount::withinTimeout(
+            $query,
+            fn() => $query->distinct()->orderBy('source_id')->pluck('source_id')
+        );
+
+        return $sourceIds
             ->map(fn($sourceId) => trim((string) $sourceId))->filter()->values()->toJson(JSON_THROW_ON_ERROR);
     }
 

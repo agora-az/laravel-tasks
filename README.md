@@ -29,12 +29,20 @@ A Laravel web application for generating and managing reconciliation reports.
     Copy the `.env.example` file to `.env` and update the database settings:
 
     ```
-    DB_CONNECTION=mysql
+    DB_INSTANCE=postgresql
+    DB_CONNECTION=pgsql
     DB_HOST=127.0.0.1
     DB_PORT=3306
     DB_DATABASE=opus_reconciliation
     DB_USERNAME=root
     DB_PASSWORD=your_password
+    PG_DATABASE_URL=
+    PG_HOST=127.0.0.1
+    PG_PORT=5432
+    PG_DATABASE=agora_reconciliation_pg
+    PG_USERNAME=postgres
+    PG_PASSWORD=
+    PG_SSLMODE=prefer
     ```
 
 3. **Generate Application Key**
@@ -47,6 +55,37 @@ A Laravel web application for generating and managing reconciliation reports.
     ```bash
     php artisan migrate
     ```
+
+## Selecting the Local Database
+
+PostgreSQL is the recommended local database and uses the separate `PG_*`
+settings above. Set `DB_INSTANCE=mysql` and `DB_CONNECTION=mysql` to return to
+the existing MySQL connection without changing its `DB_*` settings. If
+`DB_INSTANCE` is unset or blank, `DB_CONNECTION` remains the fallback.
+
+After changing `.env`, refresh Laravel's cached configuration:
+
+```bash
+php artisan config:clear
+```
+
+Set `DB_INSTANCE=mysql` to return to MySQL.
+
+## PostgreSQL Regression Checks
+
+Use an isolated PostgreSQL database whose name ends in `_test` or
+`_validation`; the regression scripts create and remove temporary schemas. Run
+the normal migrations first, then:
+
+```bash
+php artisan migrate --database=pgsql --force
+APP_ENV=testing AGORA_TEST_DATABASE=pgsql DB_INSTANCE=postgresql PG_DATABASE=agora_reconciliation_validation php tests/mirror/sync_lookback.php
+APP_ENV=testing AGORA_TEST_DATABASE=pgsql DB_INSTANCE=postgresql PG_DATABASE=agora_reconciliation_validation php tests/mirror/cashagch_report_source.php
+APP_ENV=testing AGORA_TEST_DATABASE=pgsql DB_INSTANCE=postgresql PG_DATABASE=agora_reconciliation_validation php tests/exports/cashagch_report_resumable.php
+```
+
+These regressions use isolated schemas and mock external VieFund data; they do
+not connect to production or the remote SQL Server.
 
 ## Running the Application
 

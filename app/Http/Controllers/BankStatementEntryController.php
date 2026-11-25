@@ -6,6 +6,7 @@ use App\Exports\BankStatementEntriesWorkbookExport;
 use App\Exports\VieFundReportSheetExport;
 use App\Models\BankStatementEntry;
 use App\Models\BankStatementSummary;
+use App\Support\CaseInsensitiveQuery;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -576,7 +577,12 @@ class BankStatementEntryController extends Controller
                         $patterns = self::MEMO_TYPE_GROUPS[$groupKey]['patterns'] ?? [];
 
                         foreach ($patterns as $pattern) {
-                            $memoQuery->orWhereRaw('UPPER(a.memo_type) REGEXP ?', [$pattern]);
+                            $operator = match ($memoQuery->getConnection()->getDriverName()) {
+                                'mysql' => 'REGEXP',
+                                'pgsql' => '~',
+                                default => throw new \LogicException('Memo type patterns are not supported by this database driver.'),
+                            };
+                            $memoQuery->orWhereRaw("UPPER(a.memo_type) {$operator} ?", [$pattern]);
                             $hasValidMemoType = true;
                         }
 
@@ -595,10 +601,11 @@ class BankStatementEntryController extends Controller
         if ($request->filled('search')) {
             $term = (string) $request->search;
             $query->where(function ($nested) use ($term) {
-                $nested->where('bank_statement_entries.additional_info', 'like', '%' . $term . '%')
-                    ->orWhere('a.counterparty', 'like', '%' . $term . '%')
-                    ->orWhere('a.settlement_number', 'like', '%' . $term . '%')
-                    ->orWhere('a.wire_payment_reference', 'like', '%' . $term . '%');
+                $pattern = '%' . $term . '%';
+                CaseInsensitiveQuery::whereContains($nested, 'bank_statement_entries.additional_info', $pattern);
+                CaseInsensitiveQuery::orWhereContains($nested, 'a.counterparty', $pattern);
+                CaseInsensitiveQuery::orWhereContains($nested, 'a.settlement_number', $pattern);
+                CaseInsensitiveQuery::orWhereContains($nested, 'a.wire_payment_reference', $pattern);
             });
         }
     }

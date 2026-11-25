@@ -329,6 +329,12 @@ class DailyTotalsDrilldownController extends Controller
             ))
             ->values();
 
+        $bankAccountsAggregate = match (DB::connection()->getDriverName()) {
+            'mysql' => "GROUP_CONCAT(DISTINCT bank_statement_entries.account_number ORDER BY bank_statement_entries.account_number SEPARATOR ', ')",
+            'pgsql' => "STRING_AGG(DISTINCT bank_statement_entries.account_number, ', ' ORDER BY bank_statement_entries.account_number)",
+            default => throw new \LogicException('Bank account aggregation is not supported by this database driver.'),
+        };
+
         $bankBySequence = DB::table('bank_statement_entries')
             ->join('bank_statement_entry_analyses as a', function ($join) {
                 $join->on('a.bank_statement_entry_id', '=', 'bank_statement_entries.id')
@@ -341,7 +347,7 @@ class DailyTotalsDrilldownController extends Controller
             ->selectRaw('MIN(bank_statement_entries.value_date) as first_bank_date')
             ->selectRaw('MAX(bank_statement_entries.value_date) as last_bank_date')
             ->selectRaw('COUNT(DISTINCT bank_statement_entries.account_number) as bank_account_count')
-            ->selectRaw("GROUP_CONCAT(DISTINCT bank_statement_entries.account_number ORDER BY bank_statement_entries.account_number SEPARATOR ', ') as bank_accounts")
+            ->selectRaw($bankAccountsAggregate.' as bank_accounts')
             ->groupBy('a.settlement_number')
             ->get()
             ->keyBy(fn($row) => (string) (int) $row->settlement_number);

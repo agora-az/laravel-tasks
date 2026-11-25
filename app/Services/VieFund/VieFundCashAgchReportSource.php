@@ -4,6 +4,8 @@ namespace App\Services\VieFund;
 
 use App\Exceptions\ReportMirrorChanged;
 use App\Models\VieFundTransactionMirrorSync;
+use App\Support\BoundedQueryCount;
+use App\Support\CaseInsensitiveQuery;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
@@ -117,11 +119,7 @@ class VieFundCashAgchReportSource
 
     private function coverageAggregate(Builder $query, string $expression): mixed
     {
-        $hint = $query->getConnection()->getDriverName() === 'mysql'
-            ? '/*+ MAX_EXECUTION_TIME(30000) */ '
-            : '';
-
-        return $query->selectRaw($hint.$expression.' AS aggregate')->value('aggregate');
+        return BoundedQueryCount::value($query, $expression);
     }
 
     public function rows(array $criteria, ?array $cursor, int $limit): Collection
@@ -134,8 +132,11 @@ class VieFundCashAgchReportSource
             }))
             ->orderBy($date)->orderBy('r.cash_transaction_id')->limit($limit)
             ->get(['r.payload', 'r.cash_transaction_id', $date.' as basis_date']);
-        $funds = DB::table('viefund_transaction_mirror_funds')
-            ->where('fund_id', VieFundCashAgchReport::FUND_ID)
+        $funds = CaseInsensitiveQuery::whereEquals(
+            DB::table('viefund_transaction_mirror_funds'),
+            'fund_id',
+            VieFundCashAgchReport::FUND_ID
+        )
             ->whereIn('cash_transaction_id', $rows->pluck('cash_transaction_id'))->get()->keyBy('cash_transaction_id');
 
         return $rows->map(function (object $cached) use ($funds): object {
@@ -162,8 +163,12 @@ class VieFundCashAgchReportSource
         $availability = CarbonImmutable::parse($criteria['availability_date_to'] ?? $criteria['date_to'])
             ->addDay()->startOfDay()->toDateTimeString();
         return DB::table('viefund_transaction_mirror_rows as r')
-            ->whereExists(fn(Builder $fund) => $fund->selectRaw('1')->from('viefund_transaction_mirror_funds as f')
-                ->whereColumn('f.cash_transaction_id', 'r.cash_transaction_id')->where('f.fund_id', VieFundCashAgchReport::FUND_ID))
+            ->whereExists(fn(Builder $fund) => CaseInsensitiveQuery::whereEquals(
+                $fund->selectRaw('1')->from('viefund_transaction_mirror_funds as f')
+                    ->whereColumn('f.cash_transaction_id', 'r.cash_transaction_id'),
+                'f.fund_id',
+                VieFundCashAgchReport::FUND_ID
+            ))
             ->where('r.currency_code', $criteria['currency_code'])->whereIn('r.cash_status_id', $criteria['status_ids'])
             ->where($date, '>=', ($criteria['date_from'] ?? '1900-01-01').' 00:00:00')
             ->where($date, '<', $end)

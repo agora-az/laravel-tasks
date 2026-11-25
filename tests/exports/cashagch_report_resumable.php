@@ -22,6 +22,13 @@ use OpenSpout\Reader\XLSX\Reader;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
+$databaseDriver = getenv('AGORA_TEST_DATABASE') ?: 'sqlite';
+if (! in_array($databaseDriver, ['sqlite', 'pgsql'], true)) {
+    throw new RuntimeException('AGORA_TEST_DATABASE must be sqlite or pgsql.');
+}
+$connectionName = $databaseDriver;
+$schemaName = null;
+
 $directory = sys_get_temp_dir().'/agora-cashagch-resume-'.bin2hex(random_bytes(8));
 mkdir($directory, 0700);
 foreach (['APP_CONFIG_CACHE', 'APP_PACKAGES_CACHE', 'APP_SERVICES_CACHE', 'APP_ROUTES_CACHE'] as $key) {
@@ -29,7 +36,9 @@ foreach (['APP_CONFIG_CACHE', 'APP_PACKAGES_CACHE', 'APP_SERVICES_CACHE', 'APP_R
 }
 putenv('APP_ENV=testing');
 $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
-$app->useEnvironmentPath($directory);
+if ($databaseDriver === 'sqlite') {
+    $app->useEnvironmentPath($directory);
+}
 $app->useStoragePath($directory);
 $check = static function (bool $condition, string $message): void {
     if (!$condition) throw new RuntimeException($message);
@@ -38,12 +47,32 @@ $exitCode = 0;
 
 try {
     $app->make(Kernel::class)->bootstrap();
-    File::put($directory.'/queue.sqlite', '');
+    if ($databaseDriver === 'pgsql') {
+        $databaseName = (string) config('database.connections.pgsql.database');
+        $check(app()->environment('testing') && preg_match('/(?:_test|_validation)$/', $databaseName) === 1,
+            'PostgreSQL mode requires an isolated *_test or *_validation database.');
+
+        $schemaName = 'cashagch_test_'.bin2hex(random_bytes(6));
+        DB::connection('pgsql')->statement('CREATE SCHEMA "'.$schemaName.'"');
+        $pgsqlConnection = config('database.connections.pgsql');
+        $pgsqlConnection['search_path'] = $schemaName;
+        config([
+            'database.default' => 'pgsql',
+            'database.connections' => ['pgsql' => $pgsqlConnection],
+            'queue.connections.database_reports.connection' => 'pgsql',
+            'queue.failed.driver' => 'null',
+        ]);
+        DB::purge('pgsql');
+    } else {
+        File::put($directory.'/queue.sqlite', '');
+        config([
+            'database.default' => 'sqlite',
+            'database.connections' => ['sqlite' => ['driver' => 'sqlite', 'database' => $directory.'/queue.sqlite', 'prefix' => '']],
+            'queue.connections.database_reports.connection' => 'sqlite',
+            'queue.failed.driver' => 'null',
+        ]);
+    }
     config([
-        'database.default' => 'sqlite',
-        'database.connections' => ['sqlite' => ['driver' => 'sqlite', 'database' => $directory.'/queue.sqlite', 'prefix' => '']],
-        'queue.connections.database_reports.connection' => 'sqlite',
-        'queue.failed.driver' => 'null',
         'cache.default' => 'array', 'session.driver' => 'array',
         'viefund.all_transactions_export_batch_size' => 20000,
         'viefund.all_transactions_export_rows_per_sheet' => 5000,
@@ -197,7 +226,7 @@ try {
             $payload = json_decode($row->payload, true, 512, JSON_THROW_ON_ERROR);
             $payload['timeout'] = 1;
             DB::table('jobs')->where('id', $row->id)->update(['payload' => json_encode($payload, JSON_THROW_ON_ERROR)]);
-            DB::disconnect('sqlite');
+            DB::disconnect($connectionName);
             $run->afterCheckpoint = static function (array $saved): void {
                 if ($saved['processed_transactions'] === 3000) sleep(5);
             };
@@ -382,7 +411,7 @@ try {
     $payload['timeout'] = 1;
     $payload['maxTries'] = 1;
     DB::table('jobs')->where('id', $row->id)->update(['payload' => json_encode($payload, JSON_THROW_ON_ERROR)]);
-    DB::disconnect('sqlite');
+    DB::disconnect($connectionName);
     $pid = pcntl_fork();
     $check($pid !== -1, 'Unable to start the terminal-timeout test worker.');
     if ($pid === 0) {
@@ -417,6 +446,15 @@ try {
 } finally {
     Carbon::setTestNow();
     CarbonImmutable::setTestNow();
+    if ($schemaName !== null) {
+        DB::disconnect('pgsql');
+        $pgsqlConnection = config('database.connections.pgsql');
+        $pgsqlConnection['search_path'] = 'public';
+        config(['database.connections.pgsql' => $pgsqlConnection]);
+        DB::purge('pgsql');
+        DB::connection('pgsql')->statement('DROP SCHEMA IF EXISTS "'.$schemaName.'" CASCADE');
+        DB::disconnect('pgsql');
+    }
     File::deleteDirectory($directory);
 }
 exit($exitCode);

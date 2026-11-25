@@ -20,18 +20,50 @@ use Illuminate\Support\Facades\Schema;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
-Env::getRepository()->clear('VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS');
+$databaseDriver = getenv('AGORA_TEST_DATABASE') ?: 'sqlite';
+if (! in_array($databaseDriver, ['sqlite', 'pgsql'], true)) {
+    throw new RuntimeException('AGORA_TEST_DATABASE must be sqlite or pgsql.');
+}
+$connectionName = $databaseDriver;
+$schemaName = null;
+
 $app = new Application(dirname(__DIR__, 2));
+$databaseConfig = [];
+if ($databaseDriver === 'pgsql') {
+    Dotenv\Dotenv::createImmutable(dirname(__DIR__, 2))->safeLoad();
+    $databaseConfig = require dirname(__DIR__, 2).'/config/database.php';
+    $databaseName = (string) ($databaseConfig['connections']['pgsql']['database'] ?? '');
+    if (($databaseConfig['default'] ?? null) !== 'pgsql'
+        || preg_match('/(?:_test|_validation)$/', $databaseName) !== 1) {
+        throw new RuntimeException('PostgreSQL mode requires DB_INSTANCE=postgresql and an isolated *_test or *_validation database.');
+    }
+}
+
+Env::getRepository()->clear('VIEFUND_TRANSACTION_MIRROR_LOOKBACK_DAYS');
 $app->instance('config', new Repository([
+    ...($databaseDriver === 'pgsql' ? ['database' => $databaseConfig] : []),
     'viefund' => require dirname(__DIR__, 2).'/config/viefund.php',
 ]));
 Facade::setFacadeApplication($app);
 $database = new Manager($app);
-$database->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
+$connectionConfig = $databaseDriver === 'pgsql'
+    ? $databaseConfig['connections']['pgsql']
+    : ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => ''];
+$database->addConnection($connectionConfig, $connectionName);
+$database->getDatabaseManager()->setDefaultConnection($connectionName);
 $database->setAsGlobal();
 $database->bootEloquent();
 DB::swap($database->getDatabaseManager());
 Schema::swap($database->schema());
+
+try {
+if ($databaseDriver === 'pgsql') {
+    $schemaName = 'mirror_test_'.bin2hex(random_bytes(6));
+    DB::connection('pgsql')->statement('CREATE SCHEMA "'.$schemaName.'"');
+    $connectionConfig['search_path'] = $schemaName;
+    $database->addConnection($connectionConfig, 'pgsql');
+    $database->getDatabaseManager()->purge('pgsql');
+}
 
 $migration = require dirname(__DIR__, 2).'/database/migrations/2026_10_15_193500_create_viefund_transaction_mirror_tables.php';
 $migration->up();
@@ -65,7 +97,6 @@ $remote = new class(new SqlServerVieFundRemoteRepository()) extends VieFundRemot
 };
 $verification = new ReflectionMethod(SyncVieFundTransactionMirror::class, 'verifyOrContinue');
 
-try {
     $check(config('viefund.mirror.incremental_lookback_days') === 180, 'Default mirror lookback must be 180 days.');
     foreach ([
         'default' => [180, '2026-04-28'],
@@ -122,4 +153,12 @@ try {
 } finally {
     Carbon::setTestNow();
     CarbonImmutable::setTestNow();
+    if ($schemaName !== null) {
+        $database->getDatabaseManager()->disconnect('pgsql');
+        $connectionConfig['search_path'] = 'public';
+        $database->addConnection($connectionConfig, 'pgsql');
+        $database->getDatabaseManager()->purge('pgsql');
+        DB::connection('pgsql')->statement('DROP SCHEMA IF EXISTS "'.$schemaName.'" CASCADE');
+        $database->getDatabaseManager()->disconnect('pgsql');
+    }
 }

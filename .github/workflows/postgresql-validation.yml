@@ -1,0 +1,65 @@
+name: PostgreSQL validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgresql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agora_reconciliation_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agora_reconciliation_validation"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      APP_ENV: testing
+      DB_INSTANCE: postgresql
+      DB_CONNECTION: pgsql
+      PG_HOST: 127.0.0.1
+      PG_PORT: 5432
+      PG_DATABASE: agora_reconciliation_validation
+      PG_USERNAME: postgres
+      PG_PASSWORD: postgres
+      PG_SSLMODE: prefer
+      AGORA_TEST_DATABASE: pgsql
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          extensions: mbstring, intl, pdo_pgsql, bcmath, openssl, dom, gd, simplexml, xml, xmlreader, xmlwriter, zip
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Prepare Laravel environment
+        run: cp .env.example .env && php artisan key:generate --force
+
+      - name: Run PostgreSQL migrations
+        run: php artisan migrate --database=pgsql --force
+
+      - name: Test PostgreSQL sync lookback
+        run: php tests/mirror/sync_lookback.php
+
+      - name: Test PostgreSQL report source
+        run: php tests/mirror/cashagch_report_source.php
+
+      - name: Test PostgreSQL resumable queued export
+        run: php tests/exports/cashagch_report_resumable.php

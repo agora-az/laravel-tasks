@@ -37,13 +37,13 @@ return [
     ],
 
     'batching' => [
-        'database' => env('DB_CONNECTION', 'mysql'),
+        'database' => env('DB_QUEUE_CONNECTION'),
         'table' => 'job_batches',
     ],
 
     'failed' => [
         'driver' => env('QUEUE_FAILED_DRIVER', 'database-uuids'),
-        'database' => env('DB_CONNECTION', 'mysql'),
+        'database' => env('DB_QUEUE_CONNECTION'),
         'table' => 'failed_jobs',
     ],
 ];

@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Models\VieFundTransactionMirrorSync;
 use App\Services\RuntimeSettings;
 use App\Support\ApplicationAdmin;
+use App\Support\CaseInsensitiveQuery;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -203,8 +204,11 @@ class VieFundTransactionMirrorManager
     {
         $unchecked = DB::table('viefund_transaction_mirror_rows')
             ->whereNull('fund_id_checked_at')->select('cash_transaction_id');
-        $report = DB::table('viefund_transaction_mirror_funds')
-            ->where('fund_id', VieFundCashAgchReport::FUND_ID)
+        $report = CaseInsensitiveQuery::whereEquals(
+            DB::table('viefund_transaction_mirror_funds'),
+            'fund_id',
+            VieFundCashAgchReport::FUND_ID
+        )
             ->whereNull('transaction_type_count')->select('cash_transaction_id');
         if ($limit !== null) {
             $unchecked->orderBy('cash_transaction_id')->limit($limit);

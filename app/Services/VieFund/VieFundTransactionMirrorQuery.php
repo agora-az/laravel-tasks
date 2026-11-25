@@ -3,6 +3,7 @@
 namespace App\Services\VieFund;
 
 use App\Support\BoundedQueryCount;
+use App\Support\CaseInsensitiveQuery;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Collection;
@@ -223,13 +224,12 @@ class VieFundTransactionMirrorQuery
         if ($search !== '') {
             $like = '%' . $search . '%';
             $query->where(function (Builder $searchQuery) use ($like): void {
-                $searchQuery
-                    ->where('transaction_id', 'like', $like)
-                    ->orWhere('source_id', 'like', $like)
-                    ->orWhere('customer_name', 'like', $like)
-                    ->orWhere('plan_account_id', 'like', $like)
-                    ->orWhere('transaction_type', 'like', $like)
-                    ->orWhere('payload', 'like', $like);
+                CaseInsensitiveQuery::whereContains($searchQuery, 'transaction_id', $like);
+                CaseInsensitiveQuery::orWhereContains($searchQuery, 'source_id', $like);
+                CaseInsensitiveQuery::orWhereContains($searchQuery, 'customer_name', $like);
+                CaseInsensitiveQuery::orWhereContains($searchQuery, 'plan_account_id', $like);
+                CaseInsensitiveQuery::orWhereContains($searchQuery, 'transaction_type', $like);
+                CaseInsensitiveQuery::orWhereContains($searchQuery, 'payload', $like);
             });
         }
         $this->applyContains($query, 'customer_name', $filters['customer_name'] ?? null);
@@ -264,8 +264,11 @@ class VieFundTransactionMirrorQuery
             return DB::table('viefund_transaction_mirror_rows');
         }
 
-        $funds = DB::table('viefund_transaction_mirror_funds')
-            ->where('fund_id', 'like', '%'.$fundId.'%')
+        $funds = CaseInsensitiveQuery::whereContains(
+            DB::table('viefund_transaction_mirror_funds'),
+            'fund_id',
+            '%'.$fundId.'%'
+        )
             ->groupBy('cash_transaction_id')
             ->selectRaw('cash_transaction_id AS fund_cash_id, MIN(fund_id) AS fund_id, MIN(fund_transaction_id) AS fund_transaction_id')
             ->selectRaw('COALESCE(MIN(source_id), MIN(cash_source_id)) AS source_id')
@@ -343,7 +346,7 @@ class VieFundTransactionMirrorQuery
     {
         $value = trim((string) $value);
         if ($value !== '') {
-            $query->where($column, 'like', '%' . $value . '%');
+            CaseInsensitiveQuery::whereContains($query, $column, '%' . $value . '%');
         }
     }
 }

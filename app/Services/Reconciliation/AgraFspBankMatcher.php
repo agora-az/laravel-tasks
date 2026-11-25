@@ -2,6 +2,7 @@
 
 namespace App\Services\Reconciliation;
 
+use App\Support\CaseInsensitiveQuery;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -112,14 +113,15 @@ class AgraFspBankMatcher
             return collect();
         }
 
-        $bankByKey = DB::table('bank_statement_entries as b')
+        $bankQuery = DB::table('bank_statement_entries as b')
             ->join('bank_statement_entry_analyses as a', function ($join) {
                 $join->on('a.bank_statement_entry_id', '=', 'b.id')
                     ->where('a.parser_version', self::PARSER_VERSION);
             })
             ->whereIn('b.value_date', $groups->pluck('total_date')->unique()->all())
-            ->whereIn('b.currency', $groups->pluck('currency')->unique()->all())
-            ->where('a.counterparty', 'like', 'fundserv%')
+            ->whereIn('b.currency', $groups->pluck('currency')->unique()->all());
+        CaseInsensitiveQuery::whereContains($bankQuery, 'a.counterparty', 'fundserv%');
+        $bankByKey = $bankQuery
             ->select([
                 'b.id',
                 'b.bank_statement_summary_id',

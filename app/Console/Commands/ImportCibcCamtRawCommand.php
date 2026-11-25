@@ -51,12 +51,22 @@ class ImportCibcCamtRawCommand extends Command
         }
 
         if ((bool) $this->option('truncate')) {
-            DB::statement('SET FOREIGN_KEY_CHECKS=0');
-            DB::table('bank_statement_entry_analyses')->truncate();
-            DB::table('bank_statement_entries')->truncate();
-            DB::table('bank_statement_summary_balances')->truncate();
-            DB::table('bank_statement_summaries')->truncate();
-            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+            $connection = DB::connection();
+            if ($connection->getDriverName() === 'pgsql') {
+                $connection->statement('TRUNCATE TABLE bank_statement_entry_analyses, bank_statement_entries, bank_statement_summary_balances, bank_statement_summaries RESTART IDENTITY');
+            } elseif ($connection->getDriverName() === 'mysql') {
+                $connection->statement('SET FOREIGN_KEY_CHECKS=0');
+                try {
+                    DB::table('bank_statement_entry_analyses')->truncate();
+                    DB::table('bank_statement_entries')->truncate();
+                    DB::table('bank_statement_summary_balances')->truncate();
+                    DB::table('bank_statement_summaries')->truncate();
+                } finally {
+                    $connection->statement('SET FOREIGN_KEY_CHECKS=1');
+                }
+            } else {
+                throw new \LogicException('Bank statement truncation is not supported by this database driver.');
+            }
             $this->info('Truncated bank_statement_entries, bank_statement_summaries, and bank_statement_summary_balances');
         }
 

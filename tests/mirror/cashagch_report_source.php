@@ -15,6 +15,7 @@ use App\Services\VieFund\VieFundCashAgchReportSource;
 use App\Services\VieFund\VieFundRemoteService;
 use App\Services\VieFund\VieFundTransactionMirrorManager;
 use App\Support\ApplicationAdmin;
+use App\Support\CaseInsensitiveQuery;
 use Brick\Math\BigDecimal;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
@@ -31,6 +32,13 @@ use OpenSpout\Reader\XLSX\Reader;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
 
+$databaseDriver = getenv('AGORA_TEST_DATABASE') ?: 'sqlite';
+if (! in_array($databaseDriver, ['sqlite', 'pgsql'], true)) {
+    throw new RuntimeException('AGORA_TEST_DATABASE must be sqlite or pgsql.');
+}
+$connectionName = $databaseDriver;
+$schemaName = null;
+
 $directory = sys_get_temp_dir().'/agora-cashagch-mirror-'.bin2hex(random_bytes(8));
 mkdir($directory, 0700);
 foreach (['APP_CONFIG_CACHE', 'APP_PACKAGES_CACHE', 'APP_SERVICES_CACHE', 'APP_ROUTES_CACHE'] as $key) {
@@ -38,7 +46,9 @@ foreach (['APP_CONFIG_CACHE', 'APP_PACKAGES_CACHE', 'APP_SERVICES_CACHE', 'APP_R
 }
 putenv('APP_ENV=testing');
 $app = require dirname(__DIR__, 2).'/bootstrap/app.php';
-$app->useEnvironmentPath($directory);
+if ($databaseDriver === 'sqlite') {
+    $app->useEnvironmentPath($directory);
+}
 $app->useStoragePath($directory);
 $check = static function (bool $condition, string $message): void {
     if (!$condition) throw new RuntimeException($message);
@@ -70,9 +80,27 @@ $exit = 0;
 
 try {
     $app->make(Kernel::class)->bootstrap();
+    if ($databaseDriver === 'pgsql') {
+        $databaseName = (string) config('database.connections.pgsql.database');
+        $check(app()->environment('testing') && preg_match('/(?:_test|_validation)$/', $databaseName) === 1,
+            'PostgreSQL mode requires an isolated *_test or *_validation database.');
+
+        $schemaName = 'cashagch_source_test_'.bin2hex(random_bytes(6));
+        DB::connection('pgsql')->statement('CREATE SCHEMA "'.$schemaName.'"');
+        $pgsqlConnection = config('database.connections.pgsql');
+        $pgsqlConnection['search_path'] = $schemaName;
+        config([
+            'database.default' => 'pgsql',
+            'database.connections' => ['pgsql' => $pgsqlConnection],
+        ]);
+        DB::purge('pgsql');
+    } else {
+        config([
+            'database.default' => 'sqlite',
+            'database.connections' => ['sqlite' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true]],
+        ]);
+    }
     config([
-        'database.default' => 'sqlite',
-        'database.connections' => ['sqlite' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true]],
         'cache.default' => 'array', 'session.driver' => 'array', 'view.compiled' => $directory,
         'viefund.mirror.currencies' => ['00', '01'], 'viefund.mirror.status_ids' => range(0, 6),
         'viefund.mirror.data_source' => 'current', 'viefund.mirror.batch_size' => 100,
@@ -89,7 +117,10 @@ try {
         (require dirname(__DIR__, 2).'/database/migrations/'.$name.'.php')->up();
     }
     Schema::table('viefund_transaction_mirror_rows', fn(Blueprint $table) => $table->string('fund_id', 100)->nullable());
-    Schema::table('viefund_transaction_mirror_funds', fn(Blueprint $table) => $table->string('fund_id', 100)->collation('nocase')->change());
+    if ($databaseDriver === 'sqlite') {
+        Schema::table('viefund_transaction_mirror_funds', fn(Blueprint $table) => $table->string('fund_id', 100)->collation('nocase')->change());
+    }
+    (require dirname(__DIR__, 2).'/database/migrations/2026_10_26_000001_add_case_insensitive_fund_id_indexes.php')->up();
     $source = new class extends VieFundRemoteService
     {
         public array $cash = [];
@@ -252,7 +283,7 @@ try {
             'created_date' => $row->created_date, 'trade_date' => $row->trade_date,
             'processing_date' => $row->processing_date, 'settlement_date' => $row->settlement_date,
             'payload' => $payload, 'source_fingerprint' => hash('sha256', $payload),
-            'sync_generation' => 'baseline', 'source_synced_at' => now(),
+            'sync_generation' => '00000000-0000-4000-8000-000000000001', 'source_synced_at' => now(),
         ]);
         foreach (collect($source->funds[$row->cash_transaction_id])->unique('fund_id') as $link) {
             DB::table('viefund_transaction_mirror_funds')->insert(['cash_transaction_id' => $row->cash_transaction_id, ...$link]);
@@ -262,9 +293,18 @@ try {
     $sync = VieFundTransactionMirrorSync::query()->create([
         'id' => 1, 'state' => 'ready', 'mode' => 'incremental', 'phase' => 'ready',
         'ready_at' => now(), 'verified_at' => now(), 'fund_ids_verified_at' => now(),
-        'synced_through_at' => now(), 'sync_generation' => 'baseline',
+        'synced_through_at' => now(), 'sync_generation' => '00000000-0000-4000-8000-000000000001',
         'currencies' => ['00', '01'], 'status_ids' => range(0, 6),
     ]);
+    $uppercaseFundSearch = DB::table('viefund_transaction_mirror_funds')->where('cash_transaction_id', 3);
+    CaseInsensitiveQuery::whereContains($uppercaseFundSearch, 'fund_id', '%cashagch%');
+    $check($uppercaseFundSearch->exists(), 'Case-insensitive partial fund search missed uppercase fund IDs.');
+    $orSearch = DB::table('viefund_transaction_mirror_funds')->where('fund_id', 'NO-MATCH');
+    CaseInsensitiveQuery::orWhereContains($orSearch, 'fund_id', '%CASHAGCH%');
+    $check($orSearch->exists(), 'Case-insensitive OR search missed mixed-case fund IDs.');
+    $eloquentSearch = VieFundTransactionMirrorSync::query()->where('id', 1);
+    CaseInsensitiveQuery::orWhereContains($eloquentSearch, 'state', '%READY%');
+    $check($eloquentSearch->exists(), 'Case-insensitive Eloquent search did not mutate its underlying query.');
     $app->instance(VieFundRemoteService::class, $source);
     $selector = new VieFundCashAgchReportSource();
     $criteria = ['date_from' => null, 'date_to' => '2026-10-24', 'date_basis' => 'settlement_date', 'currency_code' => '00', 'status_ids' => [6]];
@@ -466,7 +506,7 @@ try {
     $state = $run->advance($pinned, $pinned.'.xlsx', $criteria, $run->load($pinned, $criteria), static function (): void {});
     $check($state['processed_transactions'] > 0, 'Snapshot-change test must first save mirror transactions.');
     $calls = count($source->calls);
-    $sync->forceFill(['sync_generation' => 'replacement'])->save();
+    $sync->forceFill(['sync_generation' => '00000000-0000-4000-8000-000000000002'])->save();
     $state = $run->advance($pinned, $pinned.'.xlsx', $criteria, $state, static function (): void {});
     $check($state['source']['data_source'] === 'viefund' && $state['processed_transactions'] === 0 && $state['parts'] === []
         && count(File::glob($pinned.'/batch-*.ndjson')) === 0 && count($source->calls) === $calls,
@@ -570,7 +610,7 @@ try {
                 'processing_date' => $row->processing_date, 'settlement_date' => $row->settlement_date,
                 'currency_code' => '00', 'cash_status_id' => 6, 'fund_id_checked_at' => now(),
                 'payload' => $payload, 'source_fingerprint' => hash('sha256', $payload),
-                'sync_generation' => 'benchmark', 'source_synced_at' => now(),
+                'sync_generation' => '00000000-0000-4000-8000-000000000003', 'source_synced_at' => now(),
             ];
             $funds[] = ['cash_transaction_id' => $id, 'fund_id' => 'CASHagch', 'transaction_type' => 'Purchase', 'transaction_type_count' => 1];
         }
@@ -594,13 +634,22 @@ try {
     } while ($rows->isNotEmpty());
     $seconds = (hrtime(true) - $started) / 1_000_000_000;
     $check($seen === 100001 && count($source->calls) === $calls && $seconds < 30, '100,001 local transactions must stream in under 30 seconds with zero remote calls.');
-    echo 'PASS: 100,001-row isolated SQLite mirror count/read benchmark, identical timestamps, bounded batches, no duplicates or remote calls: '.number_format($seconds, 2)."s\n";
+    echo 'PASS: 100,001-row isolated '.strtoupper($databaseDriver).' mirror count/read benchmark, identical timestamps, bounded batches, no duplicates or remote calls: '.number_format($seconds, 2)."s\n";
 } catch (Throwable $exception) {
     fwrite(STDERR, $exception->getMessage()."\n".$exception->getTraceAsString()."\n");
     $exit = 1;
 } finally {
     Carbon::setTestNow();
     CarbonImmutable::setTestNow();
+    if ($schemaName !== null) {
+        DB::disconnect('pgsql');
+        $pgsqlConnection = config('database.connections.pgsql');
+        $pgsqlConnection['search_path'] = 'public';
+        config(['database.connections.pgsql' => $pgsqlConnection]);
+        DB::purge('pgsql');
+        DB::connection('pgsql')->statement('DROP SCHEMA IF EXISTS "'.$schemaName.'" CASCADE');
+        DB::disconnect('pgsql');
+    }
     (new \Illuminate\Filesystem\Filesystem())->deleteDirectory($directory);
 }
 exit($exit);

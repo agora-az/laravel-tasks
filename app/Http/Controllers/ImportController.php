@@ -9,6 +9,7 @@ use App\Models\BankTransaction;
 use App\Models\AccountFeeTransaction;
 use App\Models\AdvisoryFeeTransaction;
 use App\Models\Import;
+use App\Support\CaseInsensitiveQuery;
 use Smalot\PdfParser\Parser;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -43,15 +44,15 @@ class ImportController extends Controller
                 
                 $query->where(function($q) use ($search, $isDateFormat) {
                     if ($isDateFormat) {
-                        // Search date fields
-                        $q->where('settlement_date', 'like', "%{$search}%")
-                          ->orWhere('trade_date', 'like', "%{$search}%");
+                        $q->whereDate('settlement_date', $search)
+                          ->orWhereDate('trade_date', $search);
+                        CaseInsensitiveQuery::orWhereContains($q, 'company', "%{$search}%");
+                    } else {
+                        CaseInsensitiveQuery::whereContains($q, 'company', "%{$search}%");
                     }
-                    // Always search standard fields
-                    $q->orWhere('company', 'like', "%{$search}%")
-                      ->orWhere('order_id', 'like', "%{$search}%")
-                      ->orWhere('dealer_account_id', 'like', "%{$search}%")
-                      ->orWhere('fund_id', 'like', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'order_id', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'dealer_account_id', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'fund_id', "%{$search}%");
                 });
             }
             
@@ -63,8 +64,8 @@ class ImportController extends Controller
             if ($request->has('search')) {
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
-                    $q->where('description', 'like', "%{$search}%")
-                      ->orWhere('type', 'like', "%{$search}%");
+                    CaseInsensitiveQuery::whereContains($q, 'description', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'type', "%{$search}%");
                 });
             }
 
@@ -76,10 +77,10 @@ class ImportController extends Controller
             if ($request->has('search')) {
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
-                    $q->where('client_name', 'like', "%{$search}%")
-                      ->orWhere('rep_code', 'like', "%{$search}%")
-                      ->orWhere('transaction_type', 'like', "%{$search}%")
-                      ->orWhere('plan_description', 'like', "%{$search}%");
+                    CaseInsensitiveQuery::whereContains($q, 'client_name', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'rep_code', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'transaction_type', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'plan_description', "%{$search}%");
                 });
             }
 
@@ -91,10 +92,10 @@ class ImportController extends Controller
             if ($request->has('search')) {
                 $search = $request->search;
                 $query->where(function($q) use ($search) {
-                    $q->where('full_name', 'like', "%{$search}%")
-                      ->orWhere('rep_code', 'like', "%{$search}%")
-                      ->orWhere('transaction_type', 'like', "%{$search}%")
-                      ->orWhere('plan_info', 'like', "%{$search}%");
+                    CaseInsensitiveQuery::whereContains($q, 'full_name', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'rep_code', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'transaction_type', "%{$search}%");
+                    CaseInsensitiveQuery::orWhereContains($q, 'plan_info', "%{$search}%");
                 });
             }
 
@@ -938,10 +939,10 @@ class ImportController extends Controller
         if ($request->has('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
-                $q->where('company', 'like', "%{$search}%")
-                  ->orWhere('order_id', 'like', "%{$search}%")
-                  ->orWhere('dealer_account_id', 'like', "%{$search}%")
-                  ->orWhere('fund_id', 'like', "%{$search}%");
+                CaseInsensitiveQuery::whereContains($q, 'company', "%{$search}%");
+                CaseInsensitiveQuery::orWhereContains($q, 'order_id', "%{$search}%");
+                CaseInsensitiveQuery::orWhereContains($q, 'dealer_account_id', "%{$search}%");
+                CaseInsensitiveQuery::orWhereContains($q, 'fund_id', "%{$search}%");
             });
         }
         
@@ -958,8 +959,8 @@ class ImportController extends Controller
         if ($request->has('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
-                $q->where('description', 'like', "%{$search}%")
-                  ->orWhere('type', 'like', "%{$search}%");
+                CaseInsensitiveQuery::whereContains($q, 'description', "%{$search}%");
+                CaseInsensitiveQuery::orWhereContains($q, 'type', "%{$search}%");
             });
         }
 
@@ -1140,10 +1141,10 @@ class ImportController extends Controller
         }
 
         $query->where(function ($q) use ($search) {
-            $q->where('client_name', 'like', "%{$search}%")
-                ->orWhere('rep_code', 'like', "%{$search}%")
-                ->orWhere('account_id', 'like', "%{$search}%")
-                ->orWhere('plan_description', 'like', "%{$search}%");
+            CaseInsensitiveQuery::whereContains($q, 'client_name', "%{$search}%");
+            CaseInsensitiveQuery::orWhereContains($q, 'rep_code', "%{$search}%");
+            CaseInsensitiveQuery::orWhereContains($q, 'account_id', "%{$search}%");
+            CaseInsensitiveQuery::orWhereContains($q, 'plan_description', "%{$search}%");
         });
     }
 }

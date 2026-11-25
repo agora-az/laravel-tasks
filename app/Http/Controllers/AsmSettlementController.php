@@ -6,6 +6,7 @@ use App\Models\AsmSettlementSummary;
 use App\Models\AsmSettlementTransaction;
 use App\Models\Import;
 use App\Services\Reconciliation\AsmVieFundMatcher;
+use App\Support\CaseInsensitiveQuery;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -270,12 +271,12 @@ class AsmSettlementController extends Controller
         if ($request->filled('search')) {
             $search = '%' . trim((string) $request->search) . '%';
             $query->where(function (Builder $nested) use ($search): void {
-                $nested->where('payment_id', 'like', $search)
-                    ->orWhere('sender_account_number', 'like', $search)
-                    ->orWhere('receiver_dealer_account_number', 'like', $search)
-                    ->orWhere('receiver_fund_company_account_number', 'like', $search)
-                    ->orWhere('sender_company_name', 'like', $search)
-                    ->orWhere('receiver_company_name', 'like', $search);
+                CaseInsensitiveQuery::whereContains($nested, 'payment_id', $search);
+                CaseInsensitiveQuery::orWhereContains($nested, 'sender_account_number', $search);
+                CaseInsensitiveQuery::orWhereContains($nested, 'receiver_dealer_account_number', $search);
+                CaseInsensitiveQuery::orWhereContains($nested, 'receiver_fund_company_account_number', $search);
+                CaseInsensitiveQuery::orWhereContains($nested, 'sender_company_name', $search);
+                CaseInsensitiveQuery::orWhereContains($nested, 'receiver_company_name', $search);
             });
         }
     }

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Exports\SettlementInstructionsWorkbookExport;
 use App\Models\SettlementInstruction;
 use App\Models\SettlementInstructionSummary;
+use App\Support\CaseInsensitiveQuery;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -499,11 +500,11 @@ class SettlementInstructionController extends Controller
         if ($request->filled('search')) {
             $term = '%' . (string) $request->search . '%';
             $query->where(function (Builder $nested) use ($term) {
-                $nested->where('order_id', 'like', $term)
-                    ->orWhere('source_id', 'like', $term)
-                    ->orWhere('fund_account_id', 'like', $term)
-                    ->orWhere('dealer_account_id', 'like', $term)
-                    ->orWhere('intermediary_account_id', 'like', $term);
+                CaseInsensitiveQuery::whereContains($nested, 'order_id', $term);
+                CaseInsensitiveQuery::orWhereContains($nested, 'source_id', $term);
+                CaseInsensitiveQuery::orWhereContains($nested, 'fund_account_id', $term);
+                CaseInsensitiveQuery::orWhereContains($nested, 'dealer_account_id', $term);
+                CaseInsensitiveQuery::orWhereContains($nested, 'intermediary_account_id', $term);
             });
         }
     }

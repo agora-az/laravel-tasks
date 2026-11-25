@@ -15,9 +15,17 @@ $vieFundConnection = [
     'login_timeout' => (int) env('VIEFUND_DB_LOGIN_TIMEOUT', 5),
 ];
 
+$databaseInstance = strtolower(trim((string) env('DB_INSTANCE', '')));
+$defaultConnection = match ($databaseInstance) {
+    '' => env('DB_CONNECTION', 'mysql'),
+    'mysql' => 'mysql',
+    'postgresql' => 'pgsql',
+    default => throw new InvalidArgumentException('DB_INSTANCE must be mysql or postgresql.'),
+};
+
 return [
 
-    'default' => env('DB_CONNECTION', 'mysql'),
+    'default' => $defaultConnection,
 
     'connections' => [
 
@@ -51,17 +59,17 @@ return [
 
         'pgsql' => [
             'driver' => 'pgsql',
-            'url' => env('DATABASE_URL'),
-            'host' => env('DB_HOST', '127.0.0.1'),
-            'port' => env('DB_PORT', 5432),
-            'database' => env('DB_DATABASE', 'forge'),
-            'username' => env('DB_USERNAME', 'forge'),
-            'password' => env('DB_PASSWORD', ''),
+            'url' => env('PG_DATABASE_URL') ?: null,
+            'host' => env('PG_HOST', '127.0.0.1'),
+            'port' => env('PG_PORT', 5432),
+            'database' => env('PG_DATABASE', 'forge'),
+            'username' => env('PG_USERNAME', 'forge'),
+            'password' => env('PG_PASSWORD', ''),
             'charset' => 'utf8',
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
-            'sslmode' => 'prefer',
+            'sslmode' => env('PG_SSLMODE', 'prefer'),
         ],
 
         'sqlsrv' => [

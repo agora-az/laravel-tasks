@@ -49,10 +49,20 @@ class ImportSettlementInstructionsCommand extends Command
         }
 
         if ((bool) $this->option('truncate')) {
-            DB::statement('SET FOREIGN_KEY_CHECKS=0');
-            SettlementInstruction::query()->truncate();
-            SettlementInstructionSummary::query()->truncate();
-            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+            $connection = DB::connection();
+            if ($connection->getDriverName() === 'pgsql') {
+                $connection->statement('TRUNCATE TABLE settlement_instructions, settlement_instruction_summaries RESTART IDENTITY');
+            } elseif ($connection->getDriverName() === 'mysql') {
+                $connection->statement('SET FOREIGN_KEY_CHECKS=0');
+                try {
+                    SettlementInstruction::query()->truncate();
+                    SettlementInstructionSummary::query()->truncate();
+                } finally {
+                    $connection->statement('SET FOREIGN_KEY_CHECKS=1');
+                }
+            } else {
+                throw new \LogicException('Settlement instruction truncation is not supported by this database driver.');
+            }
             $this->info('Truncated settlement_instructions');
         }
 
